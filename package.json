@@ -2,12 +2,16 @@
   "name": "isp-crm-saas",
   "version": "1.0.0",
   "description": "CRM SaaS multitenant para provedores de internet",
-  "main": "index.js",
-  "directories": {
-    "doc": "docs"
-  },
+  "workspaces": [
+    "apps/*"
+  ],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "node scripts/ensure-db.mjs && npm run prisma:generate && npm run db:push && node scripts/dev.mjs",
+    "dev:no-db": "node scripts/dev.mjs",
+    "build": "npm run build -w apps/api && npm run build -w apps/web",
+    "typecheck": "npm run typecheck -w apps/api && npm run typecheck -w apps/web",
+    "db:push": "prisma db push --schema prisma/schema.prisma",
+    "prisma:generate": "prisma generate --schema prisma/schema.prisma",
     "prisma:validate": "prisma validate --schema prisma/schema.prisma",
     "prisma:format": "prisma format --schema prisma/schema.prisma"
   },
