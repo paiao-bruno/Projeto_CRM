@@ -4,7 +4,12 @@ import { useEffect, useState } from "react";
 import {
   Area,
   AreaChart,
+  Bar,
+  BarChart,
+  Cell,
   CartesianGrid,
+  Pie,
+  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -55,6 +60,11 @@ export default function DashboardPage() {
   if (!data) {
     return <div className="text-slate-400">Carregando dashboard...</div>;
   }
+
+  const channelTotal = data.channelDistribution.reduce(
+    (total, item) => total + item.value,
+    0,
+  );
 
   return (
     <div className="space-y-6">
@@ -139,6 +149,138 @@ export default function DashboardPage() {
                 </Badge>
               </div>
             ))}
+          </CardContent>
+        </Card>
+      </section>
+
+      <section className="grid gap-6 xl:grid-cols-2">
+        <Card className="border-slate-200 bg-white text-slate-950 shadow-sm">
+          <CardHeader>
+            <CardTitle className="text-2xl text-slate-950">Channel Distribution</CardTitle>
+            <p className="text-sm text-slate-500">Share by channel</p>
+          </CardHeader>
+          <CardContent>
+            <div className="grid items-center gap-8 md:grid-cols-[260px_1fr]">
+              <div className="relative h-64">
+                <ResponsiveContainer height="100%" width="100%">
+                  <PieChart>
+                    <Pie
+                      cx="50%"
+                      cy="50%"
+                      data={data.channelDistribution}
+                      dataKey="value"
+                      innerRadius={64}
+                      outerRadius={104}
+                      paddingAngle={2}
+                      stroke="#ffffff"
+                      strokeWidth={3}
+                    >
+                      {data.channelDistribution.map((entry) => (
+                        <Cell fill={entry.color} key={entry.name} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      contentStyle={{
+                        background: "#ffffff",
+                        border: "1px solid #e2e8f0",
+                        borderRadius: 12,
+                        color: "#0f172a",
+                      }}
+                      formatter={(value, name) => [
+                        `${Number(value ?? 0)} mensagens`,
+                        name,
+                      ]}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                  <div className="text-center">
+                    <p className="text-3xl font-semibold text-slate-950">
+                      {channelTotal}
+                    </p>
+                    <p className="text-xs text-slate-500">Total</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                {data.channelDistribution.map((item) => (
+                  <div className="flex items-center justify-between gap-4" key={item.name}>
+                    <div className="flex items-center gap-3">
+                      <span
+                        className="h-3 w-3 rounded-full"
+                        style={{ backgroundColor: item.color }}
+                      />
+                      <span className="font-medium text-slate-700">{item.name}</span>
+                    </div>
+                    <div className="flex min-w-28 items-center justify-between gap-4">
+                      <span className="text-sm text-slate-500">{item.value}</span>
+                      <span
+                        className="rounded-full px-2 py-1 text-xs font-semibold"
+                        style={{
+                          backgroundColor: `${item.color}1A`,
+                          color: item.color,
+                        }}
+                      >
+                        {item.percentage}%
+                      </span>
+                    </div>
+                  </div>
+                ))}
+                <div className="border-t border-slate-200 pt-4">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-slate-500">Total</span>
+                    <span className="font-semibold text-slate-950">{channelTotal}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-slate-200 bg-white text-slate-950 shadow-sm">
+          <CardHeader>
+            <CardTitle className="text-2xl text-slate-950">Agent Performance</CardTitle>
+            <p className="text-sm text-slate-500">Total messages processed</p>
+          </CardHeader>
+          <CardContent className="h-80">
+            <ResponsiveContainer height="100%" width="100%">
+              <BarChart
+                data={data.agentPerformance}
+                margin={{ bottom: 8, left: -20, right: 8, top: 16 }}
+              >
+                <CartesianGrid stroke="#eef2f7" vertical={false} />
+                <XAxis
+                  axisLine={false}
+                  dataKey="name"
+                  tick={{ fill: "#64748b", fontSize: 12 }}
+                  tickLine={false}
+                />
+                <YAxis
+                  allowDecimals={false}
+                  axisLine={false}
+                  tick={{ fill: "#94a3b8", fontSize: 12 }}
+                  tickLine={false}
+                />
+                <Tooltip
+                  contentStyle={{
+                    background: "#ffffff",
+                    border: "1px solid #e2e8f0",
+                    borderRadius: 12,
+                    color: "#0f172a",
+                  }}
+                  formatter={(value) => [
+                    `${Number(value ?? 0)} mensagens`,
+                    "Processadas",
+                  ]}
+                />
+                <Bar dataKey="messagesProcessed" radius={[10, 10, 0, 0]}>
+                  {data.agentPerformance.map((entry) => (
+                    <Cell fill={entry.color} key={entry.name} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
           </CardContent>
         </Card>
       </section>

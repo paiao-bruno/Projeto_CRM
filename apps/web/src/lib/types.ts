@@ -70,5 +70,16 @@ export type DashboardOverview = {
     conversions: number;
   };
   chart: Array<{ date: string; inbound: number; outbound: number }>;
+  channelDistribution: Array<{
+    name: string;
+    value: number;
+    percentage: number;
+    color: string;
+  }>;
+  agentPerformance: Array<{
+    name: string;
+    messagesProcessed: number;
+    color: string;
+  }>;
   health: Array<{ label: string; status: string }>;
 };
