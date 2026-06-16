@@ -1,0 +1,33 @@
+{
+  "name": "isp-crm-saas",
+  "version": "1.0.0",
+  "description": "CRM SaaS multitenant para provedores de internet",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "prisma:validate": "prisma validate --schema prisma/schema.prisma",
+    "prisma:format": "prisma format --schema prisma/schema.prisma"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/paiao-bruno/Projeto_CRM.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "UNLICENSED",
+  "bugs": {
+    "url": "https://github.com/paiao-bruno/Projeto_CRM/issues"
+  },
+  "homepage": "https://github.com/paiao-bruno/Projeto_CRM#readme",
+  "devDependencies": {
+    "prisma": "^7.8.0"
+  },
+  "dependencies": {
+    "@prisma/client": "^7.8.0"
+  },
+  "private": true,
+  "type": "module"
+}

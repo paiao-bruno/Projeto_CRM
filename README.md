@@ -10,6 +10,7 @@ Esta fase ainda nao cria telas ou funcionalidades finais. Ela estabelece a base 
 - Estrutura de pastas proposta para monorepo Next.js + NestJS.
 - Plano de desenvolvimento em [`docs/DEVELOPMENT_PLAN.md`](docs/DEVELOPMENT_PLAN.md).
 - Schema Prisma multitenant em [`prisma/schema.prisma`](prisma/schema.prisma).
+- Configuracao do Prisma CLI em [`prisma.config.ts`](prisma.config.ts).
 - Infra local inicial com PostgreSQL + pgvector e Redis em [`docker-compose.yml`](docker-compose.yml).
 - Variaveis de ambiente de referencia em [`.env.example`](.env.example).
 
