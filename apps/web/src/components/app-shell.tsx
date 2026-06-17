@@ -4,9 +4,12 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Bot,
+  GitBranch,
   LayoutDashboard,
   LogOut,
+  Megaphone,
   MessageCircle,
+  Plug,
   RadioTower,
   Search,
   Users,
@@ -17,9 +20,12 @@ import { cn } from "@/lib/utils";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/customers", label: "Clientes", icon: Users },
-  { href: "/chat", label: "Chat", icon: MessageCircle },
   { href: "/ai-agents", label: "Agentes IA", icon: Bot },
+  { href: "/flows", label: "Flows", icon: GitBranch },
+  { href: "/integrations", label: "Integrations", icon: Plug },
+  { href: "/chat", label: "Chat", icon: MessageCircle },
+  { href: "/customers", label: "Clientes", icon: Users },
+  { href: "/campaigns", label: "Campaigns", icon: Megaphone },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
