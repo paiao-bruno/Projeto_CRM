@@ -33,5 +33,10 @@
     "@prisma/client": "^7.8.0"
   },
   "private": true,
-  "type": "module"
+  "type": "module",
+  "overrides": {
+    "@nestjs/platform-express": {
+      "multer": "2.2.0"
+    }
+  }
 }

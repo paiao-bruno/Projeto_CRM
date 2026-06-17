@@ -3,22 +3,13 @@
 import { useMemo, useState } from "react";
 import {
   Bell,
-  Camera,
   Hash,
-  Image,
   MessageCircle,
-  Mic,
   MoreHorizontal,
-  Paperclip,
-  PauseCircle,
   RefreshCcw,
   Search,
-  Settings,
-  Smile,
   UserPlus,
   Users,
-  Video,
-  Volume2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -52,19 +43,6 @@ const conversations: TeamConversation[] = [
     unread: 0,
     online: true,
   },
-];
-
-const floatingTools = [
-  { icon: Paperclip, label: "Anexar arquivo" },
-  { icon: Camera, label: "Câmera" },
-  { icon: Video, label: "Gravar vídeo" },
-  { label: "04:45", timer: true },
-  { icon: PauseCircle, label: "Pausar gravação" },
-  { icon: Mic, label: "Microfone" },
-  { icon: Volume2, label: "Volume" },
-  { icon: Smile, label: "Emoji" },
-  { icon: Image, label: "Galeria" },
-  { icon: Settings, label: "Configurações" },
 ];
 
 export default function TeamChatPage() {
@@ -229,32 +207,6 @@ export default function TeamChatPage() {
             </div>
           )}
         </main>
-      </div>
-
-      <div className="fixed right-6 top-1/2 z-30 hidden -translate-y-1/2 flex-col items-center gap-2 rounded-2xl border border-slate-700 bg-slate-950/95 p-2 shadow-2xl lg:flex">
-        {floatingTools.map((tool) => {
-          if (tool.timer) {
-            return (
-              <span
-                className="rounded-xl border border-red-400/30 bg-red-400/10 px-2 py-1 text-[10px] font-semibold text-red-200"
-                key={tool.label}
-              >
-                {tool.label}
-              </span>
-            );
-          }
-          const Icon = tool.icon;
-          return (
-            <button
-              className="rounded-xl p-2 text-slate-400 transition hover:bg-slate-800 hover:text-white"
-              key={tool.label}
-              title={tool.label}
-              type="button"
-            >
-              {Icon ? <Icon size={16} /> : null}
-            </button>
-          );
-        })}
       </div>
 
       <button
