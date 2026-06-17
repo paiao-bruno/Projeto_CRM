@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   Bot,
   GitBranch,
+  Hash,
   LayoutDashboard,
   LogOut,
   Megaphone,
@@ -23,8 +24,13 @@ const navItems = [
   { href: "/ai-agents", label: "Agentes IA", icon: Bot },
   { href: "/flows", label: "Flows", icon: GitBranch },
   { href: "/integrations", label: "Integrations", icon: Plug },
-  { href: "/chat", label: "Chat", icon: MessageCircle },
-  { href: "/customers", label: "Clientes", icon: Users },
+  {
+    href: "/chat",
+    label: "Chat",
+    icon: MessageCircle,
+    children: [{ href: "/team-chat", label: "Team", icon: Hash }],
+  },
+  { href: "/customers", label: "CRM", icon: Users },
   { href: "/campaigns", label: "Campaigns", icon: Megaphone },
 ];
 
@@ -58,19 +64,43 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             const active = pathname === item.href;
             const Icon = item.icon;
             return (
-              <Link
-                className={cn(
-                  "flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition",
-                  active
-                    ? "bg-emerald-400 text-slate-950"
-                    : "text-slate-400 hover:bg-slate-900 hover:text-white",
-                )}
-                href={item.href}
-                key={item.href}
-              >
-                <Icon size={18} />
-                {item.label}
-              </Link>
+              <div key={item.href}>
+                <Link
+                  className={cn(
+                    "flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition",
+                    active
+                      ? "bg-emerald-400 text-slate-950"
+                      : "text-slate-400 hover:bg-slate-900 hover:text-white",
+                  )}
+                  href={item.href}
+                >
+                  <Icon size={18} />
+                  {item.label}
+                </Link>
+                {item.children ? (
+                  <div className="mt-1 space-y-1 pl-6">
+                    {item.children.map((child) => {
+                      const ChildIcon = child.icon;
+                      const childActive = pathname === child.href;
+                      return (
+                        <Link
+                          className={cn(
+                            "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition",
+                            childActive
+                              ? "bg-emerald-400/15 text-emerald-300 ring-1 ring-emerald-400/20"
+                              : "text-slate-500 hover:bg-slate-900 hover:text-white",
+                          )}
+                          href={child.href}
+                          key={child.href}
+                        >
+                          <ChildIcon size={16} />
+                          {child.label}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
             );
           })}
         </nav>
