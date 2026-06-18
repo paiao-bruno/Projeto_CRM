@@ -6,6 +6,7 @@ import {
   Bot,
   CalendarDays,
   GitBranch,
+  Hash,
   LayoutDashboard,
   LogOut,
   Megaphone,
@@ -25,7 +26,12 @@ const navItems = [
   { href: "/ai-agents", label: "Agents", icon: Bot },
   { href: "/flows", label: "Flows", icon: GitBranch },
   { href: "/integrations", label: "Integrations", icon: Plug },
-  { href: "/chat", label: "Chat", icon: MessageCircle },
+  {
+    href: "/chat",
+    label: "Chat",
+    icon: MessageCircle,
+    children: [{ href: "/team-chat", label: "Team", icon: Hash }],
+  },
   { href: "/customers", label: "CRM", icon: Users },
   { href: "/campaigns", label: "Campaigns", icon: Megaphone },
   { href: "/schedule", label: "Schedule", icon: CalendarDays, badge: "Acquire" },
@@ -34,6 +40,7 @@ const navItems = [
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { user, loading, logout } = useRequireAuth();
+  const isTeamChat = pathname === "/team-chat";
 
   if (loading || !user) {
     return (
@@ -44,30 +51,64 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen lg:grid lg:grid-cols-[280px_1fr]">
-      <aside className="hidden border-r border-slate-800/80 bg-slate-950/70 p-5 lg:flex lg:flex-col">
-        <div className="mb-8 flex items-center gap-3">
-          <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-400 text-slate-950">
-            <RadioTower size={22} />
-          </span>
-          <div>
-            <p className="font-bold text-white">ISP CRM</p>
-            <p className="text-xs text-slate-500">SaaS multitenant</p>
-          </div>
+    <div
+      className={cn(
+        "min-h-screen lg:grid lg:grid-cols-[280px_1fr]",
+        isTeamChat && "bg-slate-50 text-slate-950",
+      )}
+    >
+      <aside
+        className={cn(
+          "hidden border-r p-5 lg:flex lg:flex-col",
+          isTeamChat
+            ? "border-slate-200 bg-white text-slate-700"
+            : "border-slate-800/80 bg-slate-950/70",
+        )}
+      >
+        <div
+          className={cn(
+            "mb-8 flex items-center gap-3 rounded-2xl",
+            isTeamChat && "border border-slate-200 bg-white p-2 shadow-sm",
+          )}
+        >
+          {isTeamChat ? (
+            <div className="flex h-14 flex-1 items-center justify-center rounded-xl bg-blue-950 text-2xl font-bold tracking-tight text-white">
+              Web<span className="text-orange-400">+</span>
+            </div>
+          ) : (
+            <>
+              <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-400 text-slate-950">
+                <RadioTower size={22} />
+              </span>
+              <div>
+                <p className="font-bold text-white">ISP CRM</p>
+                <p className="text-xs text-slate-500">SaaS multitenant</p>
+              </div>
+            </>
+          )}
         </div>
 
         <nav className="space-y-2">
-          {navItems.map((item) => {
+          {navItems.map((item, index) => {
             const active = pathname === item.href;
             const Icon = item.icon;
             return (
               <div key={item.href}>
+                {isTeamChat && index === 1 ? (
+                  <p className="px-3 pb-2 pt-4 text-[11px] font-bold uppercase tracking-[0.28em] text-slate-400">
+                    Core API
+                  </p>
+                ) : null}
                 <Link
                   className={cn(
                     "flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition",
-                    active
-                      ? "bg-emerald-400 text-slate-950"
-                      : "text-slate-400 hover:bg-slate-900 hover:text-white",
+                    isTeamChat
+                      ? active
+                        ? "bg-violet-50 text-slate-900 ring-1 ring-violet-100"
+                        : "text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+                      : active
+                        ? "bg-emerald-400 text-slate-950"
+                        : "text-slate-400 hover:bg-slate-900 hover:text-white",
                   )}
                   href={item.href}
                 >
@@ -79,36 +120,107 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     </Badge>
                   ) : null}
                 </Link>
+                {item.children ? (
+                  <div className="mt-1 space-y-1 pl-6">
+                    {item.children.map((child) => {
+                      const ChildIcon = child.icon;
+                      const childActive = pathname === child.href;
+                      return (
+                        <Link
+                          className={cn(
+                            "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition",
+                            isTeamChat
+                              ? childActive
+                                ? "bg-violet-100 text-slate-900 ring-1 ring-violet-200"
+                                : "text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+                              : childActive
+                                ? "bg-emerald-400/15 text-emerald-300 ring-1 ring-emerald-400/20"
+                                : "text-slate-500 hover:bg-slate-900 hover:text-white",
+                          )}
+                          href={child.href}
+                          key={child.href}
+                        >
+                          <ChildIcon size={16} />
+                          {child.label}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                ) : null}
               </div>
             );
           })}
         </nav>
 
-        <div className="mt-auto rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+        <div
+          className={cn(
+            "mt-auto rounded-2xl border p-4",
+            isTeamChat
+              ? "border-slate-200 bg-violet-50/60"
+              : "border-slate-800 bg-slate-900/60",
+          )}
+        >
           <div className="flex items-center gap-3">
-            <span className="relative flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-950 text-sm font-bold text-slate-200">
+            <span
+              className={cn(
+                "relative flex h-10 w-10 items-center justify-center rounded-2xl text-sm font-bold",
+                isTeamChat
+                  ? "bg-lime-100 text-slate-900"
+                  : "bg-slate-950 text-slate-200",
+              )}
+            >
               L
               <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-white bg-emerald-400" />
             </span>
             <div>
-              <p className="text-sm font-semibold text-white">{user.tenantName}</p>
-              <Badge>{user.role}</Badge>
+              <p className={cn("text-sm font-semibold", isTeamChat ? "text-slate-900" : "text-white")}>
+                {isTeamChat ? "Lucca" : user.tenantName}
+              </p>
+              <Badge className={cn(isTeamChat ? "border-violet-200 bg-violet-100 text-[10px] text-violet-600" : "")}>
+                {isTeamChat ? "Manager" : user.role}
+              </Badge>
             </div>
           </div>
+          {isTeamChat ? (
+            <button
+              className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-semibold text-red-300 transition hover:bg-red-50"
+              onClick={logout}
+              type="button"
+            >
+              <LogOut size={15} />
+              Logout
+            </button>
+          ) : null}
         </div>
       </aside>
 
       <main className="min-w-0">
-        <header className="sticky top-0 z-20 border-b border-slate-800/80 bg-slate-950/70 px-4 py-4 backdrop-blur-xl lg:px-8">
+        <header
+          className={cn(
+            "sticky top-0 z-20 border-b px-4 py-4 backdrop-blur-xl lg:px-8",
+            isTeamChat
+              ? "border-slate-200 bg-white/90"
+              : "border-slate-800/80 bg-slate-950/70",
+          )}
+        >
           <div className="flex items-center justify-between gap-4">
-            <div className="hidden items-center gap-3 rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2 text-slate-500 md:flex">
+            <div
+              className={cn(
+                "hidden items-center gap-3 rounded-xl border px-3 py-2 md:flex",
+                isTeamChat
+                  ? "border-slate-200 bg-slate-50 text-slate-400"
+                  : "border-slate-800 bg-slate-900/60 text-slate-500",
+              )}
+            >
               <Search size={17} />
               <span className="text-sm">Buscar conversas, clientes e agentes...</span>
             </div>
 
             <div className="ml-auto flex items-center gap-3">
               <div className="text-right">
-                <p className="text-sm font-semibold text-white">{user.name}</p>
+                <p className={cn("text-sm font-semibold", isTeamChat ? "text-slate-900" : "text-white")}>
+                  {user.name}
+                </p>
                 <p className="text-xs text-slate-500">{user.email}</p>
               </div>
               <Button variant="secondary" size="sm" onClick={logout}>
@@ -119,7 +231,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
-        <div className="p-4 lg:p-8">{children}</div>
+        <div className={cn("p-4 lg:p-8", isTeamChat && "bg-slate-50")}>{children}</div>
       </main>
     </div>
   );
