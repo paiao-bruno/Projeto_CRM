@@ -15,7 +15,18 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { Activity, Bot, CheckCircle2, MessageSquare, Timer, TrendingUp } from "lucide-react";
+import {
+  Activity,
+  BookOpen,
+  Bot,
+  Brain,
+  CheckCircle2,
+  Database,
+  MessageSquare,
+  Sparkles,
+  Timer,
+  TrendingUp,
+} from "lucide-react";
 import { useAuth } from "@/components/auth-provider";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -65,6 +76,7 @@ export default function DashboardPage() {
     (total, item) => total + item.value,
     0,
   );
+  const memory = data.agentMemory;
 
   return (
     <div className="space-y-6">
@@ -94,6 +106,215 @@ export default function DashboardPage() {
             </Card>
           );
         })}
+      </section>
+
+      <section className="space-y-5">
+        <Card>
+          <CardHeader>
+            <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
+              <div className="flex items-center gap-3">
+                <span className="rounded-2xl bg-violet-400/10 p-3 text-violet-300">
+                  <Brain size={24} />
+                </span>
+                <div>
+                  <CardTitle className="text-2xl">Agent Memory</CardTitle>
+                  <p className="text-sm text-slate-400">Knowledge and learning</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                {[
+                  ["Total", memory.summary.totalAgents, Bot],
+                  ["Active", memory.summary.activeAgents, CheckCircle2],
+                  ["Average", `${memory.summary.averageLearning}%`, TrendingUp],
+                  ["Memories", memory.summary.totalMemoriesRegistered, Database],
+                ].map(([label, value, Icon]) => {
+                  const MetricIcon = Icon as typeof Bot;
+                  return (
+                    <div
+                      className="rounded-2xl border border-slate-800 bg-slate-950/50 p-3"
+                      key={label as string}
+                    >
+                      <div className="flex items-center gap-2 text-xs text-slate-500">
+                        <MetricIcon size={14} />
+                        {label as string}
+                      </div>
+                      <p className="mt-1 text-xl font-semibold text-white">{value as string}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              {[
+                ["Hoje", memory.summary.acquiredToday],
+                ["Semana", memory.summary.acquiredThisWeek],
+                ["Mês", memory.summary.acquiredThisMonth],
+                ["Crescimento", `${memory.summary.growthRate}%`],
+              ].map(([label, value]) => (
+                <div
+                  className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4"
+                  key={label as string}
+                >
+                  <p className="text-sm text-slate-400">Conhecimentos adquiridos {label}</p>
+                  <p className="mt-2 text-2xl font-semibold text-white">{value as string}</p>
+                </div>
+              ))}
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {memory.agents.map((agent) => (
+                <div
+                  className="rounded-2xl border border-slate-800 bg-slate-950/50 p-4"
+                  key={agent.id}
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex items-start gap-3">
+                      <span
+                        className="rounded-2xl p-2"
+                        style={{
+                          backgroundColor: `${agent.levelColor}1A`,
+                          color: agent.levelColor,
+                        }}
+                      >
+                        <Brain size={20} />
+                      </span>
+                      <div>
+                        <p className="font-semibold text-white">{agent.name}</p>
+                        <p className="text-xs text-slate-500">{agent.function}</p>
+                      </div>
+                    </div>
+                    <p className="text-3xl font-semibold text-slate-200">
+                      {agent.learningPercentage}%
+                    </p>
+                  </div>
+
+                  <div className="mt-4">
+                    <div className="mb-2 flex items-center justify-between text-xs">
+                      <span className="text-slate-400">Still needs to learn more</span>
+                      <Badge
+                        className="border"
+                        style={{
+                          borderColor: `${agent.levelColor}55`,
+                          backgroundColor: `${agent.levelColor}1A`,
+                          color: agent.levelColor,
+                        }}
+                      >
+                        {agent.levelLabel}
+                      </Badge>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{
+                          width: `${agent.learningPercentage}%`,
+                          backgroundColor: agent.levelColor,
+                        }}
+                      />
+                    </div>
+                    <div className="mt-2 flex justify-between text-xs text-slate-500">
+                      <span>
+                        {agent.learnedMemories} / {agent.totalMemories} memórias
+                      </span>
+                      <span>{agent.remainingMemories} restantes</span>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-3 gap-2 text-xs">
+                    <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-2">
+                      <p className="text-slate-500">Hoje</p>
+                      <p className="font-semibold text-white">{agent.acquiredToday}</p>
+                    </div>
+                    <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-2">
+                      <p className="text-slate-500">Semana</p>
+                      <p className="font-semibold text-white">{agent.acquiredThisWeek}</p>
+                    </div>
+                    <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-2">
+                      <p className="text-slate-500">Growth</p>
+                      <p className="font-semibold text-white">{agent.growthRate}%</p>
+                    </div>
+                  </div>
+                  <p className="mt-3 text-xs text-slate-500">
+                    Última atualização: {new Date(agent.lastUpdate).toLocaleString("pt-BR")}
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            <div className="grid gap-6 xl:grid-cols-[1fr_380px]">
+              <div className="h-80 rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+                <div className="mb-4 flex items-center gap-2">
+                  <TrendingUp className="text-emerald-300" size={18} />
+                  <p className="font-semibold text-white">Learning growth</p>
+                </div>
+                <ResponsiveContainer height="85%" width="100%">
+                  <AreaChart data={memory.chart}>
+                    <defs>
+                      <linearGradient id="dailyGrowth" x1="0" x2="0" y1="0" y2="1">
+                        <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.45} />
+                        <stop offset="95%" stopColor="#38bdf8" stopOpacity={0} />
+                      </linearGradient>
+                      <linearGradient id="weeklyGrowth" x1="0" x2="0" y1="0" y2="1">
+                        <stop offset="5%" stopColor="#34d399" stopOpacity={0.45} />
+                        <stop offset="95%" stopColor="#34d399" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid stroke="#1f2937" strokeDasharray="3 3" />
+                    <XAxis dataKey="date" stroke="#64748b" />
+                    <YAxis allowDecimals={false} stroke="#64748b" />
+                    <Tooltip
+                      contentStyle={{
+                        background: "#0f172a",
+                        border: "1px solid #334155",
+                        borderRadius: 12,
+                      }}
+                    />
+                    <Area
+                      dataKey="dailyGrowth"
+                      fill="url(#dailyGrowth)"
+                      name="Crescimento diário"
+                      stroke="#38bdf8"
+                    />
+                    <Area
+                      dataKey="weeklyGrowth"
+                      fill="url(#weeklyGrowth)"
+                      name="Crescimento semanal"
+                      stroke="#34d399"
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+                <div className="mb-4 flex items-center gap-2">
+                  <BookOpen className="text-violet-300" size={18} />
+                  <p className="font-semibold text-white">Knowledge Stages</p>
+                </div>
+                <div className="space-y-3">
+                  {memory.stages.map((stage) => (
+                    <div
+                      className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-900/50 p-3"
+                      key={stage.level}
+                    >
+                      <div className="flex items-center gap-3">
+                        <Sparkles size={16} style={{ color: stage.color }} />
+                        <div>
+                          <p className="text-sm font-semibold text-white">{stage.label}</p>
+                          <p className="text-xs text-slate-500">{stage.range}</p>
+                        </div>
+                      </div>
+                      <span
+                        className="h-2 w-16 rounded-full"
+                        style={{ backgroundColor: stage.color }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
       </section>
 
       <section className="grid gap-6 xl:grid-cols-[1fr_340px]">

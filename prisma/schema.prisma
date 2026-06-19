@@ -256,6 +256,23 @@ enum MetricGranularity {
   DAY
 }
 
+enum AgentMemoryLevel {
+  BEGINNER
+  LEARNING
+  DEVELOPING
+  EXPERIENCED
+  MASTER
+}
+
+enum MemorySource {
+  DOCUMENT_PROCESSED
+  TRAINING_COMPLETED
+  CONVERSATION_USEFUL
+  KNOWLEDGE_ADDED
+  FAQ_CREATED
+  INTEGRATION_SYNC
+}
+
 model Tenant {
   id        String       @id @default(uuid()) @db.Uuid
   name      String
@@ -279,6 +296,8 @@ model Tenant {
   teamMessages       TeamMessage[]
   teamPresence       TeamPresence[]
   aiAgents           AiAgent[]
+  agentMemories      AgentMemory[]
+  memoryHistory      MemoryHistory[]
   agentKnowledge     AiAgentKnowledgeBase[]
   knowledgeBases     KnowledgeBase[]
   documents          KnowledgeDocument[]
@@ -679,9 +698,47 @@ model AiAgent {
   fromHandoffs        ConversationHandoff[]  @relation("FromAiAgentHandoffs")
   toHandoffs          ConversationHandoff[]  @relation("ToAiAgentHandoffs")
   flowNodes           FlowNode[]
+  memory              AgentMemory?
+  memoryHistory       MemoryHistory[]
 
   @@unique([tenantId, name])
   @@index([tenantId, status])
+}
+
+model AgentMemory {
+  id                 String           @id @default(uuid()) @db.Uuid
+  tenantId           String           @map("tenant_id") @db.Uuid
+  agentId            String           @unique @map("agent_id") @db.Uuid
+  learnedMemories    Int              @default(0) @map("learned_memories")
+  totalMemories      Int              @default(100) @map("total_memories")
+  learningPercentage Int              @default(0) @map("learning_percentage")
+  level              AgentMemoryLevel @default(BEGINNER)
+  lastUpdate         DateTime         @default(now()) @map("last_update")
+  createdAt          DateTime         @default(now()) @map("created_at")
+  updatedAt          DateTime         @updatedAt @map("updated_at")
+
+  tenant Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agent  AiAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, level])
+  @@index([tenantId, learningPercentage])
+  @@map("agent_memory")
+}
+
+model MemoryHistory {
+  id            String       @id @default(uuid()) @db.Uuid
+  tenantId      String       @map("tenant_id") @db.Uuid
+  agentId       String       @map("agent_id") @db.Uuid
+  memoriesAdded Int          @map("memories_added")
+  source        MemorySource
+  createdAt     DateTime     @default(now()) @map("created_at")
+
+  tenant Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agent  AiAgent @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, agentId, createdAt])
+  @@index([tenantId, source, createdAt])
+  @@map("memory_history")
 }
 
 model AiAgentKnowledgeBase {

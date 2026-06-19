@@ -81,5 +81,46 @@ export type DashboardOverview = {
     messagesProcessed: number;
     color: string;
   }>;
+  agentMemory: {
+    summary: {
+      totalAgents: number;
+      activeAgents: number;
+      averageLearning: number;
+      totalMemoriesRegistered: number;
+      acquiredToday: number;
+      acquiredThisWeek: number;
+      acquiredThisMonth: number;
+      growthRate: number;
+    };
+    agents: Array<{
+      id: string;
+      name: string;
+      function: string;
+      status: "ACTIVE" | "INACTIVE" | "TRAINING" | "ERROR";
+      learnedMemories: number;
+      totalMemories: number;
+      remainingMemories: number;
+      learningPercentage: number;
+      level: "BEGINNER" | "LEARNING" | "DEVELOPING" | "EXPERIENCED" | "MASTER";
+      levelLabel: string;
+      levelColor: string;
+      lastUpdate: string;
+      acquiredToday: number;
+      acquiredThisWeek: number;
+      acquiredThisMonth: number;
+      growthRate: number;
+    }>;
+    chart: Array<{
+      date: string;
+      dailyGrowth: number;
+      weeklyGrowth: number;
+    }>;
+    stages: Array<{
+      level: string;
+      label: string;
+      range: string;
+      color: string;
+    }>;
+  };
   health: Array<{ label: string; status: string }>;
 };
