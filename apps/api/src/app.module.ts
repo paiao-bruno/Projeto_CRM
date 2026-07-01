@@ -6,6 +6,7 @@ import { ChatModule } from "./modules/chat/chat.module";
 import { CustomersModule } from "./modules/customers/customers.module";
 import { DashboardModule } from "./modules/dashboard/dashboard.module";
 import { DatabaseModule } from "./modules/database/database.module";
+import { IntegrationsModule } from "./modules/integrations/integrations.module";
 import { SeedModule } from "./modules/seed/seed.module";
 
 @Module({
@@ -21,6 +22,7 @@ import { SeedModule } from "./modules/seed/seed.module";
     CustomersModule,
     ChatModule,
     AiAgentsModule,
+    IntegrationsModule,
   ],
 })
 export class AppModule {}
