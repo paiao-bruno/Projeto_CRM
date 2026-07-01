@@ -17,4 +17,9 @@ export class IntegrationsController {
   discoverSgpCustomers(@Body() body?: SgpDiscoveryRequest) {
     return this.integrationsService.discoverSgpCustomers(body);
   }
+
+  @Post("sgp/debug")
+  debugSgp(@Body() body: SgpDiscoveryRequest) {
+    return this.integrationsService.debugSgp(body);
+  }
 }

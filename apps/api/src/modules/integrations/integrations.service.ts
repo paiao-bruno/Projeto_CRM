@@ -21,4 +21,12 @@ export class IntegrationsService {
     );
     return response.body;
   }
+
+  async debugSgp(request: SgpDiscoveryRequest) {
+    const response = await this.sgpClient.debug(
+      request.endpoint ?? "/",
+      request.payload,
+    );
+    return response.body;
+  }
 }

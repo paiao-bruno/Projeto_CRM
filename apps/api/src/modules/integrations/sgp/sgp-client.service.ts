@@ -39,6 +39,14 @@ export class SgpClientService {
     });
   }
 
+  debug(endpoint: string, payload?: Record<string, unknown>) {
+    return this.request({
+      operation: "sgp.debug",
+      endpoint,
+      payload,
+    });
+  }
+
   async request(options: SgpRequestOptions): Promise<SgpHttpResponse> {
     const startedAt = new Date();
     const startedAtMs = Date.now();
