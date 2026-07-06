@@ -1,5 +1,7 @@
 import { Body, Controller, Post, UseGuards } from "@nestjs/common";
+import { CurrentUser } from "../auth/current-user.decorator";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
+import { AuthUser } from "../auth/types/auth-user";
 import { IntegrationsService } from "./integrations.service";
 import { SgpDiscoveryRequest } from "./sgp/types/sgp-client.types";
 
@@ -14,8 +16,11 @@ export class IntegrationsController {
   }
 
   @Post("sgp/discover/customers")
-  discoverSgpCustomers(@Body() body?: SgpDiscoveryRequest) {
-    return this.integrationsService.discoverSgpCustomers(body);
+  discoverSgpCustomers(
+    @CurrentUser() user: AuthUser,
+    @Body() body?: SgpDiscoveryRequest,
+  ) {
+    return this.integrationsService.discoverSgpCustomers(user, body);
   }
 
   @Post("sgp/debug")
