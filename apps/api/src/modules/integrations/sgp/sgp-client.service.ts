@@ -32,13 +32,10 @@ export class SgpClientService {
     });
   }
 
-  discoverCustomers(payload?: Record<string, unknown>, endpoint?: string) {
+  discoverCustomers(payload?: Record<string, unknown>) {
     return this.request({
       operation: "sgp.discover-customers",
-      endpoint:
-        endpoint ??
-        this.config.get<string>("SGP_CUSTOMERS_ENDPOINT") ??
-        OFFICIAL_CUSTOMERS_LIST_ENDPOINT,
+      endpoint: OFFICIAL_CUSTOMERS_LIST_ENDPOINT,
       payload,
     });
   }

@@ -26,7 +26,6 @@ export class IntegrationsService {
   async discoverSgpCustomers(user: AuthUser, request: SgpDiscoveryRequest = {}) {
     const response = await this.sgpClient.discoverCustomers(
       this.buildDiscoveryPayload(request),
-      request.endpoint,
     );
     this.assertCustomerDiscoveryResponse(response.body, request.endpoint);
     const rawCustomers = this.extractCustomers(response.body);
@@ -159,9 +158,11 @@ export class IntegrationsService {
   }
 
   private mapSgpCustomer(raw: Record<string, unknown>): ExternalCustomerInput {
-    const primaryContract = this.firstRecord(raw, ["contrato", "contratos"]);
-    const primaryService = this.firstRecord(raw, ["servico", "serviço", "servicos", "serviços"]);
-    const primaryTitle = this.firstRecord(raw, ["titulo", "titulos", "títulos"]);
+    const primaryContract = this.firstRecord(raw, ["contrato", "contratos", "__sgpContratos"]);
+    const primaryService =
+      this.firstRecord(raw, ["servico", "serviço", "servicos", "serviços"]) ??
+      this.firstRecord(primaryContract, ["servico", "serviço", "servicos", "serviços"]);
+    const primaryTitle = this.firstRecord(raw, ["titulo", "titulos", "títulos", "__sgpTitulos"]);
     const externalId = this.firstString(raw, [
       "id",
       "cliente_id",
@@ -223,6 +224,7 @@ export class IntegrationsService {
         externalId,
         contratos: this.toJsonValue(raw.__sgpContratos),
         titulos: this.toJsonValue(raw.__sgpTitulos),
+        pagination: this.toJsonValue(raw.__sgpPagination),
       },
     };
   }
@@ -330,10 +332,16 @@ export class IntegrationsService {
     customer: Record<string, unknown>,
     root: Record<string, unknown>,
   ) {
+    const contratos = this.extractArray(root, ["contratos", "contrato"]);
+    const titulos = this.extractArray(root, ["titulos", "títulos", "titulo"]);
+    const relatedContracts = this.findRelatedRecords(customer, contratos);
+    const relatedTitles = this.findRelatedRecords(customer, titulos);
+
     return {
       ...customer,
-      __sgpContratos: root.contratos ?? root.contrato,
-      __sgpTitulos: root.titulos ?? root.títulos ?? root.titulo,
+      __sgpContratos: relatedContracts.length ? relatedContracts : undefined,
+      __sgpTitulos: relatedTitles.length ? relatedTitles : undefined,
+      __sgpPagination: this.extractPagination(root),
     };
   }
 
@@ -348,6 +356,96 @@ export class IntegrationsService {
   private toJsonValue(value: unknown): Prisma.InputJsonValue | undefined {
     if (value === undefined) return undefined;
     return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+  }
+
+  private extractArray(root: Record<string, unknown>, keys: string[]) {
+    for (const key of keys) {
+      const value = root[key];
+      if (Array.isArray(value)) return value.filter(this.isRecord);
+      if (this.isRecord(value)) return [value];
+    }
+
+    return [];
+  }
+
+  private findRelatedRecords(
+    customer: Record<string, unknown>,
+    records: Array<Record<string, unknown>>,
+  ) {
+    if (!records.length) return [];
+
+    const customerKeys = this.customerRelationKeys(customer);
+    if (!customerKeys.size) {
+      return records.length === 1 ? records : [];
+    }
+
+    const related = records.filter((record) => {
+      const recordKeys = this.customerRelationKeys(record);
+      for (const key of recordKeys) {
+        if (customerKeys.has(key)) return true;
+      }
+      return false;
+    });
+
+    return related.length ? related : records.length === 1 ? records : [];
+  }
+
+  private customerRelationKeys(record: Record<string, unknown>) {
+    const keys = new Set<string>();
+    const scalarKeys = [
+      "id",
+      "cliente_id",
+      "idcliente",
+      "id_cliente",
+      "codigo",
+      "codcli",
+      "cod_cliente",
+      "cpfcnpj",
+      "cpf_cnpj",
+      "cpf",
+      "cnpj",
+      "documento",
+    ];
+
+    for (const key of scalarKeys) {
+      const value = this.firstString(record, [key]);
+      if (value) keys.add(this.normalizeRelationKey(value));
+    }
+
+    const nestedCustomer = this.firstRecord(record, ["cliente", "customer"]);
+    if (nestedCustomer) {
+      for (const key of this.customerRelationKeys(nestedCustomer)) {
+        keys.add(key);
+      }
+    }
+
+    return keys;
+  }
+
+  private normalizeRelationKey(value: string) {
+    const onlyDigits = value.replace(/\D/g, "");
+    return onlyDigits || value.trim().toLowerCase();
+  }
+
+  private extractPagination(root: Record<string, unknown>) {
+    const paginationKeys = [
+      "pagination",
+      "paginacao",
+      "paginação",
+      "page",
+      "pagina",
+      "total",
+      "count",
+      "next",
+      "previous",
+    ];
+    const pagination = Object.fromEntries(
+      paginationKeys
+        .filter((key) => root[key] !== undefined)
+        .map((key) => [key, root[key]]),
+    );
+
+    return Object.keys(pagination).length ? pagination : undefined;
   }
 
   private looksLikeCustomer(value: Record<string, unknown>) {
