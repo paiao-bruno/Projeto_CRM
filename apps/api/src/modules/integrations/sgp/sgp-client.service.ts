@@ -8,10 +8,7 @@ import {
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_CUSTOMER_DISCOVERY_ENDPOINT = "/api/ura/consultacliente/";
-const OFFICIAL_CUSTOMERS_LIST_ENDPOINTS = [
-  "/api/v1/fechamento/clientes/",
-  "/api/ura/clientes/",
-];
+const OFFICIAL_CUSTOMERS_LIST_ENDPOINT = "/api/ura/clientes/";
 const SENSITIVE_KEYS = new Set([
   "token",
   "senha",
@@ -36,23 +33,12 @@ export class SgpClientService {
   }
 
   discoverCustomers(payload?: Record<string, unknown>, endpoint?: string) {
-    if (endpoint) {
-      return this.request({
-        operation: "sgp.discover-customers",
-        endpoint,
-        payload,
-      });
-    }
-
-    const configuredEndpoint = this.config.get<string>("SGP_CUSTOMERS_ENDPOINT");
-    const endpoints = [
-      ...(configuredEndpoint ? [configuredEndpoint] : []),
-      ...OFFICIAL_CUSTOMERS_LIST_ENDPOINTS,
-    ].filter((candidate, index, list) => list.indexOf(candidate) === index);
-
-    return this.requestWithFallback({
+    return this.request({
       operation: "sgp.discover-customers",
-      endpoints,
+      endpoint:
+        endpoint ??
+        this.config.get<string>("SGP_CUSTOMERS_ENDPOINT") ??
+        OFFICIAL_CUSTOMERS_LIST_ENDPOINT,
       payload,
     });
   }
@@ -192,41 +178,6 @@ export class SgpClientService {
     } finally {
       clearTimeout(timeout);
     }
-  }
-
-  private async requestWithFallback(options: {
-    operation: string;
-    endpoints: string[];
-    payload?: Record<string, unknown>;
-  }) {
-    let lastError: unknown;
-
-    for (const endpoint of options.endpoints) {
-      try {
-        return await this.request({
-          operation: options.operation,
-          endpoint,
-          payload: options.payload,
-        });
-      } catch (error) {
-        lastError = error;
-        if (!this.shouldTryNextEndpoint(error)) {
-          throw error;
-        }
-
-        this.logger.warn(
-          JSON.stringify({
-            event: "sgp.discover-customers.fallback",
-            failedEndpoint: endpoint,
-            nextEndpointAvailable:
-              options.endpoints.indexOf(endpoint) < options.endpoints.length - 1,
-            error: error instanceof HttpException ? error.getResponse() : String(error),
-          }),
-        );
-      }
-    }
-
-    throw lastError;
   }
 
   private buildAuthenticatedPayload(payload: Record<string, unknown> = {}) {
@@ -405,20 +356,6 @@ export class SgpClientService {
     return (
       error instanceof Error &&
       (error.name === "AbortError" || error.message.includes("aborted"))
-    );
-  }
-
-  private shouldTryNextEndpoint(error: unknown) {
-    if (!(error instanceof HttpException)) return false;
-    const response = error.getResponse();
-    if (!response || typeof response !== "object") return false;
-
-    const code = (response as { code?: string }).code;
-    const context = (response as { context?: { status?: number } }).context;
-
-    return (
-      code === "SGP_HTML_RESPONSE" ||
-      (code === "SGP_UNEXPECTED_RESPONSE" && context?.status === HttpStatus.NOT_FOUND)
     );
   }
 
