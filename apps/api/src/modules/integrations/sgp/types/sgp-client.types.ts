@@ -19,6 +19,7 @@ export type SgpErrorCode =
   | "SGP_TIMEOUT"
   | "SGP_AUTH_FAILED"
   | "SGP_UNAVAILABLE"
+  | "SGP_HTML_RESPONSE"
   | "SGP_UNEXPECTED_RESPONSE";
 
 export type SgpRequestOptions = {

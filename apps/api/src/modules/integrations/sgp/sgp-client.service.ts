@@ -8,7 +8,10 @@ import {
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_CUSTOMER_DISCOVERY_ENDPOINT = "/api/ura/consultacliente/";
-const DEFAULT_CUSTOMERS_LIST_ENDPOINT = "/api/ura/clientes/";
+const OFFICIAL_CUSTOMERS_LIST_ENDPOINTS = [
+  "/api/v2/integra/clientes/",
+  "/api/v1/fechamento/clientes/",
+];
 const SENSITIVE_KEYS = new Set([
   "token",
   "senha",
@@ -33,12 +36,23 @@ export class SgpClientService {
   }
 
   discoverCustomers(payload?: Record<string, unknown>, endpoint?: string) {
-    return this.request({
+    if (endpoint) {
+      return this.request({
+        operation: "sgp.discover-customers",
+        endpoint,
+        payload,
+      });
+    }
+
+    const configuredEndpoint = this.config.get<string>("SGP_CUSTOMERS_ENDPOINT");
+    const endpoints = [
+      ...(configuredEndpoint ? [configuredEndpoint] : []),
+      ...OFFICIAL_CUSTOMERS_LIST_ENDPOINTS,
+    ].filter((candidate, index, list) => list.indexOf(candidate) === index);
+
+    return this.requestWithFallback({
       operation: "sgp.discover-customers",
-      endpoint:
-        endpoint ??
-        this.config.get<string>("SGP_CUSTOMERS_ENDPOINT") ??
-        DEFAULT_CUSTOMERS_LIST_ENDPOINT,
+      endpoints,
       payload,
     });
   }
@@ -85,6 +99,13 @@ export class SgpClientService {
       });
       const durationMs = Date.now() - startedAtMs;
       const body = await this.parseBody(response);
+      this.assertNotHtmlResponse({
+        body,
+        endpoint: options.endpoint,
+        exactUrl: url.toString(),
+        status: response.status,
+        statusText: response.statusText,
+      });
       const headers = Object.fromEntries(response.headers.entries());
       const result: SgpHttpResponse = {
         status: response.status,
@@ -171,6 +192,41 @@ export class SgpClientService {
     }
   }
 
+  private async requestWithFallback(options: {
+    operation: string;
+    endpoints: string[];
+    payload?: Record<string, unknown>;
+  }) {
+    let lastError: unknown;
+
+    for (const endpoint of options.endpoints) {
+      try {
+        return await this.request({
+          operation: options.operation,
+          endpoint,
+          payload: options.payload,
+        });
+      } catch (error) {
+        lastError = error;
+        if (!this.shouldTryNextEndpoint(error)) {
+          throw error;
+        }
+
+        this.logger.warn(
+          JSON.stringify({
+            event: "sgp.discover-customers.fallback",
+            failedEndpoint: endpoint,
+            nextEndpointAvailable:
+              options.endpoints.indexOf(endpoint) < options.endpoints.length - 1,
+            error: error instanceof HttpException ? error.getResponse() : String(error),
+          }),
+        );
+      }
+    }
+
+    throw lastError;
+  }
+
   private buildAuthenticatedPayload(payload: Record<string, unknown> = {}) {
     const app = this.config.get<string>("SGP_APP");
     const token = this.config.get<string>("SGP_TOKEN");
@@ -235,6 +291,46 @@ export class SgpClientService {
     }
   }
 
+  private assertNotHtmlResponse(input: {
+    body: unknown;
+    endpoint: string;
+    exactUrl: string;
+    status: number;
+    statusText: string;
+  }) {
+    if (typeof input.body !== "string") return;
+
+    const normalized = input.body.trim().toLowerCase();
+    if (!normalized.startsWith("<!doctype html") && !normalized.startsWith("<html")) {
+      return;
+    }
+
+    const exception = this.toHttpException(
+      "SGP_HTML_RESPONSE",
+      `O SGP retornou HTML em vez de JSON. URL chamada: ${input.exactUrl}`,
+      HttpStatus.BAD_GATEWAY,
+      {
+        endpoint: input.endpoint,
+        exactUrl: input.exactUrl,
+        status: input.status,
+        statusText: input.statusText,
+      },
+    );
+
+    this.logger.error(
+      JSON.stringify({
+        event: "sgp.response.html",
+        message: "O SGP retornou HTML em vez de JSON.",
+        endpoint: input.endpoint,
+        exactUrl: input.exactUrl,
+        status: input.status,
+        statusText: input.statusText,
+      }),
+    );
+
+    throw exception;
+  }
+
   private sanitize(value: unknown): unknown {
     if (Array.isArray(value)) {
       return value.map((item) => this.sanitize(item));
@@ -266,6 +362,20 @@ export class SgpClientService {
     return (
       error instanceof Error &&
       (error.name === "AbortError" || error.message.includes("aborted"))
+    );
+  }
+
+  private shouldTryNextEndpoint(error: unknown) {
+    if (!(error instanceof HttpException)) return false;
+    const response = error.getResponse();
+    if (!response || typeof response !== "object") return false;
+
+    const code = (response as { code?: string }).code;
+    const context = (response as { context?: { status?: number } }).context;
+
+    return (
+      code === "SGP_HTML_RESPONSE" ||
+      (code === "SGP_UNEXPECTED_RESPONSE" && context?.status === HttpStatus.NOT_FOUND)
     );
   }
 
