@@ -9,8 +9,8 @@ import {
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_CUSTOMER_DISCOVERY_ENDPOINT = "/api/ura/consultacliente/";
 const OFFICIAL_CUSTOMERS_LIST_ENDPOINTS = [
-  "/api/v2/integra/clientes/",
   "/api/v1/fechamento/clientes/",
+  "/api/ura/clientes/",
 ];
 const SENSITIVE_KEYS = new Set([
   "token",
@@ -74,6 +74,7 @@ export class SgpClientService {
 
     try {
       const url = this.buildUrl(options.endpoint);
+      const credentials = this.getCredentials();
       const payload = this.buildAuthenticatedPayload(options.payload);
 
       this.logger.log(
@@ -92,6 +93,7 @@ export class SgpClientService {
         method: "POST",
         headers: {
           Accept: "application/json",
+          Authorization: `Bearer ${credentials.token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(payload),
@@ -228,16 +230,7 @@ export class SgpClientService {
   }
 
   private buildAuthenticatedPayload(payload: Record<string, unknown> = {}) {
-    const app = this.config.get<string>("SGP_APP");
-    const token = this.config.get<string>("SGP_TOKEN");
-
-    if (!app || !token) {
-      throw this.toHttpException(
-        "SGP_CONFIG_ERROR",
-        "SGP_APP e SGP_TOKEN precisam estar configurados.",
-        HttpStatus.BAD_REQUEST,
-      );
-    }
+    const { app, token } = this.getCredentials();
 
     return {
       app,
@@ -258,11 +251,20 @@ export class SgpClientService {
     }
 
     try {
-      const normalizedBaseUrl = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
-      const normalizedEndpoint = endpoint.startsWith("/")
-        ? endpoint.slice(1)
-        : endpoint;
-      return new URL(normalizedEndpoint, normalizedBaseUrl);
+      const apiPort = this.config.get<string>("SGP_API_PORT");
+      const normalizedEndpoint = this.normalizeApiEndpoint(endpoint);
+      const url = endpoint.startsWith("http://") || endpoint.startsWith("https://")
+        ? new URL(normalizedEndpoint)
+        : new URL(
+            normalizedEndpoint,
+            baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`,
+          );
+
+      if (apiPort && !url.port) {
+        url.port = apiPort;
+      }
+
+      return url;
     } catch {
       throw this.toHttpException(
         "SGP_INVALID_URL",
@@ -271,6 +273,47 @@ export class SgpClientService {
         { baseUrl: this.redactUrl(baseUrl), endpoint },
       );
     }
+  }
+
+  private getCredentials() {
+    const app = this.config.get<string>("SGP_APP");
+    const token = this.config.get<string>("SGP_TOKEN");
+
+    if (!app || !token) {
+      throw this.toHttpException(
+        "SGP_CONFIG_ERROR",
+        "SGP_APP e SGP_TOKEN precisam estar configurados.",
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    return { app, token };
+  }
+
+  private normalizeApiEndpoint(endpoint: string) {
+    const trimmedEndpoint = endpoint.trim();
+
+    if (trimmedEndpoint.startsWith("http://") || trimmedEndpoint.startsWith("https://")) {
+      const url = new URL(trimmedEndpoint);
+      url.pathname = this.ensureApiPath(url.pathname);
+      return url.toString();
+    }
+
+    return this.ensureApiPath(trimmedEndpoint);
+  }
+
+  private ensureApiPath(endpoint: string) {
+    const withLeadingSlash = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
+
+    if (withLeadingSlash === "/api" || withLeadingSlash.startsWith("/api/")) {
+      return withLeadingSlash;
+    }
+
+    if (withLeadingSlash === "/") {
+      return "/api/";
+    }
+
+    return `/api${withLeadingSlash}`;
   }
 
   private getTimeoutMs() {
