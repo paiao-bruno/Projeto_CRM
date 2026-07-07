@@ -8,6 +8,7 @@ import {
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_CUSTOMER_DISCOVERY_ENDPOINT = "/api/ura/consultacliente/";
+const DEFAULT_CUSTOMERS_LIST_ENDPOINT = "/api/ura/clientes/";
 const SENSITIVE_KEYS = new Set([
   "token",
   "senha",
@@ -34,7 +35,10 @@ export class SgpClientService {
   discoverCustomers(payload?: Record<string, unknown>, endpoint?: string) {
     return this.request({
       operation: "sgp.discover-customers",
-      endpoint: endpoint ?? DEFAULT_CUSTOMER_DISCOVERY_ENDPOINT,
+      endpoint:
+        endpoint ??
+        this.config.get<string>("SGP_CUSTOMERS_ENDPOINT") ??
+        DEFAULT_CUSTOMERS_LIST_ENDPOINT,
       payload,
     });
   }

@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { BadGatewayException, Injectable } from "@nestjs/common";
 import { CustomerStatus } from "@prisma/client";
 import {
   CustomersService,
@@ -25,9 +25,10 @@ export class IntegrationsService {
 
   async discoverSgpCustomers(user: AuthUser, request: SgpDiscoveryRequest = {}) {
     const response = await this.sgpClient.discoverCustomers(
-      request.payload,
+      this.buildDiscoveryPayload(request),
       request.endpoint,
     );
+    this.assertCustomerDiscoveryResponse(response.body, request.endpoint);
     const rawCustomers = this.extractCustomers(response.body);
     const result = {
       processed: rawCustomers.length,
@@ -80,6 +81,55 @@ export class IntegrationsService {
       request.payload,
     );
     return response.body;
+  }
+
+  private buildDiscoveryPayload(request: SgpDiscoveryRequest) {
+    return {
+      ...(request.payload ?? {}),
+      ...(request.filters ?? {}),
+      ...(request.pagination ?? {}),
+    };
+  }
+
+  private assertCustomerDiscoveryResponse(body: unknown, endpoint?: string) {
+    if (typeof body === "string") {
+      const normalized = body.toLowerCase();
+      if (
+        normalized.includes("<!doctype html") ||
+        normalized.includes("<html") ||
+        normalized.includes("documentation") ||
+        normalized.includes("swagger") ||
+        normalized.includes("redoc")
+      ) {
+        throw new BadGatewayException({
+          code: "SGP_UNEXPECTED_RESPONSE",
+          message:
+            "O SGP retornou uma página de documentação/HTML em vez da lista de clientes. Verifique SGP_API_URL e o endpoint de clientes.",
+          context: {
+            endpoint,
+          },
+        });
+      }
+    }
+
+    if (this.isRecord(body)) {
+      const keys = Object.keys(body).map((key) => key.toLowerCase());
+      const looksLikeOpenApi =
+        keys.includes("openapi") ||
+        keys.includes("swagger") ||
+        (keys.includes("info") && keys.includes("paths"));
+
+      if (looksLikeOpenApi) {
+        throw new BadGatewayException({
+          code: "SGP_UNEXPECTED_RESPONSE",
+          message:
+            "O SGP retornou metadados de documentação em vez da lista de clientes. Verifique SGP_API_URL e o endpoint de clientes.",
+          context: {
+            endpoint,
+          },
+        });
+      }
+    }
   }
 
   private extractCustomers(body: unknown): Array<Record<string, unknown>> {

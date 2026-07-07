@@ -1,6 +1,8 @@
 export type SgpDiscoveryRequest = {
   endpoint?: string;
   payload?: Record<string, unknown>;
+  filters?: Record<string, unknown>;
+  pagination?: Record<string, unknown>;
 };
 
 export type SgpHttpResponse = {
