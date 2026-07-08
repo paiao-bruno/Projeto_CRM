@@ -1,18 +1,29 @@
-import { BadGatewayException, Injectable } from "@nestjs/common";
-import { CustomerStatus, Prisma } from "@prisma/client";
+import { BadGatewayException, Injectable, Logger } from "@nestjs/common";
+import { ContractStatus, CustomerStatus, InvoiceStatus, Prisma } from "@prisma/client";
 import {
   CustomersService,
   ExternalCustomerInput,
 } from "../customers/customers.service";
 import { AuthUser } from "../auth/types/auth-user";
+import { PrismaService } from "../database/prisma.service";
 import { SgpClientService } from "./sgp/sgp-client.service";
 import { SgpDiscoveryRequest } from "./sgp/types/sgp-client.types";
 
+type SgpCustomerMapping = {
+  customer: ExternalCustomerInput;
+  contracts: Array<Record<string, unknown>>;
+  invoices: Array<Record<string, unknown>>;
+};
+
 @Injectable()
 export class IntegrationsService {
+  private readonly logger = new Logger(IntegrationsService.name);
+  private readonly runningCustomerSyncs = new Set<string>();
+
   constructor(
     private readonly sgpClient: SgpClientService,
     private readonly customersService: CustomersService,
+    private readonly prisma: PrismaService,
   ) {}
 
   async testSgpAuth(request: SgpDiscoveryRequest = {}) {
@@ -24,6 +35,63 @@ export class IntegrationsService {
   }
 
   async discoverSgpCustomers(user: AuthUser, request: SgpDiscoveryRequest = {}) {
+    return this.processSgpCustomers(user, request);
+  }
+
+  async syncSgpCustomers(user: AuthUser, request: SgpDiscoveryRequest = {}) {
+    const lockKey = user.tenantId;
+
+    if (this.runningCustomerSyncs.has(lockKey)) {
+      this.logger.warn(
+        JSON.stringify({
+          event: "sgp.sync-customers.skipped",
+          tenantId: user.tenantId,
+          reason: "sync_already_running",
+        }),
+      );
+
+      return {
+        status: "already_running",
+        message: "Uma sincronização de clientes SGP já está em execução.",
+      };
+    }
+
+    this.runningCustomerSyncs.add(lockKey);
+
+    void this.processSgpCustomers(user, request)
+      .then((result) => {
+        this.logger.log(
+          JSON.stringify({
+            event: "sgp.sync-customers.finished",
+            tenantId: user.tenantId,
+            ...result,
+          }),
+        );
+      })
+      .catch((error) => {
+        this.logger.error(
+          JSON.stringify({
+            event: "sgp.sync-customers.failed",
+            tenantId: user.tenantId,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      })
+      .finally(() => {
+        this.runningCustomerSyncs.delete(lockKey);
+      });
+
+    return {
+      status: "started",
+      message: "Sincronização de clientes SGP iniciada em background.",
+    };
+  }
+
+  private async processSgpCustomers(
+    user: AuthUser,
+    request: SgpDiscoveryRequest = {},
+  ) {
+    const startedAt = Date.now();
     const response = await this.sgpClient.discoverCustomers(
       this.buildDiscoveryPayload(request),
     );
@@ -33,15 +101,19 @@ export class IntegrationsService {
       processed: rawCustomers.length,
       created: 0,
       updated: 0,
+      contractsCreated: 0,
+      contractsUpdated: 0,
+      invoicesCreated: 0,
+      invoicesUpdated: 0,
       ignored: 0,
       errors: [] as Array<{ index: number; message: string }>,
     };
 
     for (const [index, rawCustomer] of rawCustomers.entries()) {
       try {
-        const mappedCustomer = this.mapSgpCustomer(rawCustomer);
+        const mapped = this.mapSgpCustomer(rawCustomer);
 
-        if (!mappedCustomer.externalId && !mappedCustomer.document) {
+        if (!mapped.customer.externalId && !mapped.customer.document) {
           result.ignored += 1;
           result.errors.push({
             index,
@@ -54,7 +126,7 @@ export class IntegrationsService {
         const upsert = await this.customersService.upsertFromExternalSource(
           user.tenantId,
           user.memberId,
-          mappedCustomer,
+          mapped.customer,
         );
 
         if (upsert.operation === "created") {
@@ -62,6 +134,22 @@ export class IntegrationsService {
         } else {
           result.updated += 1;
         }
+
+        const contractUpserts = await this.upsertContracts(
+          user.tenantId,
+          upsert.customer.id,
+          mapped.contracts,
+        );
+        result.contractsCreated += contractUpserts.created;
+        result.contractsUpdated += contractUpserts.updated;
+
+        const invoiceUpserts = await this.upsertInvoices(
+          user.tenantId,
+          upsert.customer.id,
+          mapped.invoices,
+        );
+        result.invoicesCreated += invoiceUpserts.created;
+        result.invoicesUpdated += invoiceUpserts.updated;
       } catch (error) {
         result.ignored += 1;
         result.errors.push({
@@ -71,7 +159,20 @@ export class IntegrationsService {
       }
     }
 
-    return result;
+    const finalResult = {
+      ...result,
+      durationMs: Date.now() - startedAt,
+    };
+
+    this.logger.log(
+      JSON.stringify({
+        event: "sgp.discover-customers.processed",
+        tenantId: user.tenantId,
+        ...finalResult,
+      }),
+    );
+
+    return finalResult;
   }
 
   async debugSgp(request: SgpDiscoveryRequest) {
@@ -157,7 +258,7 @@ export class IntegrationsService {
     return this.looksLikeCustomer(body) ? [this.attachUraRelations(body, body)] : [];
   }
 
-  private mapSgpCustomer(raw: Record<string, unknown>): ExternalCustomerInput {
+  private mapSgpCustomer(raw: Record<string, unknown>): SgpCustomerMapping {
     const primaryContract = this.firstRecord(raw, ["contrato", "contratos", "__sgpContratos"]);
     const primaryService =
       this.firstRecord(raw, ["servico", "serviço", "servicos", "serviços"]) ??
@@ -210,23 +311,201 @@ export class IntegrationsService {
     ]) ?? this.extractPlanName(primaryService);
 
     return {
-      externalId,
-      name,
-      document,
-      email,
-      phone,
-      planName,
-      status: this.mapCustomerStatus(raw, primaryContract, primaryService, primaryTitle),
-      address: this.mapAddress(raw, primaryContract, primaryService),
-      metadata: {
-        source: "SGP",
-        importedAt: new Date().toISOString(),
+      customer: {
         externalId,
-        contratos: this.toJsonValue(raw.__sgpContratos),
-        titulos: this.toJsonValue(raw.__sgpTitulos),
-        pagination: this.toJsonValue(raw.__sgpPagination),
+        name,
+        document,
+        email,
+        phone,
+        planName,
+        status: this.mapCustomerStatus(raw, primaryContract, primaryService, primaryTitle),
+        address: this.mapAddress(raw, primaryContract, primaryService),
+        metadata: {
+          source: "SGP",
+          importedAt: new Date().toISOString(),
+          externalId,
+          pagination: this.toJsonValue(raw.__sgpPagination),
+        },
       },
+      contracts: this.extractArray(raw, ["__sgpContratos", "contratos", "contrato"]),
+      invoices: this.extractArray(raw, ["__sgpTitulos", "titulos", "títulos", "titulo"]),
     };
+  }
+
+  private async upsertContracts(
+    tenantId: string,
+    customerId: string,
+    contracts: Array<Record<string, unknown>>,
+  ) {
+    const result = { created: 0, updated: 0 };
+
+    for (const contract of contracts) {
+      const externalId = this.contractExternalId(contract);
+      if (!externalId) continue;
+
+      const service = this.firstRecord(contract, ["servico", "serviço", "servicos", "serviços"]);
+      const data = {
+        customerId,
+        status: this.mapContractStatus(contract, service),
+        planName: this.extractPlanName(service) ?? this.firstString(contract, ["plano", "plano_nome", "nome_plano"]),
+        serviceLogin: this.firstString(service, ["login", "usuario", "usuário", "pppoe"]),
+        address: this.mapAddress({}, contract, service),
+        metadata: this.toJsonValue({
+          source: "SGP",
+          importedAt: new Date().toISOString(),
+          raw: contract,
+        }),
+        startedAt: this.parseDate(this.firstString(contract, ["data_inicio", "data_instalacao", "data_ativacao"])),
+        endedAt: this.parseDate(this.firstString(contract, ["data_fim", "data_cancelamento"])),
+      };
+      const existing = await this.prisma.contract.findUnique({
+        where: { tenantId_externalId: { tenantId, externalId } },
+      });
+
+      if (existing) {
+        await this.prisma.contract.update({
+          where: { id: existing.id },
+          data,
+        });
+        result.updated += 1;
+      } else {
+        await this.prisma.contract.create({
+          data: {
+            tenantId,
+            externalId,
+            ...data,
+          },
+        });
+        result.created += 1;
+      }
+    }
+
+    return result;
+  }
+
+  private async upsertInvoices(
+    tenantId: string,
+    customerId: string,
+    invoices: Array<Record<string, unknown>>,
+  ) {
+    const result = { created: 0, updated: 0 };
+
+    for (const invoice of invoices) {
+      const externalId = this.invoiceExternalId(invoice);
+      if (!externalId) continue;
+
+      const contractExternalId = this.firstString(invoice, [
+        "contrato",
+        "idcontrato",
+        "contrato_id",
+        "id_contrato",
+      ]);
+      const contract = contractExternalId
+        ? await this.prisma.contract.findUnique({
+            where: {
+              tenantId_externalId: {
+                tenantId,
+                externalId: contractExternalId,
+              },
+            },
+          })
+        : null;
+      const data = {
+        customerId,
+        contractId: contract?.id,
+        status: this.mapInvoiceStatus(invoice),
+        amountCents: this.parseMoneyToCents(
+          this.firstString(invoice, ["valor", "valor_total", "total", "amount"]),
+        ),
+        dueDate: this.parseDate(this.firstString(invoice, ["vencimento", "data_vencimento", "dueDate"])),
+        paidAt: this.parseDate(this.firstString(invoice, ["pagamento", "data_pagamento", "paidAt"])),
+        metadata: this.toJsonValue({
+          source: "SGP",
+          importedAt: new Date().toISOString(),
+          raw: invoice,
+        }),
+      };
+      const existing = await this.prisma.invoice.findUnique({
+        where: { tenantId_externalId: { tenantId, externalId } },
+      });
+
+      if (existing) {
+        await this.prisma.invoice.update({
+          where: { id: existing.id },
+          data,
+        });
+        result.updated += 1;
+      } else {
+        await this.prisma.invoice.create({
+          data: {
+            tenantId,
+            externalId,
+            ...data,
+          },
+        });
+        result.created += 1;
+      }
+    }
+
+    return result;
+  }
+
+  private contractExternalId(contract: Record<string, unknown>) {
+    return this.firstString(contract, [
+      "id",
+      "contrato",
+      "idcontrato",
+      "contrato_id",
+      "id_contrato",
+      "numero",
+      "codigo",
+    ]);
+  }
+
+  private invoiceExternalId(invoice: Record<string, unknown>) {
+    return this.firstString(invoice, [
+      "id",
+      "titulo",
+      "idtitulo",
+      "titulo_id",
+      "id_titulo",
+      "numero_documento",
+      "documento",
+      "nosso_numero",
+    ]);
+  }
+
+  private mapContractStatus(
+    contract: Record<string, unknown>,
+    service?: Record<string, unknown>,
+  ) {
+    const status = String(
+      this.firstString(contract, ["status", "situacao", "situação", "ativo"]) ??
+        this.firstString(service, ["status", "situacao", "situação"]) ??
+        "",
+    ).toLowerCase();
+
+    if (status.includes("cancel")) return ContractStatus.CANCELED;
+    if (status.includes("susp") || status.includes("bloque")) return ContractStatus.SUSPENDED;
+    if (status.includes("inativ") || status.includes("desativ")) return ContractStatus.INACTIVE;
+    if (status.includes("ativo") || status === "true" || status === "1") return ContractStatus.ACTIVE;
+    return ContractStatus.UNKNOWN;
+  }
+
+  private mapInvoiceStatus(invoice: Record<string, unknown>) {
+    const status = String(
+      this.firstString(invoice, ["status", "situacao", "situação", "status_titulo"]) ?? "",
+    ).toLowerCase();
+
+    if (status.includes("pago") || status.includes("baix") || status.includes("liquid")) {
+      return InvoiceStatus.PAID;
+    }
+    if (status.includes("cancel")) return InvoiceStatus.CANCELED;
+    if (status.includes("venc") || status.includes("atras") || status.includes("inadimpl")) {
+      return InvoiceStatus.OVERDUE;
+    }
+    if (status.includes("abert") || status.includes("pend")) return InvoiceStatus.OPEN;
+    return InvoiceStatus.UNKNOWN;
   }
 
   private mapCustomerStatus(
@@ -356,6 +635,33 @@ export class IntegrationsService {
   private toJsonValue(value: unknown): Prisma.InputJsonValue | undefined {
     if (value === undefined) return undefined;
     return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+  }
+
+  private parseDate(value?: string) {
+    if (!value) return undefined;
+    const trimmed = value.trim();
+
+    if (!trimmed) return undefined;
+
+    const brDate = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (brDate) {
+      const [, day, month, year] = brDate;
+      return new Date(Number(year), Number(month) - 1, Number(day));
+    }
+
+    const parsed = new Date(trimmed);
+    return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+  }
+
+  private parseMoneyToCents(value?: string) {
+    if (!value) return undefined;
+    const normalized = value
+      .replace(/[^\d,.-]/g, "")
+      .replace(/\.(?=\d{3}(?:\D|$))/g, "")
+      .replace(",", ".");
+    const parsed = Number(normalized);
+
+    return Number.isFinite(parsed) ? Math.round(parsed * 100) : undefined;
   }
 
   private extractArray(root: Record<string, unknown>, keys: string[]) {

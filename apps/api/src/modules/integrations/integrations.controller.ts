@@ -27,4 +27,12 @@ export class IntegrationsController {
   debugSgp(@Body() body: SgpDiscoveryRequest) {
     return this.integrationsService.debugSgp(body);
   }
+
+  @Post("sgp/sync-customers")
+  syncSgpCustomers(
+    @CurrentUser() user: AuthUser,
+    @Body() body?: SgpDiscoveryRequest,
+  ) {
+    return this.integrationsService.syncSgpCustomers(user, body);
+  }
 }
