@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
-import { SgpDiscoveryPreview, SgpSyncStartResponse } from "@/lib/types";
+import { IntegrationSyncRun, SgpDiscoveryPreview, SgpSyncStartResponse } from "@/lib/types";
 
 type ConnectionState = "idle" | "online" | "error";
 
@@ -47,6 +47,7 @@ export default function IntegrationsPage() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [lastPreview, setLastPreview] = useState<SgpDiscoveryPreview | null>(null);
+  const [currentRun, setCurrentRun] = useState<IntegrationSyncRun | null>(null);
 
   async function runAction<T>(action: string, callback: () => Promise<T>) {
     setLoadingAction(action);
@@ -98,7 +99,29 @@ export default function IntegrationsPage() {
       );
       setConnectionState("online");
       setMessage(result.message);
+      await pollSyncRun(result.runId);
     });
+  }
+
+  async function pollSyncRun(runId: string) {
+    if (!token) return;
+
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      const run = await api.get<IntegrationSyncRun>(
+        `/integrations/sgp/sync-runs/${runId}`,
+        token,
+      );
+      setCurrentRun(run);
+
+      if (run.status !== "RUNNING") {
+        setMessage(`Sincronização finalizada com status ${run.status}.`);
+        return;
+      }
+
+      await new Promise((resolve) => window.setTimeout(resolve, 1500));
+    }
+
+    setMessage("Sincronização ainda em execução. Consulte o histórico em alguns instantes.");
   }
 
   const visible = "sgp".includes(search.toLowerCase()) || "api externa".includes(search.toLowerCase());
@@ -134,6 +157,62 @@ export default function IntegrationsPage() {
         <div className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 p-4 text-emerald-200">
           {message}
         </div>
+      ) : null}
+      {currentRun ? (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <CardTitle>Status da sincronização</CardTitle>
+                <p className="text-sm text-slate-400">Run ID: {currentRun.id}</p>
+              </div>
+              <Badge
+                variant={
+                  currentRun.status === "COMPLETED"
+                    ? "green"
+                    : currentRun.status === "FAILED"
+                      ? "red"
+                      : currentRun.status === "PARTIAL"
+                        ? "amber"
+                        : "blue"
+                }
+              >
+                {currentRun.status}
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-5">
+              {[
+                ["Processados", currentRun.processed],
+                ["Criados", currentRun.created],
+                ["Atualizados", currentRun.updated],
+                ["Ignorados", currentRun.ignored],
+                ["Erros", currentRun.errorsCount],
+              ].map(([label, value]) => (
+                <div className="rounded-2xl border border-slate-800 bg-slate-950/50 p-4" key={label as string}>
+                  <p className="text-sm text-slate-400">{label as string}</p>
+                  <p className="mt-2 text-2xl font-semibold text-white">{value as number}</p>
+                </div>
+              ))}
+            </div>
+            {currentRun.errorMessage ? (
+              <div className="rounded-2xl bg-red-500/10 p-4 text-red-200">
+                {currentRun.errorMessage}
+              </div>
+            ) : null}
+            {currentRun.logs?.length ? (
+              <div className="space-y-2">
+                {currentRun.logs.slice(0, 5).map((log) => (
+                  <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3 text-sm text-slate-300" key={log.id}>
+                    {log.entity} · {log.action} · {log.status}
+                    {log.message ? ` · ${log.message}` : ""}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </CardContent>
+        </Card>
       ) : null}
 
       {visible ? (

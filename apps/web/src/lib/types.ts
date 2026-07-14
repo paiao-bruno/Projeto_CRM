@@ -87,6 +87,40 @@ export type SgpSyncResult = {
   durationMs: number;
 };
 
+export type IntegrationSyncStatus = "RUNNING" | "COMPLETED" | "FAILED" | "PARTIAL" | "SKIPPED";
+
+export type IntegrationSyncLog = {
+  id: string;
+  entity: "CUSTOMER" | "CONTRACT" | "INVOICE";
+  externalId?: string | null;
+  action: string;
+  status: IntegrationSyncStatus;
+  message?: string | null;
+  createdAt: string;
+};
+
+export type IntegrationSyncRun = {
+  id: string;
+  operation: string;
+  status: IntegrationSyncStatus;
+  startedAt: string;
+  finishedAt?: string | null;
+  durationMs?: number | null;
+  processed: number;
+  created: number;
+  updated: number;
+  ignored: number;
+  errorsCount: number;
+  errorMessage?: string | null;
+  metadata?: {
+    customers?: { created: number; updated: number };
+    contracts?: { created: number; updated: number };
+    invoices?: { created: number; updated: number };
+    errors?: Array<{ index: number; message: string }>;
+  } | null;
+  logs?: IntegrationSyncLog[];
+};
+
 export type AiAgent = {
   id: string;
   name: string;

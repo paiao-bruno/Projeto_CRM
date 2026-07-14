@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
-import { Customer, SgpSyncStartResponse } from "@/lib/types";
+import { Customer, IntegrationSyncRun, SgpSyncStartResponse } from "@/lib/types";
 
 const statusVariant = {
   ACTIVE: "green",
@@ -36,6 +36,7 @@ export default function CustomersPage() {
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState("");
+  const [syncRun, setSyncRun] = useState<IntegrationSyncRun | null>(null);
 
   const filteredCustomers = useMemo(() => customers, [customers]);
 
@@ -96,16 +97,34 @@ export default function CustomersPage() {
         token,
       );
       setSyncMessage(response.message);
-      window.setTimeout(() => {
-        loadCustomers().catch((err) =>
-          setError(err instanceof Error ? err.message : "Erro ao recarregar clientes."),
-        );
-      }, 2500);
+      await pollSyncRun(response.runId);
+      await loadCustomers();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erro ao sincronizar SGP.");
     } finally {
       setSyncing(false);
     }
+  }
+
+  async function pollSyncRun(runId: string) {
+    if (!token) return;
+
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      const run = await api.get<IntegrationSyncRun>(
+        `/integrations/sgp/sync-runs/${runId}`,
+        token,
+      );
+      setSyncRun(run);
+
+      if (run.status !== "RUNNING") {
+        setSyncMessage(`Sincronização finalizada com status ${run.status}.`);
+        return;
+      }
+
+      await new Promise((resolve) => window.setTimeout(resolve, 1500));
+    }
+
+    setSyncMessage("Sincronização ainda em execução. A lista será atualizada ao consultar novamente.");
   }
 
   return (
@@ -146,6 +165,22 @@ export default function CustomersPage() {
       {syncMessage ? (
         <div className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 p-4 text-emerald-200">
           {syncMessage}
+        </div>
+      ) : null}
+      {syncRun ? (
+        <div className="grid gap-3 rounded-2xl border border-slate-800 bg-slate-950/50 p-4 md:grid-cols-5">
+          {[
+            ["Status", syncRun.status],
+            ["Processados", syncRun.processed],
+            ["Criados", syncRun.created],
+            ["Atualizados", syncRun.updated],
+            ["Erros", syncRun.errorsCount],
+          ].map(([label, value]) => (
+            <div key={label as string}>
+              <p className="text-xs text-slate-500">{label as string}</p>
+              <p className="font-semibold text-white">{value as string | number}</p>
+            </div>
+          ))}
         </div>
       ) : null}
 

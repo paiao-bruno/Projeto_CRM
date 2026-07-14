@@ -1,4 +1,4 @@
-import { BadGatewayException, Injectable, Logger } from "@nestjs/common";
+import { BadGatewayException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import {
   ContractStatus,
   CustomerStatus,
@@ -147,6 +147,59 @@ export class IntegrationsService {
       runId: run.id,
       message: "Sincronização de clientes SGP iniciada em background.",
     };
+  }
+
+  getSgpSyncStatus(tenantId: string) {
+    return this.prisma.integrationSyncRun.findFirst({
+      where: {
+        tenantId,
+        operation: "sgp.sync-customers",
+      },
+      include: {
+        logs: {
+          orderBy: { createdAt: "desc" },
+          take: 10,
+        },
+      },
+      orderBy: { startedAt: "desc" },
+    });
+  }
+
+  listSgpSyncRuns(tenantId: string) {
+    return this.prisma.integrationSyncRun.findMany({
+      where: {
+        tenantId,
+        operation: "sgp.sync-customers",
+      },
+      include: {
+        logs: {
+          orderBy: { createdAt: "desc" },
+          take: 5,
+        },
+      },
+      orderBy: { startedAt: "desc" },
+      take: 25,
+    });
+  }
+
+  async getSgpSyncRun(tenantId: string, id: string) {
+    const run = await this.prisma.integrationSyncRun.findFirst({
+      where: {
+        id,
+        tenantId,
+      },
+      include: {
+        logs: {
+          orderBy: { createdAt: "asc" },
+        },
+      },
+    });
+
+    if (!run) {
+      throw new NotFoundException("Execução de sincronização não encontrada.");
+    }
+
+    return run;
   }
 
   private async processSgpCustomers(
@@ -1042,6 +1095,12 @@ export class IntegrationsService {
       "paginação",
       "page",
       "pagina",
+      "pages",
+      "total_pages",
+      "paginas",
+      "limit",
+      "per_page",
+      "por_pagina",
       "total",
       "count",
       "next",

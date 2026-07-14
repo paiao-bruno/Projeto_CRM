@@ -1,4 +1,4 @@
-import { Body, Controller, Post, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, UseGuards } from "@nestjs/common";
 import { CurrentUser } from "../auth/current-user.decorator";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { AuthUser } from "../auth/types/auth-user";
@@ -34,5 +34,20 @@ export class IntegrationsController {
     @Body() body?: SgpDiscoveryRequest,
   ) {
     return this.integrationsService.syncSgpCustomers(user, body);
+  }
+
+  @Get("sgp/sync-status")
+  getSgpSyncStatus(@CurrentUser() user: AuthUser) {
+    return this.integrationsService.getSgpSyncStatus(user.tenantId);
+  }
+
+  @Get("sgp/sync-runs")
+  listSgpSyncRuns(@CurrentUser() user: AuthUser) {
+    return this.integrationsService.listSgpSyncRuns(user.tenantId);
+  }
+
+  @Get("sgp/sync-runs/:id")
+  getSgpSyncRun(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    return this.integrationsService.getSgpSyncRun(user.tenantId, id);
   }
 }

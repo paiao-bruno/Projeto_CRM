@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   Bot,
   CalendarDays,
+  FileText,
   GitBranch,
   Hash,
   LayoutDashboard,
@@ -13,6 +14,7 @@ import {
   MessageCircle,
   Plug,
   RadioTower,
+  Receipt,
   Search,
   Users,
 } from "lucide-react";
@@ -33,6 +35,8 @@ const navItems = [
     children: [{ href: "/team-chat", label: "Team", icon: Hash }],
   },
   { href: "/customers", label: "CRM", icon: Users },
+  { href: "/contracts", label: "Contratos", icon: FileText },
+  { href: "/invoices", label: "Faturas", icon: Receipt },
   { href: "/campaigns", label: "Campaigns", icon: Megaphone },
   { href: "/schedule", label: "Schedule", icon: CalendarDays, badge: "Acquire" },
 ];
