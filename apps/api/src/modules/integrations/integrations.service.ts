@@ -1,5 +1,12 @@
 import { BadGatewayException, Injectable, Logger } from "@nestjs/common";
-import { ContractStatus, CustomerStatus, InvoiceStatus, Prisma } from "@prisma/client";
+import {
+  ContractStatus,
+  CustomerStatus,
+  IntegrationSyncEntity,
+  IntegrationSyncStatus,
+  InvoiceStatus,
+  Prisma,
+} from "@prisma/client";
 import {
   CustomersService,
   ExternalCustomerInput,
@@ -13,6 +20,18 @@ type SgpCustomerMapping = {
   customer: ExternalCustomerInput;
   contracts: Array<Record<string, unknown>>;
   invoices: Array<Record<string, unknown>>;
+};
+
+type SyncCounters = {
+  processed: number;
+  created: number;
+  updated: number;
+  contractsCreated: number;
+  contractsUpdated: number;
+  invoicesCreated: number;
+  invoicesUpdated: number;
+  ignored: number;
+  errors: Array<{ index: number; message: string }>;
 };
 
 @Injectable()
@@ -35,35 +54,76 @@ export class IntegrationsService {
   }
 
   async discoverSgpCustomers(user: AuthUser, request: SgpDiscoveryRequest = {}) {
-    return this.processSgpCustomers(user, request);
+    const response = await this.sgpClient.discoverCustomers(
+      this.buildDiscoveryPayload(request),
+    );
+    this.assertCustomerDiscoveryResponse(response.body, request.endpoint);
+    const rawCustomers = this.extractCustomers(response.body);
+    const customers = rawCustomers.map((rawCustomer) => this.mapSgpCustomer(rawCustomer));
+
+    return {
+      processed: customers.length,
+      pagination: this.extractPaginationFromBody(response.body),
+      customers: customers.map((item) => ({
+        customer: item.customer,
+        contractsCount: item.contracts.length,
+        invoicesCount: item.invoices.length,
+      })),
+    };
   }
 
   async syncSgpCustomers(user: AuthUser, request: SgpDiscoveryRequest = {}) {
     const lockKey = user.tenantId;
 
     if (this.runningCustomerSyncs.has(lockKey)) {
+      const skippedRun = await this.prisma.integrationSyncRun.create({
+        data: {
+          tenantId: user.tenantId,
+          triggeredById: user.memberId,
+          operation: "sgp.sync-customers",
+          status: IntegrationSyncStatus.SKIPPED,
+          startedAt: new Date(),
+          finishedAt: new Date(),
+          durationMs: 0,
+          metadata: {
+            reason: "sync_already_running",
+          },
+        },
+      });
       this.logger.warn(
         JSON.stringify({
           event: "sgp.sync-customers.skipped",
           tenantId: user.tenantId,
+          runId: skippedRun.id,
           reason: "sync_already_running",
         }),
       );
 
       return {
         status: "already_running",
+        runId: skippedRun.id,
         message: "Uma sincronização de clientes SGP já está em execução.",
       };
     }
 
     this.runningCustomerSyncs.add(lockKey);
+    const run = await this.prisma.integrationSyncRun.create({
+      data: {
+        tenantId: user.tenantId,
+        triggeredById: user.memberId,
+        operation: "sgp.sync-customers",
+        status: IntegrationSyncStatus.RUNNING,
+        cursor: this.toJsonValue(request.pagination),
+      },
+    });
 
-    void this.processSgpCustomers(user, request)
+    void this.processSgpCustomers(user, request, run.id)
       .then((result) => {
         this.logger.log(
           JSON.stringify({
             event: "sgp.sync-customers.finished",
             tenantId: user.tenantId,
+            runId: run.id,
             ...result,
           }),
         );
@@ -73,6 +133,7 @@ export class IntegrationsService {
           JSON.stringify({
             event: "sgp.sync-customers.failed",
             tenantId: user.tenantId,
+            runId: run.id,
             error: error instanceof Error ? error.message : String(error),
           }),
         );
@@ -83,6 +144,7 @@ export class IntegrationsService {
 
     return {
       status: "started",
+      runId: run.id,
       message: "Sincronização de clientes SGP iniciada em background.",
     };
   }
@@ -90,15 +152,11 @@ export class IntegrationsService {
   private async processSgpCustomers(
     user: AuthUser,
     request: SgpDiscoveryRequest = {},
+    runId?: string,
   ) {
     const startedAt = Date.now();
-    const response = await this.sgpClient.discoverCustomers(
-      this.buildDiscoveryPayload(request),
-    );
-    this.assertCustomerDiscoveryResponse(response.body, request.endpoint);
-    const rawCustomers = this.extractCustomers(response.body);
-    const result = {
-      processed: rawCustomers.length,
+    const result: SyncCounters = {
+      processed: 0,
       created: 0,
       updated: 0,
       contractsCreated: 0,
@@ -108,61 +166,127 @@ export class IntegrationsService {
       ignored: 0,
       errors: [] as Array<{ index: number; message: string }>,
     };
+    let pageIndex = 0;
+    let pagination = request.pagination;
 
-    for (const [index, rawCustomer] of rawCustomers.entries()) {
-      try {
-        const mapped = this.mapSgpCustomer(rawCustomer);
+    try {
+      while (true) {
+        pageIndex += 1;
+        const response = await this.sgpClient.discoverCustomers(
+          this.buildDiscoveryPayload({ ...request, pagination }),
+        );
+        this.assertCustomerDiscoveryResponse(response.body, request.endpoint);
+        const rawCustomers = this.extractCustomers(response.body);
+        result.processed += rawCustomers.length;
 
-        if (!mapped.customer.externalId && !mapped.customer.document) {
-          result.ignored += 1;
-          result.errors.push({
-            index,
-            message:
-              "Cliente ignorado porque não possui CPF/CNPJ nem identificador externo.",
-          });
-          continue;
+        for (const [index, rawCustomer] of rawCustomers.entries()) {
+          const globalIndex = result.processed - rawCustomers.length + index;
+          try {
+            const mapped = this.mapSgpCustomer(rawCustomer);
+
+            if (!mapped.customer.externalId && !mapped.customer.document) {
+              result.ignored += 1;
+              const message =
+                "Cliente ignorado porque não possui CPF/CNPJ nem identificador externo.";
+              result.errors.push({ index: globalIndex, message });
+              if (runId) {
+                await this.createSyncLog({
+                  tenantId: user.tenantId,
+                  runId,
+                  entity: IntegrationSyncEntity.CUSTOMER,
+                  action: "ignored",
+                  status: IntegrationSyncStatus.PARTIAL,
+                  message,
+                });
+              }
+              continue;
+            }
+
+            const upsert = await this.customersService.upsertFromExternalSource(
+              user.tenantId,
+              user.memberId,
+              mapped.customer,
+            );
+
+            if (upsert.operation === "created") {
+              result.created += 1;
+            } else {
+              result.updated += 1;
+            }
+            if (runId) {
+              await this.createSyncLog({
+                tenantId: user.tenantId,
+                runId,
+                entity: IntegrationSyncEntity.CUSTOMER,
+                externalId: mapped.customer.externalId ?? mapped.customer.document,
+                action: upsert.operation,
+                status: IntegrationSyncStatus.COMPLETED,
+                metadata: this.toJsonValue({ customerId: upsert.customer.id }),
+              });
+            }
+
+            const contractUpserts = await this.upsertContracts(
+              user.tenantId,
+              upsert.customer.id,
+              mapped.contracts,
+              runId,
+            );
+            result.contractsCreated += contractUpserts.created;
+            result.contractsUpdated += contractUpserts.updated;
+
+            const invoiceUpserts = await this.upsertInvoices(
+              user.tenantId,
+              upsert.customer.id,
+              mapped.invoices,
+              runId,
+            );
+            result.invoicesCreated += invoiceUpserts.created;
+            result.invoicesUpdated += invoiceUpserts.updated;
+          } catch (error) {
+            result.ignored += 1;
+            const message = error instanceof Error ? error.message : "Erro inesperado.";
+            result.errors.push({ index: globalIndex, message });
+            if (runId) {
+              await this.createSyncLog({
+                tenantId: user.tenantId,
+                runId,
+                entity: IntegrationSyncEntity.CUSTOMER,
+                action: "error",
+                status: IntegrationSyncStatus.FAILED,
+                message,
+              });
+            }
+          }
         }
 
-        const upsert = await this.customersService.upsertFromExternalSource(
-          user.tenantId,
-          user.memberId,
-          mapped.customer,
-        );
-
-        if (upsert.operation === "created") {
-          result.created += 1;
-        } else {
-          result.updated += 1;
-        }
-
-        const contractUpserts = await this.upsertContracts(
-          user.tenantId,
-          upsert.customer.id,
-          mapped.contracts,
-        );
-        result.contractsCreated += contractUpserts.created;
-        result.contractsUpdated += contractUpserts.updated;
-
-        const invoiceUpserts = await this.upsertInvoices(
-          user.tenantId,
-          upsert.customer.id,
-          mapped.invoices,
-        );
-        result.invoicesCreated += invoiceUpserts.created;
-        result.invoicesUpdated += invoiceUpserts.updated;
-      } catch (error) {
-        result.ignored += 1;
-        result.errors.push({
-          index,
-          message: error instanceof Error ? error.message : "Erro inesperado.",
+        pagination = this.nextPagination(response.body, pagination);
+        if (!pagination) break;
+      }
+    } catch (error) {
+      if (runId) {
+        const durationMs = Date.now() - startedAt;
+        await this.finishSyncRun(runId, IntegrationSyncStatus.FAILED, result, durationMs, {
+          errorMessage: error instanceof Error ? error.message : String(error),
+          cursor: pagination,
         });
       }
+      throw error;
     }
 
     const finalResult = {
       ...result,
       durationMs: Date.now() - startedAt,
     };
+
+    if (runId) {
+      await this.finishSyncRun(
+        runId,
+        result.errors.length ? IntegrationSyncStatus.PARTIAL : IntegrationSyncStatus.COMPLETED,
+        result,
+        finalResult.durationMs,
+        { cursor: pagination },
+      );
+    }
 
     this.logger.log(
       JSON.stringify({
@@ -181,6 +305,142 @@ export class IntegrationsService {
       request.payload,
     );
     return response.body;
+  }
+
+  private async finishSyncRun(
+    runId: string,
+    status: IntegrationSyncStatus,
+    counters: SyncCounters,
+    durationMs: number,
+    options: { cursor?: unknown; errorMessage?: string } = {},
+  ) {
+    await this.prisma.integrationSyncRun.update({
+      where: { id: runId },
+      data: {
+        status,
+        finishedAt: new Date(),
+        durationMs,
+        processed: counters.processed,
+        created: counters.created + counters.contractsCreated + counters.invoicesCreated,
+        updated: counters.updated + counters.contractsUpdated + counters.invoicesUpdated,
+        ignored: counters.ignored,
+        errorsCount: counters.errors.length,
+        cursor: this.toJsonValue(options.cursor),
+        errorMessage: options.errorMessage,
+        metadata: this.toJsonValue({
+          customers: {
+            created: counters.created,
+            updated: counters.updated,
+          },
+          contracts: {
+            created: counters.contractsCreated,
+            updated: counters.contractsUpdated,
+          },
+          invoices: {
+            created: counters.invoicesCreated,
+            updated: counters.invoicesUpdated,
+          },
+          errors: counters.errors.slice(0, 100),
+        }),
+      },
+    });
+  }
+
+  private async createSyncLog(input: {
+    tenantId: string;
+    runId: string;
+    entity: IntegrationSyncEntity;
+    action: string;
+    status: IntegrationSyncStatus;
+    externalId?: string;
+    message?: string;
+    metadata?: Prisma.InputJsonValue;
+  }) {
+    await this.prisma.integrationSyncLog.create({
+      data: {
+        tenantId: input.tenantId,
+        runId: input.runId,
+        entity: input.entity,
+        externalId: input.externalId,
+        action: input.action,
+        status: input.status,
+        message: input.message,
+        metadata: input.metadata,
+      },
+    });
+  }
+
+  private nextPagination(
+    body: unknown,
+    currentPagination?: Record<string, unknown>,
+  ): Record<string, unknown> | undefined {
+    const root = this.isRecord(body) ? body : {};
+    const pagination = this.extractPaginationFromBody(body);
+    const currentPage =
+      this.numberFrom(pagination.page) ??
+      this.numberFrom(pagination.pagina) ??
+      this.numberFrom(currentPagination?.page) ??
+      this.numberFrom(currentPagination?.pagina) ??
+      1;
+    const limit =
+      this.numberFrom(pagination.limit) ??
+      this.numberFrom(pagination.per_page) ??
+      this.numberFrom(pagination.por_pagina) ??
+      this.numberFrom(currentPagination?.limit) ??
+      this.numberFrom(currentPagination?.per_page) ??
+      this.numberFrom(currentPagination?.por_pagina);
+    const totalPages =
+      this.numberFrom(pagination.pages) ??
+      this.numberFrom(pagination.total_pages) ??
+      this.numberFrom(pagination.paginas);
+    const total =
+      this.numberFrom(pagination.total) ??
+      this.numberFrom(pagination.count) ??
+      this.numberFrom(root.total) ??
+      this.numberFrom(root.count);
+    const computedPages = total && limit ? Math.ceil(total / limit) : undefined;
+    const finalTotalPages = totalPages ?? computedPages;
+    const nextValue = pagination.next ?? root.next;
+
+    if (nextValue === false || nextValue === null) return undefined;
+
+    if (typeof nextValue === "number") {
+      return this.withPaginationStyle(currentPagination, nextValue, limit);
+    }
+
+    if (typeof nextValue === "string" && /^\d+$/.test(nextValue)) {
+      return this.withPaginationStyle(currentPagination, Number(nextValue), limit);
+    }
+
+    if (nextValue && finalTotalPages === undefined) {
+      return this.withPaginationStyle(currentPagination, currentPage + 1, limit);
+    }
+
+    if (finalTotalPages && currentPage < finalTotalPages) {
+      return this.withPaginationStyle(currentPagination, currentPage + 1, limit);
+    }
+
+    return undefined;
+  }
+
+  private withPaginationStyle(
+    currentPagination: Record<string, unknown> | undefined,
+    nextPage: number,
+    limit?: number,
+  ) {
+    const pageKey = currentPagination && "pagina" in currentPagination ? "pagina" : "page";
+    const limitKey =
+      currentPagination && "por_pagina" in currentPagination
+        ? "por_pagina"
+        : currentPagination && "per_page" in currentPagination
+          ? "per_page"
+          : "limit";
+
+    return {
+      ...(currentPagination ?? {}),
+      [pageKey]: nextPage,
+      ...(limit ? { [limitKey]: limit } : {}),
+    };
   }
 
   private buildDiscoveryPayload(request: SgpDiscoveryRequest) {
@@ -336,6 +596,7 @@ export class IntegrationsService {
     tenantId: string,
     customerId: string,
     contracts: Array<Record<string, unknown>>,
+    runId?: string,
   ) {
     const result = { created: 0, updated: 0 };
 
@@ -368,6 +629,16 @@ export class IntegrationsService {
           data,
         });
         result.updated += 1;
+        if (runId) {
+          await this.createSyncLog({
+            tenantId,
+            runId,
+            entity: IntegrationSyncEntity.CONTRACT,
+            externalId,
+            action: "updated",
+            status: IntegrationSyncStatus.COMPLETED,
+          });
+        }
       } else {
         await this.prisma.contract.create({
           data: {
@@ -377,6 +648,16 @@ export class IntegrationsService {
           },
         });
         result.created += 1;
+        if (runId) {
+          await this.createSyncLog({
+            tenantId,
+            runId,
+            entity: IntegrationSyncEntity.CONTRACT,
+            externalId,
+            action: "created",
+            status: IntegrationSyncStatus.COMPLETED,
+          });
+        }
       }
     }
 
@@ -387,6 +668,7 @@ export class IntegrationsService {
     tenantId: string,
     customerId: string,
     invoices: Array<Record<string, unknown>>,
+    runId?: string,
   ) {
     const result = { created: 0, updated: 0 };
 
@@ -435,6 +717,16 @@ export class IntegrationsService {
           data,
         });
         result.updated += 1;
+        if (runId) {
+          await this.createSyncLog({
+            tenantId,
+            runId,
+            entity: IntegrationSyncEntity.INVOICE,
+            externalId,
+            action: "updated",
+            status: IntegrationSyncStatus.COMPLETED,
+          });
+        }
       } else {
         await this.prisma.invoice.create({
           data: {
@@ -444,6 +736,16 @@ export class IntegrationsService {
           },
         });
         result.created += 1;
+        if (runId) {
+          await this.createSyncLog({
+            tenantId,
+            runId,
+            entity: IntegrationSyncEntity.INVOICE,
+            externalId,
+            action: "created",
+            status: IntegrationSyncStatus.COMPLETED,
+          });
+        }
       }
     }
 
@@ -752,6 +1054,31 @@ export class IntegrationsService {
     );
 
     return Object.keys(pagination).length ? pagination : undefined;
+  }
+
+  private extractPaginationFromBody(body: unknown): Record<string, unknown> {
+    if (!this.isRecord(body)) return {};
+
+    const nested = this.firstRecord(body, [
+      "pagination",
+      "paginacao",
+      "paginação",
+      "meta",
+    ]);
+
+    return {
+      ...(nested ?? {}),
+      ...(this.extractPagination(body) ?? {}),
+    };
+  }
+
+  private numberFrom(value: unknown) {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim()) {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : undefined;
+    }
+    return undefined;
   }
 
   private looksLikeCustomer(value: Record<string, unknown>) {

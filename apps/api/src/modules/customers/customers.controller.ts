@@ -31,6 +31,16 @@ export class CustomersController {
     return this.customersService.get(user.tenantId, id);
   }
 
+  @Get(":id/contracts")
+  listContracts(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    return this.customersService.listContracts(user.tenantId, id);
+  }
+
+  @Get(":id/invoices")
+  listInvoices(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    return this.customersService.listInvoices(user.tenantId, id);
+  }
+
   @Post()
   create(@CurrentUser() user: AuthUser, @Body() dto: CreateCustomerDto) {
     return this.customersService.create(user.tenantId, user.memberId, dto);

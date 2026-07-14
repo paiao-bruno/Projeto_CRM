@@ -91,6 +91,25 @@ export class CustomersService {
     });
   }
 
+  async listContracts(tenantId: string, id: string) {
+    await this.get(tenantId, id);
+
+    return this.prisma.contract.findMany({
+      where: { tenantId, customerId: id },
+      orderBy: { updatedAt: "desc" },
+    });
+  }
+
+  async listInvoices(tenantId: string, id: string) {
+    await this.get(tenantId, id);
+
+    return this.prisma.invoice.findMany({
+      where: { tenantId, customerId: id },
+      include: { contract: true },
+      orderBy: [{ dueDate: "desc" }, { updatedAt: "desc" }],
+    });
+  }
+
   async upsertFromExternalSource(
     tenantId: string,
     ownerMemberId: string,

@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { Plus, Search, Trash2 } from "lucide-react";
+import { Plus, RefreshCcw, Search, Trash2 } from "lucide-react";
 import { useAuth } from "@/components/auth-provider";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
-import { Customer } from "@/lib/types";
+import { Customer, SgpSyncStartResponse } from "@/lib/types";
 
 const statusVariant = {
   ACTIVE: "green",
@@ -34,6 +34,8 @@ export default function CustomersPage() {
   const [search, setSearch] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState("");
 
   const filteredCustomers = useMemo(() => customers, [customers]);
 
@@ -81,6 +83,31 @@ export default function CustomersPage() {
     await loadCustomers();
   }
 
+  async function syncFromSgp() {
+    if (!token) return;
+    setError("");
+    setSyncMessage("");
+    setSyncing(true);
+
+    try {
+      const response = await api.post<SgpSyncStartResponse>(
+        "/integrations/sgp/sync-customers",
+        { pagination: { page: 1, limit: 100 } },
+        token,
+      );
+      setSyncMessage(response.message);
+      window.setTimeout(() => {
+        loadCustomers().catch((err) =>
+          setError(err instanceof Error ? err.message : "Erro ao recarregar clientes."),
+        );
+      }, 2500);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Erro ao sincronizar SGP.");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
@@ -90,25 +117,36 @@ export default function CustomersPage() {
             Cadastro e acompanhamento comercial dos assinantes e leads.
           </p>
         </div>
-        <form className="flex gap-2" onSubmit={(event) => {
-          event.preventDefault();
-          loadCustomers().catch((err) => setError(err.message));
-        }}>
-          <Input
-            className="w-72"
-            placeholder="Buscar cliente..."
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-          <Button variant="secondary" type="submit">
-            <Search size={17} />
-            Buscar
+        <div className="flex flex-col gap-2 md:flex-row">
+          <Button disabled={syncing} type="button" onClick={syncFromSgp}>
+            <RefreshCcw className={syncing ? "animate-spin" : ""} size={17} />
+            Sincronizar SGP
           </Button>
-        </form>
+          <form className="flex gap-2" onSubmit={(event) => {
+            event.preventDefault();
+            loadCustomers().catch((err) => setError(err.message));
+          }}>
+            <Input
+              className="w-72"
+              placeholder="Buscar cliente..."
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+            <Button variant="secondary" type="submit">
+              <Search size={17} />
+              Buscar
+            </Button>
+          </form>
+        </div>
       </div>
 
       {error ? (
         <div className="rounded-2xl bg-red-500/10 p-4 text-red-200">{error}</div>
+      ) : null}
+      {syncMessage ? (
+        <div className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 p-4 text-emerald-200">
+          {syncMessage}
+        </div>
       ) : null}
 
       <section className="grid gap-6 xl:grid-cols-[380px_1fr]">
@@ -169,6 +207,11 @@ export default function CustomersPage() {
                       <td className="p-4">
                         <p className="font-semibold text-white">{customer.name}</p>
                         <p className="text-xs text-slate-500">{customer.document}</p>
+                        {customer.ispAccountCode ? (
+                          <Badge className="mt-2" variant="blue">
+                            SGP {customer.ispAccountCode}
+                          </Badge>
+                        ) : null}
                       </td>
                       <td className="p-4 text-slate-300">
                         <p>{customer.email}</p>

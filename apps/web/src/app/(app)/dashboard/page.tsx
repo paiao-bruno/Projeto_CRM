@@ -22,7 +22,9 @@ import {
   Brain,
   CheckCircle2,
   Database,
+  FileWarning,
   MessageSquare,
+  Receipt,
   Sparkles,
   Timer,
   TrendingUp,
@@ -40,6 +42,8 @@ const cardIcons = {
   responseRate: TrendingUp,
   averageResponseTime: Timer,
   conversions: CheckCircle2,
+  activeContracts: Receipt,
+  overdueInvoices: FileWarning,
 };
 
 const cardLabels = {
@@ -49,6 +53,8 @@ const cardLabels = {
   responseRate: "Taxa de resposta",
   averageResponseTime: "Tempo medio de resposta",
   conversions: "Conversoes",
+  activeContracts: "Contratos ativos",
+  overdueInvoices: "Faturas vencidas",
 };
 
 export default function DashboardPage() {

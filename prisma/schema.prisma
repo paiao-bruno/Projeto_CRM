@@ -289,6 +289,20 @@ enum MemorySource {
   INTEGRATION_SYNC
 }
 
+enum IntegrationSyncStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+  PARTIAL
+  SKIPPED
+}
+
+enum IntegrationSyncEntity {
+  CUSTOMER
+  CONTRACT
+  INVOICE
+}
+
 model Tenant {
   id        String       @id @default(uuid()) @db.Uuid
   name      String
@@ -299,51 +313,99 @@ model Tenant {
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
 
-  members            TenantMember[]
-  roles              Role[]
-  integrations       Integration[]
-  webhookEndpoints   WebhookEndpoint[]
-  apiKeys            ApiKey[]
-  fileAssets         FileAsset[]
-  conversations      Conversation[]
-  messages           Message[]
-  handoffs           ConversationHandoff[]
-  teamRooms          TeamRoom[]
-  teamMessages       TeamMessage[]
-  teamPresence       TeamPresence[]
-  aiAgents           AiAgent[]
-  agentMemories      AgentMemory[]
-  memoryHistory      MemoryHistory[]
-  agentKnowledge     AiAgentKnowledgeBase[]
-  knowledgeBases     KnowledgeBase[]
-  documents          KnowledgeDocument[]
-  knowledgeChunks    KnowledgeChunk[]
-  faqItems           FaqItem[]
-  flows              Flow[]
-  flowVersions       FlowVersion[]
-  flowNodes          FlowNode[]
-  flowEdges          FlowEdge[]
-  flowExecutions     FlowExecution[]
-  flowSteps          FlowExecutionStep[]
-  customers          Customer[]
-  contracts          Contract[]
-  invoices           Invoice[]
-  contacts           CustomerContact[]
-  activities         ContactActivity[]
-  leads              Lead[]
-  pipelines          Pipeline[]
-  pipelineStages     PipelineStage[]
-  deals              Deal[]
-  campaigns          Campaign[]
-  campaignRecipients CampaignRecipient[]
-  campaignEvents     CampaignEvent[]
-  scheduleEvents     ScheduleEvent[]
-  tasks              Task[]
-  dashboardMetrics   DashboardMetric[]
-  notifications      Notification[]
-  auditLogs          AuditLog[]
+  members             TenantMember[]
+  roles               Role[]
+  integrations        Integration[]
+  webhookEndpoints    WebhookEndpoint[]
+  apiKeys             ApiKey[]
+  fileAssets          FileAsset[]
+  conversations       Conversation[]
+  messages            Message[]
+  handoffs            ConversationHandoff[]
+  teamRooms           TeamRoom[]
+  teamMessages        TeamMessage[]
+  teamPresence        TeamPresence[]
+  aiAgents            AiAgent[]
+  agentMemories       AgentMemory[]
+  memoryHistory       MemoryHistory[]
+  agentKnowledge      AiAgentKnowledgeBase[]
+  knowledgeBases      KnowledgeBase[]
+  documents           KnowledgeDocument[]
+  knowledgeChunks     KnowledgeChunk[]
+  faqItems            FaqItem[]
+  flows               Flow[]
+  flowVersions        FlowVersion[]
+  flowNodes           FlowNode[]
+  flowEdges           FlowEdge[]
+  flowExecutions      FlowExecution[]
+  flowSteps           FlowExecutionStep[]
+  customers           Customer[]
+  contracts           Contract[]
+  invoices            Invoice[]
+  integrationSyncRuns IntegrationSyncRun[]
+  integrationSyncLogs IntegrationSyncLog[]
+  contacts            CustomerContact[]
+  activities          ContactActivity[]
+  leads               Lead[]
+  pipelines           Pipeline[]
+  pipelineStages      PipelineStage[]
+  deals               Deal[]
+  campaigns           Campaign[]
+  campaignRecipients  CampaignRecipient[]
+  campaignEvents      CampaignEvent[]
+  scheduleEvents      ScheduleEvent[]
+  tasks               Task[]
+  dashboardMetrics    DashboardMetric[]
+  notifications       Notification[]
+  auditLogs           AuditLog[]
 
   @@index([status])
+}
+
+model IntegrationSyncRun {
+  id            String                @id @default(uuid()) @db.Uuid
+  tenantId      String                @db.Uuid
+  triggeredById String?               @db.Uuid
+  operation     String
+  status        IntegrationSyncStatus @default(RUNNING)
+  startedAt     DateTime              @default(now())
+  finishedAt    DateTime?
+  durationMs    Int?
+  processed     Int                   @default(0)
+  created       Int                   @default(0)
+  updated       Int                   @default(0)
+  ignored       Int                   @default(0)
+  errorsCount   Int                   @default(0)
+  cursor        Json?
+  errorMessage  String?
+  metadata      Json?
+
+  tenant      Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  triggeredBy TenantMember?        @relation(fields: [triggeredById], references: [id], onDelete: SetNull)
+  logs        IntegrationSyncLog[]
+
+  @@index([tenantId, status, startedAt])
+  @@index([tenantId, operation, startedAt])
+}
+
+model IntegrationSyncLog {
+  id         String                @id @default(uuid()) @db.Uuid
+  tenantId   String                @db.Uuid
+  runId      String                @db.Uuid
+  entity     IntegrationSyncEntity
+  externalId String?
+  action     String
+  status     IntegrationSyncStatus
+  message    String?
+  metadata   Json?
+  createdAt  DateTime              @default(now())
+
+  tenant Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  run    IntegrationSyncRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, runId, createdAt])
+  @@index([tenantId, entity, externalId])
+  @@index([tenantId, status, createdAt])
 }
 
 model User {
@@ -406,6 +468,7 @@ model TenantMember {
   ownedDeals            Deal[]                @relation("DealOwner")
   assignedEvents        ScheduleEvent[]       @relation("EventAssignee")
   assignedTasks         Task[]                @relation("TaskAssignee")
+  integrationSyncRuns   IntegrationSyncRun[]
   uploadedFiles         FileAsset[]           @relation("FileUploader")
   notifications         Notification[]
   auditLogs             AuditLog[]

@@ -1,109 +1,16 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
-import {
-  Activity,
-  AlertCircle,
-  CheckCircle2,
-  ChevronDown,
-  Mail,
-  MessageCircle,
-  Plug,
-  RefreshCcw,
-  Send,
-  Server,
-  Unplug,
-  Webhook,
-} from "lucide-react";
+import { useState } from "react";
+import { Activity, CheckCircle2, Database, Plug, RefreshCcw, Search, Server } from "lucide-react";
+import { useAuth } from "@/components/auth-provider";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { cn } from "@/lib/utils";
+import { api } from "@/lib/api";
+import { SgpDiscoveryPreview, SgpSyncStartResponse } from "@/lib/types";
 
-type IntegrationStatus = "online" | "offline" | "error";
-type ChannelType = "WhatsApp" | "Telegram" | "Email" | "API Externa" | "Webhook";
-
-type IntegrationItem = {
-  id: string;
-  name: string;
-  type: ChannelType;
-  status: IntegrationStatus;
-  automationStatus: "AI Active" | "Manual" | "Paused";
-  linkedAgent: string;
-  apiUrl: string;
-  token: string;
-  username: string;
-  password: string;
-  lastSync: string;
-  errors: string[];
-  history: string[];
-};
-
-const channelIcon = {
-  WhatsApp: MessageCircle,
-  Telegram: Send,
-  Email: Mail,
-  "API Externa": Server,
-  Webhook: Webhook,
-};
-
-const initialIntegrations: IntegrationItem[] = [
-  {
-    id: "sgp",
-    name: "SGP",
-    type: "API Externa",
-    status: "online",
-    automationStatus: "AI Active",
-    linkedAgent: "Nina Suporte",
-    apiUrl: "https://webmais.sgp.net.br",
-    token: "1b7139af-6187-402e-bb05-54bb3ed9c344",
-    username: "siacbot",
-    password: "••••••••",
-    lastSync: "Hoje, 13:28",
-    errors: [],
-    history: ["Sincronizacao concluida", "Agente vinculado", "Credenciais atualizadas"],
-  },
-  {
-    id: "whatsapp",
-    name: "WhatsApp Suporte",
-    type: "WhatsApp",
-    status: "offline",
-    automationStatus: "Paused",
-    linkedAgent: "Nina Suporte",
-    apiUrl: "https://graph.facebook.com/v20.0",
-    token: "wa-token-demo",
-    username: "+55 11 99999-0001",
-    password: "••••••••",
-    lastSync: "Ontem, 18:04",
-    errors: ["Sessao desconectada pelo provedor"],
-    history: ["Falha de ping", "QR Code expirado", "Webhook validado"],
-  },
-  {
-    id: "webhook-billing",
-    name: "Billing Webhook",
-    type: "Webhook",
-    status: "online",
-    automationStatus: "Manual",
-    linkedAgent: "Leo Vendas",
-    apiUrl: "https://api.isp.local/webhooks/billing",
-    token: "webhook-secret-demo",
-    username: "billing-service",
-    password: "••••••••",
-    lastSync: "Hoje, 12:10",
-    errors: [],
-    history: ["Evento invoice.paid recebido", "Assinatura validada"],
-  },
-];
+type ConnectionState = "idle" | "online" | "error";
 
 function MetricCard({
   title,
@@ -133,49 +40,68 @@ function MetricCard({
 }
 
 export default function IntegrationsPage() {
-  const [integrations, setIntegrations] = useState(initialIntegrations);
+  const { token } = useAuth();
   const [search, setSearch] = useState("");
-  const [expandedId, setExpandedId] = useState("sgp");
-  const [editing, setEditing] = useState<IntegrationItem | null>(null);
+  const [connectionState, setConnectionState] = useState<ConnectionState>("idle");
+  const [loadingAction, setLoadingAction] = useState("");
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [lastPreview, setLastPreview] = useState<SgpDiscoveryPreview | null>(null);
 
-  const filtered = useMemo(
-    () =>
-      integrations.filter((integration) =>
-        `${integration.name} ${integration.type} ${integration.linkedAgent}`
-          .toLowerCase()
-          .includes(search.toLowerCase()),
-      ),
-    [integrations, search],
-  );
+  async function runAction<T>(action: string, callback: () => Promise<T>) {
+    setLoadingAction(action);
+    setError("");
+    setMessage("");
 
-  const active = integrations.filter((item) => item.status === "online").length;
-  const inactive = integrations.length - active;
-  const activationRate = Math.round((active / integrations.length) * 100);
-
-  function updateStatus(id: string, status: IntegrationStatus) {
-    setIntegrations((current) =>
-      current.map((item) =>
-        item.id === id
-          ? {
-              ...item,
-              status,
-              lastSync: "Agora",
-              history: [`Status alterado para ${status}`, ...item.history],
-              errors: status === "error" ? item.errors : [],
-            }
-          : item,
-      ),
-    );
+    try {
+      return await callback();
+    } catch (err) {
+      const text = err instanceof Error ? err.message : "Erro inesperado.";
+      setError(text);
+      setConnectionState("error");
+      throw err;
+    } finally {
+      setLoadingAction("");
+    }
   }
 
-  function saveIntegration(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!editing) return;
-    setIntegrations((current) =>
-      current.map((item) => (item.id === editing.id ? editing : item)),
-    );
-    setEditing(null);
+  async function testSgp() {
+    if (!token) return;
+    await runAction("test", async () => {
+      await api.post<unknown>("/integrations/sgp/test-auth", { payload: {} }, token);
+      setConnectionState("online");
+      setMessage("Conexão SGP validada com sucesso.");
+    });
   }
+
+  async function discoverCustomers() {
+    if (!token) return;
+    await runAction("discover", async () => {
+      const result = await api.post<SgpDiscoveryPreview>(
+        "/integrations/sgp/discover/customers",
+        { pagination: { page: 1, limit: 25 } },
+        token,
+      );
+      setLastPreview(result);
+      setConnectionState("online");
+      setMessage(`Preview processado: ${result.processed} clientes lidos.`);
+    });
+  }
+
+  async function syncCustomers() {
+    if (!token) return;
+    await runAction("sync", async () => {
+      const result = await api.post<SgpSyncStartResponse>(
+        "/integrations/sgp/sync-customers",
+        { pagination: { page: 1, limit: 100 } },
+        token,
+      );
+      setConnectionState("online");
+      setMessage(result.message);
+    });
+  }
+
+  const visible = "sgp".includes(search.toLowerCase()) || "api externa".includes(search.toLowerCase());
 
   return (
     <div className="space-y-6">
@@ -186,17 +112,13 @@ export default function IntegrationsPage() {
             Connect platforms and tools that expand the ecosystem.
           </p>
         </div>
-        <Button onClick={() => setEditing({ ...initialIntegrations[0], id: crypto.randomUUID(), name: "New Integration" })}>
-          <Plug size={17} />
-          New Integration
-        </Button>
       </div>
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard icon={Plug} title="Total Integrations" value={integrations.length} hint={`${integrations.length} types`} />
-        <MetricCard icon={CheckCircle2} title="Active Integrations" value={active} hint={`${activationRate}% active`} />
-        <MetricCard icon={AlertCircle} title="Inactive Integrations" value={inactive} hint="require attention" />
-        <MetricCard icon={Activity} title="Activation Rate" value={`${activationRate}%`} hint="connection health" />
+        <MetricCard icon={Plug} title="Total Integrations" value={1} hint="SGP API" />
+        <MetricCard icon={CheckCircle2} title="Active Integrations" value={connectionState === "online" ? 1 : 0} hint={connectionState === "online" ? "online" : "pending test"} />
+        <MetricCard icon={Activity} title="Last Preview" value={lastPreview?.processed ?? 0} hint="customers read" />
+        <MetricCard icon={Database} title="Preview Relations" value={(lastPreview?.customers ?? []).reduce((total, item) => total + item.contractsCount + item.invoicesCount, 0)} hint="contracts + invoices" />
       </section>
 
       <Input
@@ -205,155 +127,69 @@ export default function IntegrationsPage() {
         onChange={(event) => setSearch(event.target.value)}
       />
 
-      <section className="space-y-4">
-        {filtered.map((integration) => {
-          const Icon = channelIcon[integration.type];
-          const expanded = expandedId === integration.id;
-          return (
-            <Card key={integration.id} className="overflow-hidden">
-              <button
-                className="flex w-full items-center justify-between gap-4 p-5 text-left"
-                onClick={() => setExpandedId(expanded ? "" : integration.id)}
-                type="button"
-              >
-                <div className="flex min-w-0 items-center gap-4">
-                  <span className="rounded-2xl bg-sky-400/10 p-3 text-sky-300">
-                    <Icon size={22} />
-                  </span>
-                  <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="font-semibold text-white">{integration.name}</h2>
-                      <Badge variant="blue">{integration.type}</Badge>
-                      <Badge variant={integration.status === "online" ? "green" : integration.status === "error" ? "red" : "amber"}>
-                        {integration.status}
-                      </Badge>
-                    </div>
-                    <p className="mt-1 text-sm text-slate-400">
-                      Linked agent: {integration.linkedAgent} · Automation: {integration.automationStatus}
-                    </p>
+      {error ? (
+        <div className="rounded-2xl bg-red-500/10 p-4 text-red-200">{error}</div>
+      ) : null}
+      {message ? (
+        <div className="rounded-2xl border border-emerald-400/30 bg-emerald-400/10 p-4 text-emerald-200">
+          {message}
+        </div>
+      ) : null}
+
+      {visible ? (
+        <Card>
+          <CardHeader>
+            <div className="flex flex-col justify-between gap-4 md:flex-row md:items-start">
+              <div className="flex items-center gap-4">
+                <span className="rounded-2xl bg-sky-400/10 p-3 text-sky-300">
+                  <Server size={24} />
+                </span>
+                <div>
+                  <CardTitle>SGP</CardTitle>
+                  <p className="mt-1 text-sm text-slate-400">
+                    Integração oficial via /api/ura/clientes/
+                  </p>
+                  <div className="mt-2 flex gap-2">
+                    <Badge variant="blue">API Externa</Badge>
+                    <Badge variant={connectionState === "online" ? "green" : connectionState === "error" ? "red" : "amber"}>
+                      {connectionState === "online" ? "online" : connectionState === "error" ? "error" : "not tested"}
+                    </Badge>
                   </div>
                 </div>
-                <ChevronDown className={cn("shrink-0 transition", expanded && "rotate-180")} size={18} />
-              </button>
-
-              {expanded ? (
-                <CardContent className="grid gap-4 border-t border-slate-800 md:grid-cols-2">
-                  <div className="space-y-3">
-                    <div className="rounded-2xl border border-slate-800 bg-slate-950/50 p-4">
-                      <p className="text-xs uppercase tracking-[0.25em] text-slate-500">Monitoramento</p>
-                      <div className="mt-3 grid gap-3 text-sm">
-                        <div className="flex justify-between">
-                          <span className="text-slate-400">Status</span>
-                          <span className="font-semibold text-white">{integration.status}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-slate-400">Última sincronização</span>
-                          <span className="font-semibold text-white">{integration.lastSync}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-slate-400">Erros</span>
-                          <span className={integration.errors.length ? "font-semibold text-red-300" : "font-semibold text-emerald-300"}>
-                            {integration.errors.length || "Nenhum"}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex flex-wrap gap-2">
-                      {integration.type === "WhatsApp" ? (
-                        <>
-                          <Button size="sm" onClick={() => updateStatus(integration.id, "online")}>
-                            <MessageCircle size={16} />
-                            Conectar número
-                          </Button>
-                          <Button size="sm" variant="secondary" onClick={() => updateStatus(integration.id, "online")}>
-                            <RefreshCcw size={16} />
-                            Reconectar
-                          </Button>
-                          <Button size="sm" variant="danger" onClick={() => updateStatus(integration.id, "offline")}>
-                            <Unplug size={16} />
-                            Desconectar
-                          </Button>
-                        </>
-                      ) : null}
-                      <Button size="sm" variant="secondary" onClick={() => setEditing(integration)}>
-                        Edit
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-slate-800 bg-slate-950/50 p-4">
-                    <p className="text-xs uppercase tracking-[0.25em] text-slate-500">Histórico de eventos</p>
-                    <div className="mt-4 space-y-3">
-                      {integration.history.map((event) => (
-                        <div className="flex items-center gap-3 text-sm" key={event}>
-                          <span className="h-2 w-2 rounded-full bg-emerald-300" />
-                          <span className="text-slate-300">{event}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </CardContent>
-              ) : null}
-            </Card>
-          );
-        })}
-      </section>
-
-      <Dialog open={Boolean(editing)} onOpenChange={(open) => !open && setEditing(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Edit integration</DialogTitle>
-            <DialogDescription>Update the integration settings</DialogDescription>
-          </DialogHeader>
-          {editing ? (
-            <form className="space-y-5 p-6" onSubmit={saveIntegration}>
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2">
-                  <Label>Nome da integração</Label>
-                  <Input value={editing.name} onChange={(event) => setEditing({ ...editing, name: event.target.value })} />
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button disabled={Boolean(loadingAction)} variant="secondary" onClick={testSgp}>
+                  <Search size={16} />
+                  Test Connection
+                </Button>
+                <Button disabled={Boolean(loadingAction)} variant="secondary" onClick={discoverCustomers}>
+                  <Activity size={16} />
+                  Discover
+                </Button>
+                <Button disabled={Boolean(loadingAction)} onClick={syncCustomers}>
+                  <RefreshCcw className={loadingAction === "sync" ? "animate-spin" : ""} size={16} />
+                  Sync Customers
+                </Button>
+              </div>
+            </div>
+          </CardHeader>
+          {lastPreview ? (
+            <CardContent className="grid gap-3 md:grid-cols-4">
+              {[
+                ["Processed", lastPreview.processed],
+                ["Contracts", lastPreview.customers.reduce((total, item) => total + item.contractsCount, 0)],
+                ["Invoices", lastPreview.customers.reduce((total, item) => total + item.invoicesCount, 0)],
+                ["Preview", lastPreview.customers.length],
+              ].map(([label, value]) => (
+                <div className="rounded-2xl border border-slate-800 bg-slate-950/50 p-4" key={label as string}>
+                  <p className="text-sm text-slate-400">{label as string}</p>
+                  <p className="mt-2 text-2xl font-semibold text-white">{value as number}</p>
                 </div>
-                <div className="space-y-2">
-                  <Label>Status</Label>
-                  <select
-                    className="h-11 w-full rounded-xl border border-slate-700 bg-slate-950/60 px-3 text-sm text-slate-100 outline-none"
-                    value={editing.status}
-                    onChange={(event) => setEditing({ ...editing, status: event.target.value as IntegrationStatus })}
-                  >
-                    <option value="online">online</option>
-                    <option value="offline">offline</option>
-                    <option value="error">error</option>
-                  </select>
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label>URL da API</Label>
-                <Input value={editing.apiUrl} onChange={(event) => setEditing({ ...editing, apiUrl: event.target.value })} />
-              </div>
-              <div className="space-y-2">
-                <Label>Token</Label>
-                <Input value={editing.token} onChange={(event) => setEditing({ ...editing, token: event.target.value })} />
-              </div>
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2">
-                  <Label>Usuário</Label>
-                  <Input value={editing.username} onChange={(event) => setEditing({ ...editing, username: event.target.value })} />
-                </div>
-                <div className="space-y-2">
-                  <Label>Senha</Label>
-                  <Input value={editing.password} onChange={(event) => setEditing({ ...editing, password: event.target.value })} />
-                </div>
-              </div>
-              <div className="flex justify-end gap-3 border-t border-slate-800 pt-5">
-                <DialogClose asChild>
-                  <Button type="button" variant="secondary">Cancelar</Button>
-                </DialogClose>
-                <Button type="submit">Salvar</Button>
-              </div>
-            </form>
+              ))}
+            </CardContent>
           ) : null}
-        </DialogContent>
-      </Dialog>
+        </Card>
+      ) : null}
     </div>
   );
 }
