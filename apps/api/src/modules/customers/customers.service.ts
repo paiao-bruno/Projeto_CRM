@@ -20,7 +20,7 @@ export type ExternalCustomerInput = {
 export class CustomersService {
   constructor(private readonly prisma: PrismaService) {}
 
-  list(tenantId: string, search?: string) {
+  list(tenantId: string, search?: string, limit = 2000) {
     return this.prisma.customer.findMany({
       where: {
         tenantId,
@@ -36,7 +36,7 @@ export class CustomersService {
           : {}),
       },
       orderBy: { updatedAt: "desc" },
-      take: 100,
+      take: limit,
     });
   }
 

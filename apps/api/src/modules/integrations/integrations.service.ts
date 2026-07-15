@@ -429,6 +429,13 @@ export class IntegrationsService {
   ): Record<string, unknown> | undefined {
     const root = this.isRecord(body) ? body : {};
     const pagination = this.extractPaginationFromBody(body);
+    const currentOffset =
+      this.numberFrom(pagination.offset) ??
+      this.numberFrom(currentPagination?.offset);
+    const partial =
+      this.numberFrom(pagination.parcial) ??
+      this.numberFrom(pagination.partial) ??
+      this.numberFrom(pagination.count);
     const currentPage =
       this.numberFrom(pagination.page) ??
       this.numberFrom(pagination.pagina) ??
@@ -442,15 +449,30 @@ export class IntegrationsService {
       this.numberFrom(currentPagination?.limit) ??
       this.numberFrom(currentPagination?.per_page) ??
       this.numberFrom(currentPagination?.por_pagina);
+    const total =
+      this.numberFrom(pagination.total) ??
+      this.numberFrom(root.total) ??
+      this.numberFrom(root.count);
+
+    if (currentOffset !== undefined && limit !== undefined && total !== undefined) {
+      const pageSize = partial && partial > 0 ? partial : limit;
+      const nextOffset = currentOffset + pageSize;
+
+      if (nextOffset < total && pageSize > 0) {
+        return {
+          ...(currentPagination ?? {}),
+          offset: nextOffset,
+          limit,
+        };
+      }
+
+      return undefined;
+    }
+
     const totalPages =
       this.numberFrom(pagination.pages) ??
       this.numberFrom(pagination.total_pages) ??
       this.numberFrom(pagination.paginas);
-    const total =
-      this.numberFrom(pagination.total) ??
-      this.numberFrom(pagination.count) ??
-      this.numberFrom(root.total) ??
-      this.numberFrom(root.count);
     const computedPages = total && limit ? Math.ceil(total / limit) : undefined;
     const finalTotalPages = totalPages ?? computedPages;
     const nextValue = pagination.next ?? root.next;
@@ -1093,6 +1115,9 @@ export class IntegrationsService {
       "pagination",
       "paginacao",
       "paginação",
+      "offset",
+      "parcial",
+      "partial",
       "page",
       "pagina",
       "pages",

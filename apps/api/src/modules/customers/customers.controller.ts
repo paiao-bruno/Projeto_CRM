@@ -22,8 +22,12 @@ export class CustomersController {
   constructor(private readonly customersService: CustomersService) {}
 
   @Get()
-  list(@CurrentUser() user: AuthUser, @Query("search") search?: string) {
-    return this.customersService.list(user.tenantId, search);
+  list(
+    @CurrentUser() user: AuthUser,
+    @Query("search") search?: string,
+    @Query("limit") limit?: string,
+  ) {
+    return this.customersService.list(user.tenantId, search, this.parseLimit(limit));
   }
 
   @Get(":id")
@@ -58,5 +62,11 @@ export class CustomersController {
   @Delete(":id")
   remove(@CurrentUser() user: AuthUser, @Param("id") id: string) {
     return this.customersService.remove(user.tenantId, id);
+  }
+
+  private parseLimit(limit?: string) {
+    const parsed = Number(limit);
+    if (!Number.isFinite(parsed) || parsed <= 0) return 2000;
+    return Math.min(parsed, 5000);
   }
 }

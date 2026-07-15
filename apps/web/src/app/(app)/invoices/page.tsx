@@ -23,7 +23,7 @@ export default function InvoicesPage() {
   useEffect(() => {
     if (!token) return;
     api
-      .get<Invoice[]>("/invoices", token)
+      .get<Invoice[]>("/invoices?limit=2000", token)
       .then(setInvoices)
       .catch((err) => setError(err instanceof Error ? err.message : "Erro ao carregar faturas."));
   }, [token]);

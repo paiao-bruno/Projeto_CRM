@@ -98,18 +98,20 @@ describe("IntegrationsService", () => {
                 clientes: [{ id: "1", nome: "Cliente A", cpfcnpj: "111" }],
                 contratos: [{ id: "c1", cliente_id: "1", status: "ATIVO" }],
                 titulos: [{ id: "t1", cliente_id: "1", valor: "10,00", status: "ABERTO" }],
-                page: 1,
-                pages: 2,
+                offset: 0,
                 limit: 1,
+                parcial: 1,
+                total: 2,
               },
             };
           }
           return {
             body: {
               clientes: [{ id: "2", nome: "Cliente B", cpfcnpj: "222" }],
-              page: 2,
-              pages: 2,
+              offset: 1,
               limit: 1,
+              parcial: 1,
+              total: 2,
             },
           };
         },
@@ -133,7 +135,7 @@ describe("IntegrationsService", () => {
       service as unknown as {
         processSgpCustomers: (
           userArg: typeof user,
-          request: { pagination: { page: number; limit: number } },
+          request: { pagination: { offset: number; limit: number } },
           runId: string,
         ) => Promise<{
           processed: number;
@@ -142,7 +144,7 @@ describe("IntegrationsService", () => {
           invoicesCreated: number;
         }>;
       }
-    ).processSgpCustomers(user, { pagination: { page: 1, limit: 1 } }, "run-id");
+    ).processSgpCustomers(user, { pagination: { offset: 0, limit: 1 } }, "run-id");
 
     assert.equal(result.processed, 2);
     assert.equal(result.created, 2);

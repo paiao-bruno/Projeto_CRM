@@ -5,7 +5,7 @@ import { PrismaService } from "../database/prisma.service";
 export class InvoicesService {
   constructor(private readonly prisma: PrismaService) {}
 
-  list(tenantId: string, customerId?: string) {
+  list(tenantId: string, customerId?: string, limit = 2000) {
     return this.prisma.invoice.findMany({
       where: {
         tenantId,
@@ -16,7 +16,7 @@ export class InvoicesService {
         contract: true,
       },
       orderBy: [{ dueDate: "desc" }, { updatedAt: "desc" }],
-      take: 100,
+      take: limit,
     });
   }
 }

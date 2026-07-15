@@ -80,7 +80,7 @@ export default function IntegrationsPage() {
     await runAction("discover", async () => {
       const result = await api.post<SgpDiscoveryPreview>(
         "/integrations/sgp/discover/customers",
-        { pagination: { page: 1, limit: 25 } },
+        { pagination: { offset: 0, limit: 25 } },
         token,
       );
       setLastPreview(result);
@@ -94,7 +94,7 @@ export default function IntegrationsPage() {
     await runAction("sync", async () => {
       const result = await api.post<SgpSyncStartResponse>(
         "/integrations/sgp/sync-customers",
-        { pagination: { page: 1, limit: 100 } },
+        { pagination: { offset: 0, limit: 100 } },
         token,
       );
       setConnectionState("online");

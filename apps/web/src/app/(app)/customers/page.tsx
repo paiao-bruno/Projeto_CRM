@@ -42,8 +42,9 @@ export default function CustomersPage() {
 
   async function loadCustomers() {
     if (!token) return;
-    const query = search ? `?search=${encodeURIComponent(search)}` : "";
-    const data = await api.get<Customer[]>(`/customers${query}`, token);
+    const params = new URLSearchParams({ limit: "2000" });
+    if (search) params.set("search", search);
+    const data = await api.get<Customer[]>(`/customers?${params.toString()}`, token);
     setCustomers(data);
   }
 
@@ -93,7 +94,7 @@ export default function CustomersPage() {
     try {
       const response = await api.post<SgpSyncStartResponse>(
         "/integrations/sgp/sync-customers",
-        { pagination: { page: 1, limit: 100 } },
+        { pagination: { offset: 0, limit: 100 } },
         token,
       );
       setSyncMessage(response.message);

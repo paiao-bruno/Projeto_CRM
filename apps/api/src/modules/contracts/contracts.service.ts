@@ -5,7 +5,7 @@ import { PrismaService } from "../database/prisma.service";
 export class ContractsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  list(tenantId: string, customerId?: string) {
+  list(tenantId: string, customerId?: string, limit = 2000) {
     return this.prisma.contract.findMany({
       where: {
         tenantId,
@@ -15,7 +15,7 @@ export class ContractsService {
         customer: true,
       },
       orderBy: { updatedAt: "desc" },
-      take: 100,
+      take: limit,
     });
   }
 }

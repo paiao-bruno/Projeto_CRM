@@ -10,7 +10,17 @@ export class InvoicesController {
   constructor(private readonly invoicesService: InvoicesService) {}
 
   @Get()
-  list(@CurrentUser() user: AuthUser, @Query("customerId") customerId?: string) {
-    return this.invoicesService.list(user.tenantId, customerId);
+  list(
+    @CurrentUser() user: AuthUser,
+    @Query("customerId") customerId?: string,
+    @Query("limit") limit?: string,
+  ) {
+    return this.invoicesService.list(user.tenantId, customerId, this.parseLimit(limit));
+  }
+
+  private parseLimit(limit?: string) {
+    const parsed = Number(limit);
+    if (!Number.isFinite(parsed) || parsed <= 0) return 2000;
+    return Math.min(parsed, 5000);
   }
 }

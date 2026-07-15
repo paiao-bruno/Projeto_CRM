@@ -16,7 +16,7 @@ export default function ContractsPage() {
   useEffect(() => {
     if (!token) return;
     api
-      .get<Contract[]>("/contracts", token)
+      .get<Contract[]>("/contracts?limit=2000", token)
       .then(setContracts)
       .catch((err) => setError(err instanceof Error ? err.message : "Erro ao carregar contratos."));
   }, [token]);
