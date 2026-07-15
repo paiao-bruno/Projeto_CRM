@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
-import { Customer, IntegrationSyncRun, SgpSyncStartResponse } from "@/lib/types";
+import { Customer, IntegrationSyncRun, PaginatedResponse, SgpSyncStartResponse } from "@/lib/types";
 
 const statusVariant = {
   ACTIVE: "green",
@@ -37,15 +37,23 @@ export default function CustomersPage() {
   const [syncing, setSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState("");
   const [syncRun, setSyncRun] = useState<IntegrationSyncRun | null>(null);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
 
   const filteredCustomers = useMemo(() => customers, [customers]);
 
   async function loadCustomers() {
     if (!token) return;
-    const params = new URLSearchParams({ limit: "2000" });
+    const params = new URLSearchParams({ page: String(page), limit: "100" });
     if (search) params.set("search", search);
-    const data = await api.get<Customer[]>(`/customers?${params.toString()}`, token);
-    setCustomers(data);
+    const response = await api.get<PaginatedResponse<Customer>>(
+      `/customers?${params.toString()}`,
+      token,
+    );
+    setCustomers(response.data);
+    setTotal(response.total);
+    setTotalPages(response.totalPages);
   }
 
   useEffect(() => {
@@ -53,7 +61,7 @@ export default function CustomersPage() {
       setError(err instanceof Error ? err.message : "Erro ao carregar clientes."),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+  }, [token, page]);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -144,7 +152,11 @@ export default function CustomersPage() {
           </Button>
           <form className="flex gap-2" onSubmit={(event) => {
             event.preventDefault();
-            loadCustomers().catch((err) => setError(err.message));
+            if (page === 1) {
+              loadCustomers().catch((err) => setError(err.message));
+            } else {
+              setPage(1);
+            }
           }}>
             <Input
               className="w-72"
@@ -223,7 +235,9 @@ export default function CustomersPage() {
         <Card>
           <CardHeader>
             <CardTitle>Base de clientes</CardTitle>
-            <p className="text-sm text-slate-400">{filteredCustomers.length} registros</p>
+            <p className="text-sm text-slate-400">
+              {total} registros · página {page} de {totalPages}
+            </p>
           </CardHeader>
           <CardContent>
             <div className="overflow-hidden rounded-2xl border border-slate-800">
@@ -273,6 +287,35 @@ export default function CustomersPage() {
                   ))}
                 </tbody>
               </table>
+            </div>
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+              <Button
+                disabled={page <= 1}
+                type="button"
+                variant="secondary"
+                onClick={() => setPage((current) => Math.max(1, current - 1))}
+              >
+                Anterior
+              </Button>
+              <select
+                className="h-10 rounded-xl border border-slate-700 bg-slate-950/60 px-3 text-sm text-slate-100"
+                value={page}
+                onChange={(event) => setPage(Number(event.target.value))}
+              >
+                {Array.from({ length: totalPages }).map((_, index) => (
+                  <option key={index + 1} value={index + 1}>
+                    Página {index + 1}
+                  </option>
+                ))}
+              </select>
+              <Button
+                disabled={page >= totalPages}
+                type="button"
+                variant="secondary"
+                onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+              >
+                Próxima
+              </Button>
             </div>
           </CardContent>
         </Card>

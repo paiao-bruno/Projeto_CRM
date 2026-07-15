@@ -5,17 +5,30 @@ import { PrismaService } from "../database/prisma.service";
 export class ContractsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  list(tenantId: string, customerId?: string, limit = 2000) {
-    return this.prisma.contract.findMany({
-      where: {
-        tenantId,
-        ...(customerId ? { customerId } : {}),
-      },
-      include: {
-        customer: true,
-      },
-      orderBy: { updatedAt: "desc" },
-      take: limit,
-    });
+  async list(tenantId: string, customerId?: string, page = 1, limit = 100) {
+    const where = {
+      tenantId,
+      ...(customerId ? { customerId } : {}),
+    };
+    const [data, total] = await Promise.all([
+      this.prisma.contract.findMany({
+        where,
+        include: {
+          customer: true,
+        },
+        orderBy: { updatedAt: "desc" },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.contract.count({ where }),
+    ]);
+
+    return {
+      data,
+      total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    };
   }
 }

@@ -25,9 +25,15 @@ export class CustomersController {
   list(
     @CurrentUser() user: AuthUser,
     @Query("search") search?: string,
+    @Query("page") page?: string,
     @Query("limit") limit?: string,
   ) {
-    return this.customersService.list(user.tenantId, search, this.parseLimit(limit));
+    return this.customersService.list(
+      user.tenantId,
+      search,
+      this.parsePage(page),
+      this.parseLimit(limit),
+    );
   }
 
   @Get(":id")
@@ -66,7 +72,13 @@ export class CustomersController {
 
   private parseLimit(limit?: string) {
     const parsed = Number(limit);
-    if (!Number.isFinite(parsed) || parsed <= 0) return 2000;
-    return Math.min(parsed, 5000);
+    if (!Number.isFinite(parsed) || parsed <= 0) return 100;
+    return Math.min(parsed, 500);
+  }
+
+  private parsePage(page?: string) {
+    const parsed = Number(page);
+    if (!Number.isFinite(parsed) || parsed <= 0) return 1;
+    return Math.floor(parsed);
   }
 }

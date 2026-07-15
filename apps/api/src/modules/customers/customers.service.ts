@@ -20,24 +20,38 @@ export type ExternalCustomerInput = {
 export class CustomersService {
   constructor(private readonly prisma: PrismaService) {}
 
-  list(tenantId: string, search?: string, limit = 2000) {
-    return this.prisma.customer.findMany({
-      where: {
-        tenantId,
-        ...(search
-          ? {
-              OR: [
-                { name: { contains: search, mode: "insensitive" } },
-                { email: { contains: search, mode: "insensitive" } },
-                { phone: { contains: search, mode: "insensitive" } },
-                { document: { contains: search, mode: "insensitive" } },
-              ],
-            }
-          : {}),
-      },
-      orderBy: { updatedAt: "desc" },
-      take: limit,
-    });
+  async list(tenantId: string, search?: string, page = 1, limit = 100) {
+    const where = {
+      tenantId,
+      ...(search
+        ? {
+            OR: [
+              { name: { contains: search, mode: "insensitive" as const } },
+              { email: { contains: search, mode: "insensitive" as const } },
+              { phone: { contains: search, mode: "insensitive" as const } },
+              { document: { contains: search, mode: "insensitive" as const } },
+              { ispAccountCode: { contains: search, mode: "insensitive" as const } },
+            ],
+          }
+        : {}),
+    };
+    const [data, total] = await Promise.all([
+      this.prisma.customer.findMany({
+        where,
+        orderBy: { updatedAt: "desc" },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.customer.count({ where }),
+    ]);
+
+    return {
+      data,
+      total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    };
   }
 
   async get(tenantId: string, id: string) {
