@@ -32,11 +32,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const storedToken = localStorage.getItem("isp-crm-token");
     const storedUser = localStorage.getItem("isp-crm-user");
-    if (storedToken && storedUser) {
-      setToken(storedToken);
-      setUser(JSON.parse(storedUser) as AuthUser);
+
+    async function restoreSession() {
+      if (!storedToken || !storedUser) {
+        setLoading(false);
+        return;
+      }
+
+      try {
+        JSON.parse(storedUser) as AuthUser;
+        const response = await api.get<{ user: AuthUser }>("/auth/me", storedToken);
+        localStorage.setItem("isp-crm-user", JSON.stringify(response.user));
+        setToken(storedToken);
+        setUser(response.user);
+      } catch {
+        localStorage.removeItem("isp-crm-token");
+        localStorage.removeItem("isp-crm-user");
+        setToken(null);
+        setUser(null);
+      } finally {
+        setLoading(false);
+      }
     }
-    setLoading(false);
+
+    void restoreSession();
   }, []);
 
   const login = useCallback(
