@@ -107,29 +107,66 @@ export type IntegrationSyncLog = {
   createdAt: string;
 };
 
-export type IntegrationSyncRun = {
-  id: string;
-  operation: string;
-  status: IntegrationSyncStatus;
-  startedAt: string;
-  finishedAt?: string | null;
-  durationMs?: number | null;
+export type SgpSyncHistoryEntityStats = {
   processed: number;
   created: number;
   updated: number;
+  deleted: number;
+  ignored: number;
+};
+
+export type SgpSyncHistoryError = {
+  index?: number;
+  message: string;
+  entity?: string;
+  externalId?: string;
+};
+
+export type SgpSyncHistoryEntry = {
+  id: string;
+  operation: string;
+  status: IntegrationSyncStatus;
+  syncMode: string | null;
+  trigger: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+  durationMs: number | null;
+  tenant: {
+    id: string;
+    name: string;
+  };
+  triggeredBy: {
+    id: string;
+    name: string;
+    email: string;
+  } | null;
+  integrationId: string | null;
+  customers: SgpSyncHistoryEntityStats;
+  contracts: SgpSyncHistoryEntityStats;
+  invoices: SgpSyncHistoryEntityStats;
+  created: number;
+  updated: number;
+  deleted: number;
   ignored: number;
   errorsCount: number;
-  errorMessage?: string | null;
-  metadata?: {
-    syncMode?: "incremental" | "full";
-    watermark?: string | null;
-    customers?: { created: number; updated: number; unchanged?: number };
-    contracts?: { created: number; updated: number; unchanged?: number };
-    invoices?: { created: number; updated: number; unchanged?: number };
-    errors?: Array<{ index: number; message: string }>;
-  } | null;
+  errors: SgpSyncHistoryError[];
+  errorMessage: string | null;
+  stackTrace: string | null;
+};
+
+export type SgpSyncHistoryDetail = SgpSyncHistoryEntry & {
   logs?: IntegrationSyncLog[];
 };
+
+export type SgpSyncHistoryListResponse = {
+  items: SgpSyncHistoryEntry[];
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+};
+
+export type IntegrationSyncRun = SgpSyncHistoryDetail;
 
 export type SgpCredentials = {
   id: string;

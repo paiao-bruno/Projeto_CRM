@@ -16,8 +16,10 @@ import { PrismaService } from "../database/prisma.service";
 import { CreateSgpCredentialsDto } from "./dto/create-sgp-credentials.dto";
 import { TestSgpCredentialsDto, UpdateSgpCredentialsDto } from "./dto/update-sgp-credentials.dto";
 import { UpdateSgpAutoSyncDto } from "./dto/update-sgp-auto-sync.dto";
+import { ListSgpSyncHistoryDto } from "./dto/list-sgp-sync-history.dto";
 import { SgpCredentialsService } from "./sgp/sgp-credentials.service";
 import { computeNextRunAt } from "./sgp/sgp-auto-sync.config";
+import { SgpSyncHistoryService } from "./sgp/sgp-sync-history.service";
 import { SgpClientService } from "./sgp/sgp-client.service";
 import { SgpRuntimeCredentials } from "./sgp/types/sgp-credentials.types";
 import { SgpDiscoveryRequest } from "./sgp/types/sgp-client.types";
@@ -76,6 +78,7 @@ export class IntegrationsService {
     private readonly sgpCredentials: SgpCredentialsService,
     private readonly customersService: CustomersService,
     private readonly prisma: PrismaService,
+    private readonly syncHistory: SgpSyncHistoryService,
   ) {}
 
   listSgpCredentials(tenantId: string) {
@@ -190,8 +193,10 @@ export class IntegrationsService {
         data: {
           tenantId: user.tenantId,
           triggeredById: user.memberId,
+          integrationId: request.credentialId,
           operation: "sgp.sync-customers",
           status: IntegrationSyncStatus.SKIPPED,
+          trigger: "manual",
           startedAt: new Date(),
           finishedAt: new Date(),
           durationMs: 0,
@@ -222,12 +227,16 @@ export class IntegrationsService {
       data: {
         tenantId: user.tenantId,
         triggeredById: user.memberId,
+        integrationId: request.credentialId,
         operation: "sgp.sync-customers",
         status: IntegrationSyncStatus.RUNNING,
+        syncMode,
+        trigger: "manual",
         cursor: this.toJsonValue(request.pagination),
         metadata: this.toJsonValue({
           syncMode,
           credentialId: request.credentialId,
+          trigger: "manual",
         }),
       },
     });
@@ -311,6 +320,7 @@ export class IntegrationsService {
     tenantId: string;
     integrationId: string;
     trigger: "cron" | "interval" | "manual";
+    triggeredById?: string;
     retryAttempts: number;
     retryDelayMs: number;
     timeoutMs: number;
@@ -382,6 +392,7 @@ export class IntegrationsService {
               status: IntegrationSyncStatus.FAILED,
               finishedAt: new Date(),
               errorMessage: lastError.message,
+              stackTrace: lastError.stack,
             },
           });
         }
@@ -429,6 +440,7 @@ export class IntegrationsService {
     tenantId: string;
     integrationId: string;
     trigger: "cron" | "interval" | "manual";
+    triggeredById?: string;
   }) {
     const lockKey = input.tenantId;
 
@@ -441,8 +453,12 @@ export class IntegrationsService {
     const run = await this.prisma.integrationSyncRun.create({
       data: {
         tenantId: input.tenantId,
+        integrationId: input.integrationId,
+        triggeredById: input.triggeredById,
         operation: "sgp.sync-customers",
         status: IntegrationSyncStatus.RUNNING,
+        syncMode: "incremental",
+        trigger: input.trigger,
         metadata: this.toJsonValue({
           syncMode: "incremental",
           trigger: input.trigger,
@@ -494,14 +510,15 @@ export class IntegrationsService {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  async triggerManualAutoSync(tenantId: string) {
-    const integration = await this.sgpCredentials.getAutoSyncIntegration(tenantId);
-    const config = await this.sgpCredentials.getAutoSyncConfig(tenantId, integration.id);
+  async triggerManualAutoSync(user: AuthUser) {
+    const integration = await this.sgpCredentials.getAutoSyncIntegration(user.tenantId);
+    const config = await this.sgpCredentials.getAutoSyncConfig(user.tenantId, integration.id);
 
     return this.runAutomatedSgpSync({
-      tenantId,
+      tenantId: user.tenantId,
       integrationId: integration.id,
       trigger: "manual",
+      triggeredById: user.memberId,
       retryAttempts: config.retryAttempts,
       retryDelayMs: config.retryDelayMs,
       timeoutMs: config.timeoutMs,
@@ -509,56 +526,15 @@ export class IntegrationsService {
   }
 
   getSgpSyncStatus(tenantId: string) {
-    return this.prisma.integrationSyncRun.findFirst({
-      where: {
-        tenantId,
-        operation: "sgp.sync-customers",
-      },
-      include: {
-        logs: {
-          orderBy: { createdAt: "desc" },
-          take: 10,
-        },
-      },
-      orderBy: { startedAt: "desc" },
-    });
+    return this.syncHistory.getLatest(tenantId);
   }
 
-  listSgpSyncRuns(tenantId: string) {
-    return this.prisma.integrationSyncRun.findMany({
-      where: {
-        tenantId,
-        operation: "sgp.sync-customers",
-      },
-      include: {
-        logs: {
-          orderBy: { createdAt: "desc" },
-          take: 5,
-        },
-      },
-      orderBy: { startedAt: "desc" },
-      take: 25,
-    });
+  listSgpSyncRuns(tenantId: string, query: ListSgpSyncHistoryDto = {}) {
+    return this.syncHistory.list(tenantId, query);
   }
 
-  async getSgpSyncRun(tenantId: string, id: string) {
-    const run = await this.prisma.integrationSyncRun.findFirst({
-      where: {
-        id,
-        tenantId,
-      },
-      include: {
-        logs: {
-          orderBy: { createdAt: "asc" },
-        },
-      },
-    });
-
-    if (!run) {
-      throw new NotFoundException("Execução de sincronização não encontrada.");
-    }
-
-    return run;
+  getSgpSyncRun(tenantId: string, id: string) {
+    return this.syncHistory.getById(tenantId, id);
   }
 
   private async processSgpCustomers(
@@ -785,6 +761,7 @@ export class IntegrationsService {
         const durationMs = Date.now() - startedAt;
         await this.finishSyncRun(runId, IntegrationSyncStatus.FAILED, result, durationMs, {
           errorMessage: error instanceof Error ? error.message : String(error),
+          stackTrace: error instanceof Error ? error.stack : undefined,
           cursor: pagination,
         });
       }
@@ -890,8 +867,23 @@ export class IntegrationsService {
     status: IntegrationSyncStatus,
     counters: SyncCounters,
     durationMs: number,
-    options: { cursor?: unknown; errorMessage?: string } = {},
+    options: {
+      cursor?: unknown;
+      errorMessage?: string;
+      stackTrace?: string;
+    } = {},
   ) {
+    const contractsProcessed =
+      counters.contractsCreated +
+      counters.contractsUpdated +
+      counters.contractsUnchanged +
+      counters.contractsDeleted;
+    const invoicesProcessed =
+      counters.invoicesCreated +
+      counters.invoicesUpdated +
+      counters.invoicesUnchanged +
+      counters.invoicesDeleted;
+
     await this.prisma.integrationSyncRun.update({
       where: { id: runId },
       data: {
@@ -907,6 +899,24 @@ export class IntegrationsService {
           counters.contractsUnchanged +
           counters.invoicesUnchanged,
         errorsCount: counters.errors.length,
+        customersProcessed: counters.processed,
+        customersCreated: counters.created,
+        customersUpdated: counters.updated,
+        customersDeleted: counters.customersDeleted,
+        customersIgnored: counters.unchanged,
+        contractsProcessed,
+        contractsCreated: counters.contractsCreated,
+        contractsUpdated: counters.contractsUpdated,
+        contractsDeleted: counters.contractsDeleted,
+        contractsIgnored: counters.contractsUnchanged,
+        invoicesProcessed,
+        invoicesCreated: counters.invoicesCreated,
+        invoicesUpdated: counters.invoicesUpdated,
+        invoicesDeleted: counters.invoicesDeleted,
+        invoicesIgnored: counters.invoicesUnchanged,
+        errors: this.toJsonValue(counters.errors.slice(0, 100)),
+        stackTrace: options.stackTrace,
+        syncMode: counters.syncMode,
         cursor: this.toJsonValue(options.cursor),
         errorMessage: options.errorMessage,
         metadata: this.toJsonValue({

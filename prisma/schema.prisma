@@ -366,9 +366,12 @@ model Tenant {
 model IntegrationSyncRun {
   id            String                @id @default(uuid()) @db.Uuid
   tenantId      String                @db.Uuid
+  integrationId String?               @db.Uuid
   triggeredById String?               @db.Uuid
   operation     String
   status        IntegrationSyncStatus @default(RUNNING)
+  syncMode      String?
+  trigger       String?
   startedAt     DateTime              @default(now())
   finishedAt    DateTime?
   durationMs    Int?
@@ -377,16 +380,35 @@ model IntegrationSyncRun {
   updated       Int                   @default(0)
   ignored       Int                   @default(0)
   errorsCount   Int                   @default(0)
+  customersProcessed Int              @default(0)
+  customersCreated   Int              @default(0)
+  customersUpdated   Int              @default(0)
+  customersDeleted   Int              @default(0)
+  customersIgnored   Int              @default(0)
+  contractsProcessed Int              @default(0)
+  contractsCreated   Int              @default(0)
+  contractsUpdated   Int              @default(0)
+  contractsDeleted   Int              @default(0)
+  contractsIgnored   Int              @default(0)
+  invoicesProcessed  Int              @default(0)
+  invoicesCreated    Int              @default(0)
+  invoicesUpdated    Int              @default(0)
+  invoicesDeleted    Int              @default(0)
+  invoicesIgnored    Int              @default(0)
+  errors        Json?
+  stackTrace    String?               @db.Text
   cursor        Json?
   errorMessage  String?
   metadata      Json?
 
   tenant      Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  integration Integration?         @relation(fields: [integrationId], references: [id], onDelete: SetNull)
   triggeredBy TenantMember?        @relation(fields: [triggeredById], references: [id], onDelete: SetNull)
   logs        IntegrationSyncLog[]
 
   @@index([tenantId, status, startedAt])
   @@index([tenantId, operation, startedAt])
+  @@index([tenantId, integrationId, startedAt])
 }
 
 model IntegrationSyncLog {
@@ -530,10 +552,11 @@ model Integration {
   createdAt        DateTime            @default(now())
   updatedAt        DateTime            @updatedAt
 
-  tenant           Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant           Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   webhookEndpoints WebhookEndpoint[]
   conversations    Conversation[]
   campaigns        Campaign[]
+  syncRuns         IntegrationSyncRun[]
 
   @@unique([tenantId, provider, name])
   @@index([tenantId, status])

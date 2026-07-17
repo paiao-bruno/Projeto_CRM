@@ -184,7 +184,7 @@ export default function CustomersPage() {
         <div className="grid gap-3 rounded-2xl border border-slate-800 bg-slate-950/50 p-4 md:grid-cols-5">
           {[
             ["Status", syncRun.status],
-            ["Processados", syncRun.processed],
+            ["Clientes", syncRun.customers.processed],
             ["Criados", syncRun.created],
             ["Atualizados", syncRun.updated],
             ["Erros", syncRun.errorsCount],

@@ -36,6 +36,21 @@ function createSgpCredentialsMock() {
   };
 }
 
+function createSyncHistoryMock() {
+  return {
+    list: async () => ({
+      items: [],
+      page: 1,
+      limit: 20,
+      total: 0,
+      totalPages: 0,
+    }),
+    getById: async () => null,
+    getLatest: async () => null,
+    markFailed: async () => undefined,
+  };
+}
+
 function createPrismaMock() {
   return {
     customer: {
@@ -155,6 +170,7 @@ describe("IntegrationsService", () => {
         },
       } as never,
       createPrismaMock() as never,
+      createSyncHistoryMock() as never,
     );
 
     const preview = await service.discoverSgpCustomers(user, {});
@@ -208,6 +224,7 @@ describe("IntegrationsService", () => {
         },
       } as never,
       prisma as never,
+      createSyncHistoryMock() as never,
     );
 
     const result = await (
@@ -282,6 +299,7 @@ describe("IntegrationsService", () => {
         },
       } as never,
       prisma as never,
+      createSyncHistoryMock() as never,
     );
 
     const result = await (
@@ -335,6 +353,7 @@ describe("IntegrationsService", () => {
         },
       } as never,
       prisma as never,
+      createSyncHistoryMock() as never,
     );
 
     const result = await (
@@ -358,6 +377,7 @@ describe("IntegrationsService", () => {
       createSgpCredentialsMock() as never,
       {} as never,
       prisma as never,
+      createSyncHistoryMock() as never,
     );
     (service as unknown as { runningCustomerSyncs: Set<string> }).runningCustomerSyncs.add(user.tenantId);
 

@@ -13,6 +13,7 @@ import { CurrentUser } from "../auth/current-user.decorator";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { AuthUser } from "../auth/types/auth-user";
 import { CreateSgpCredentialsDto } from "./dto/create-sgp-credentials.dto";
+import { ListSgpSyncHistoryDto } from "./dto/list-sgp-sync-history.dto";
 import { UpdateSgpAutoSyncDto } from "./dto/update-sgp-auto-sync.dto";
 import { TestSgpCredentialsDto, UpdateSgpCredentialsDto } from "./dto/update-sgp-credentials.dto";
 import { IntegrationsService } from "./integrations.service";
@@ -90,7 +91,7 @@ export class IntegrationsController {
 
   @Post("sgp/auto-sync/run")
   runSgpAutoSync(@CurrentUser() user: AuthUser) {
-    return this.integrationsService.triggerManualAutoSync(user.tenantId);
+    return this.integrationsService.triggerManualAutoSync(user);
   }
 
   @Post("sgp/test-auth")
@@ -128,8 +129,11 @@ export class IntegrationsController {
   }
 
   @Get("sgp/sync-runs")
-  listSgpSyncRuns(@CurrentUser() user: AuthUser) {
-    return this.integrationsService.listSgpSyncRuns(user.tenantId);
+  listSgpSyncRuns(
+    @CurrentUser() user: AuthUser,
+    @Query() query: ListSgpSyncHistoryDto,
+  ) {
+    return this.integrationsService.listSgpSyncRuns(user.tenantId, query);
   }
 
   @Get("sgp/sync-runs/:id")
