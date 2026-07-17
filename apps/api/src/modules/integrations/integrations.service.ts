@@ -15,7 +15,9 @@ import { AuthUser } from "../auth/types/auth-user";
 import { PrismaService } from "../database/prisma.service";
 import { CreateSgpCredentialsDto } from "./dto/create-sgp-credentials.dto";
 import { TestSgpCredentialsDto, UpdateSgpCredentialsDto } from "./dto/update-sgp-credentials.dto";
+import { UpdateSgpAutoSyncDto } from "./dto/update-sgp-auto-sync.dto";
 import { SgpCredentialsService } from "./sgp/sgp-credentials.service";
+import { computeNextRunAt } from "./sgp/sgp-auto-sync.config";
 import { SgpClientService } from "./sgp/sgp-client.service";
 import { SgpRuntimeCredentials } from "./sgp/types/sgp-credentials.types";
 import { SgpDiscoveryRequest } from "./sgp/types/sgp-client.types";
@@ -263,6 +265,247 @@ export class IntegrationsService {
           ? "Sincronização completa de clientes SGP iniciada em background."
           : "Sincronização incremental de clientes SGP iniciada em background.",
     };
+  }
+
+  async getSgpAutoSyncConfig(tenantId: string, credentialId?: string) {
+    return this.sgpCredentials.getAutoSyncConfig(tenantId, credentialId);
+  }
+
+  updateSgpAutoSyncConfig(
+    tenantId: string,
+    dto: UpdateSgpAutoSyncDto,
+    credentialId?: string,
+  ) {
+    return this.sgpCredentials.updateAutoSyncConfig(tenantId, dto, credentialId);
+  }
+
+  async recoverStaleSyncRuns(maxAgeMs: number) {
+    const cutoff = new Date(Date.now() - maxAgeMs);
+    const recovered = await this.prisma.integrationSyncRun.updateMany({
+      where: {
+        operation: "sgp.sync-customers",
+        status: IntegrationSyncStatus.RUNNING,
+        startedAt: { lt: cutoff },
+      },
+      data: {
+        status: IntegrationSyncStatus.FAILED,
+        finishedAt: new Date(),
+        errorMessage: "Sincronização interrompida por timeout ou reinício do serviço.",
+      },
+    });
+
+    if (recovered.count > 0) {
+      this.logger.warn(
+        JSON.stringify({
+          event: "sgp.sync.recovered-stale-runs",
+          count: recovered.count,
+          maxAgeMs,
+        }),
+      );
+    }
+
+    return recovered.count;
+  }
+
+  async runAutomatedSgpSync(input: {
+    tenantId: string;
+    integrationId: string;
+    trigger: "cron" | "interval" | "manual";
+    retryAttempts: number;
+    retryDelayMs: number;
+    timeoutMs: number;
+  }) {
+    const lockKey = input.tenantId;
+
+    if (this.runningCustomerSyncs.has(lockKey)) {
+      await this.sgpCredentials.updateAutoSyncRuntime(input.tenantId, input.integrationId, {
+        lastRunAt: new Date().toISOString(),
+        lastStatus: "skipped",
+        lastError: "sync_already_running",
+      });
+
+      return {
+        status: "already_running" as const,
+      };
+    }
+
+    let lastError: Error | null = null;
+
+    for (let attempt = 1; attempt <= input.retryAttempts; attempt += 1) {
+      try {
+        const result = await this.withTimeout(
+          this.executeAutomatedSync(input),
+          input.timeoutMs,
+          "Tempo limite da sincronização automática SGP excedido.",
+        );
+
+        const config = await this.sgpCredentials.getAutoSyncConfig(
+          input.tenantId,
+          input.integrationId,
+        );
+
+        await this.sgpCredentials.updateAutoSyncRuntime(input.tenantId, input.integrationId, {
+          lastRunAt: new Date().toISOString(),
+          lastStatus: "completed",
+          lastError: null,
+          nextRunAt: computeNextRunAt(config),
+        });
+
+        this.logger.log(
+          JSON.stringify({
+            event: "sgp.auto-sync.completed",
+            tenantId: input.tenantId,
+            integrationId: input.integrationId,
+            trigger: input.trigger,
+            attempt,
+            runId: result.runId,
+          }),
+        );
+
+        return {
+          status: "completed" as const,
+          runId: result.runId,
+          result: result.counters,
+        };
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+
+        if (lastError.message.includes("Tempo limite")) {
+          this.runningCustomerSyncs.delete(lockKey);
+          await this.prisma.integrationSyncRun.updateMany({
+            where: {
+              tenantId: input.tenantId,
+              operation: "sgp.sync-customers",
+              status: IntegrationSyncStatus.RUNNING,
+            },
+            data: {
+              status: IntegrationSyncStatus.FAILED,
+              finishedAt: new Date(),
+              errorMessage: lastError.message,
+            },
+          });
+        }
+
+        this.logger.warn(
+          JSON.stringify({
+            event: "sgp.auto-sync.retry",
+            tenantId: input.tenantId,
+            integrationId: input.integrationId,
+            trigger: input.trigger,
+            attempt,
+            maxAttempts: input.retryAttempts,
+            error: lastError.message,
+          }),
+        );
+
+        if (attempt < input.retryAttempts) {
+          await this.sleep(input.retryDelayMs);
+        }
+      }
+    }
+
+    await this.sgpCredentials.updateAutoSyncRuntime(input.tenantId, input.integrationId, {
+      lastRunAt: new Date().toISOString(),
+      lastStatus: "failed",
+      lastError: lastError?.message ?? "Erro desconhecido.",
+    });
+
+    throw lastError ?? new Error("Falha na sincronização automática SGP.");
+  }
+
+  private buildSystemUser(tenantId: string): AuthUser {
+    return {
+      sub: "system-scheduler",
+      email: "scheduler@system.local",
+      name: "SGP Scheduler",
+      tenantId,
+      tenantName: tenantId,
+      memberId: "system-scheduler",
+      role: "System",
+    };
+  }
+
+  private async executeAutomatedSync(input: {
+    tenantId: string;
+    integrationId: string;
+    trigger: "cron" | "interval" | "manual";
+  }) {
+    const lockKey = input.tenantId;
+
+    if (this.runningCustomerSyncs.has(lockKey)) {
+      throw new Error("Uma sincronização SGP já está em execução para este tenant.");
+    }
+
+    this.runningCustomerSyncs.add(lockKey);
+
+    const run = await this.prisma.integrationSyncRun.create({
+      data: {
+        tenantId: input.tenantId,
+        operation: "sgp.sync-customers",
+        status: IntegrationSyncStatus.RUNNING,
+        metadata: this.toJsonValue({
+          syncMode: "incremental",
+          trigger: input.trigger,
+          automated: true,
+          integrationId: input.integrationId,
+        }),
+      },
+    });
+
+    await this.sgpCredentials.updateAutoSyncRuntime(input.tenantId, input.integrationId, {
+      lastRunAt: new Date().toISOString(),
+      lastStatus: "running",
+      lastError: null,
+    });
+
+    try {
+      const counters = await this.processSgpCustomers(
+        this.buildSystemUser(input.tenantId),
+        {
+          credentialId: input.integrationId,
+        },
+        run.id,
+      );
+
+      return { runId: run.id, counters };
+    } finally {
+      this.runningCustomerSyncs.delete(lockKey);
+    }
+  }
+
+  private async withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
+    let timeoutHandle: NodeJS.Timeout | undefined;
+
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<T>((_, reject) => {
+          timeoutHandle = setTimeout(() => reject(new Error(message)), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+    }
+  }
+
+  private sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async triggerManualAutoSync(tenantId: string) {
+    const integration = await this.sgpCredentials.getAutoSyncIntegration(tenantId);
+    const config = await this.sgpCredentials.getAutoSyncConfig(tenantId, integration.id);
+
+    return this.runAutomatedSgpSync({
+      tenantId,
+      integrationId: integration.id,
+      trigger: "manual",
+      retryAttempts: config.retryAttempts,
+      retryDelayMs: config.retryDelayMs,
+      timeoutMs: config.timeoutMs,
+    });
   }
 
   getSgpSyncStatus(tenantId: string) {

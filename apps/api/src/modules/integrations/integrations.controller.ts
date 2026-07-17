@@ -6,12 +6,14 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from "@nestjs/common";
 import { CurrentUser } from "../auth/current-user.decorator";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { AuthUser } from "../auth/types/auth-user";
 import { CreateSgpCredentialsDto } from "./dto/create-sgp-credentials.dto";
+import { UpdateSgpAutoSyncDto } from "./dto/update-sgp-auto-sync.dto";
 import { TestSgpCredentialsDto, UpdateSgpCredentialsDto } from "./dto/update-sgp-credentials.dto";
 import { IntegrationsService } from "./integrations.service";
 import { SgpDiscoveryRequest } from "./sgp/types/sgp-client.types";
@@ -68,6 +70,27 @@ export class IntegrationsController {
     @Body() body: TestSgpCredentialsDto,
   ) {
     return this.integrationsService.testSgpCredentials(user, body);
+  }
+
+  @Get("sgp/auto-sync")
+  getSgpAutoSync(
+    @CurrentUser() user: AuthUser,
+    @Query("credentialId") credentialId?: string,
+  ) {
+    return this.integrationsService.getSgpAutoSyncConfig(user.tenantId, credentialId);
+  }
+
+  @Patch("sgp/auto-sync")
+  updateSgpAutoSync(
+    @CurrentUser() user: AuthUser,
+    @Body() body: UpdateSgpAutoSyncDto,
+  ) {
+    return this.integrationsService.updateSgpAutoSyncConfig(user.tenantId, body);
+  }
+
+  @Post("sgp/auto-sync/run")
+  runSgpAutoSync(@CurrentUser() user: AuthUser) {
+    return this.integrationsService.triggerManualAutoSync(user.tenantId);
   }
 
   @Post("sgp/test-auth")

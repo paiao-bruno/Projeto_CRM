@@ -24,6 +24,14 @@ import {
   readSgpSyncState,
   SgpSyncState,
 } from "./sgp-sync.utils";
+import {
+  computeNextRunAt,
+  mergeAutoSyncConfig,
+  readAutoSyncConfig,
+  readEnvAutoSyncDefaults,
+} from "./sgp-auto-sync.config";
+import { SgpAutoSyncConfig, SgpAutoSyncRuntimeUpdate } from "./sgp-auto-sync.types";
+import { UpdateSgpAutoSyncDto } from "../dto/update-sgp-auto-sync.dto";
 
 const DEFAULT_SGP_NAME = "SGP";
 
@@ -222,6 +230,96 @@ export class SgpCredentialsService {
       : await this.findActiveIntegration(tenantId);
 
     return integration.id;
+  }
+
+  async getAutoSyncConfig(tenantId: string, credentialId?: string) {
+    try {
+      const integration = await this.getAutoSyncIntegration(tenantId, credentialId);
+      return readAutoSyncConfig(integration.config, readEnvAutoSyncDefaults(process.env));
+    } catch {
+      return readAutoSyncConfig(null, readEnvAutoSyncDefaults(process.env));
+    }
+  }
+
+  async updateAutoSyncConfig(
+    tenantId: string,
+    dto: UpdateSgpAutoSyncDto,
+    credentialId?: string,
+  ) {
+    const integration = credentialId
+      ? await this.findIntegrationOrThrow(tenantId, credentialId)
+      : await this.findActiveIntegration(tenantId);
+
+    const current = readAutoSyncConfig(integration.config, readEnvAutoSyncDefaults(process.env));
+    const next: SgpAutoSyncConfig = {
+      ...current,
+      ...dto,
+      nextRunAt:
+        computeNextRunAt({
+          ...current,
+          ...dto,
+          enabled: dto.enabled ?? current.enabled,
+          intervalMinutes: dto.intervalMinutes ?? current.intervalMinutes,
+        }) ?? undefined,
+    };
+
+    await this.prisma.integration.update({
+      where: { id: integration.id },
+      data: {
+        config: mergeAutoSyncConfig(integration.config, next),
+      },
+    });
+
+    return next;
+  }
+
+  async updateAutoSyncRuntime(
+    tenantId: string,
+    integrationId: string,
+    update: SgpAutoSyncRuntimeUpdate,
+  ) {
+    const integration = await this.findIntegrationOrThrow(tenantId, integrationId);
+    const current = readAutoSyncConfig(integration.config, readEnvAutoSyncDefaults(process.env));
+
+    await this.prisma.integration.update({
+      where: { id: integration.id },
+      data: {
+        config: mergeAutoSyncConfig(integration.config, {
+          ...current,
+          lastRunAt: update.lastRunAt,
+          lastStatus: update.lastStatus,
+          lastError: update.lastError ?? undefined,
+          nextRunAt: update.nextRunAt ?? undefined,
+        }),
+      },
+    });
+  }
+
+  async listAutoSyncCandidates() {
+    const integrations = await this.prisma.integration.findMany({
+      where: {
+        provider: IntegrationProvider.SGP,
+        status: {
+          in: [IntegrationStatus.ACTIVE, IntegrationStatus.DEGRADED, IntegrationStatus.CONNECTING],
+        },
+      },
+      orderBy: [{ tenantId: "asc" }, { updatedAt: "desc" }],
+    });
+
+    const seenTenants = new Set<string>();
+    return integrations.filter((integration) => {
+      if (seenTenants.has(integration.tenantId)) {
+        return false;
+      }
+      seenTenants.add(integration.tenantId);
+      return true;
+    });
+  }
+
+  async getAutoSyncIntegration(tenantId: string, credentialId?: string) {
+    return credentialId
+      ? this.findIntegrationOrThrow(tenantId, credentialId)
+      : this.findActiveIntegration(tenantId);
   }
 
   private async findActiveIntegration(tenantId: string) {
