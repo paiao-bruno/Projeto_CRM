@@ -19,6 +19,11 @@ import {
   SgpIntegrationSecrets,
   SgpRuntimeCredentials,
 } from "./types/sgp-credentials.types";
+import {
+  mergeSgpSyncState,
+  readSgpSyncState,
+  SgpSyncState,
+} from "./sgp-sync.utils";
 
 const DEFAULT_SGP_NAME = "SGP";
 
@@ -184,6 +189,60 @@ export class SgpCredentialsService {
         status: input.success ? IntegrationStatus.ACTIVE : IntegrationStatus.ERROR,
       },
     });
+  }
+
+  async getSyncState(tenantId: string, credentialId?: string): Promise<SgpSyncState> {
+    const integration = credentialId
+      ? await this.findIntegrationOrThrow(tenantId, credentialId)
+      : await this.findActiveIntegration(tenantId);
+
+    return readSgpSyncState(integration.config);
+  }
+
+  async updateSyncState(
+    tenantId: string,
+    credentialId: string | undefined,
+    syncState: SgpSyncState,
+  ) {
+    const integration = credentialId
+      ? await this.findIntegrationOrThrow(tenantId, credentialId)
+      : await this.findActiveIntegration(tenantId);
+
+    await this.prisma.integration.update({
+      where: { id: integration.id },
+      data: {
+        config: mergeSgpSyncState(integration.config, syncState),
+      },
+    });
+  }
+
+  async resolveIntegrationId(tenantId: string, credentialId?: string) {
+    const integration = credentialId
+      ? await this.findIntegrationOrThrow(tenantId, credentialId)
+      : await this.findActiveIntegration(tenantId);
+
+    return integration.id;
+  }
+
+  private async findActiveIntegration(tenantId: string) {
+    const integration = await this.prisma.integration.findFirst({
+      where: {
+        tenantId,
+        provider: IntegrationProvider.SGP,
+        status: {
+          in: [IntegrationStatus.ACTIVE, IntegrationStatus.DEGRADED, IntegrationStatus.CONNECTING],
+        },
+      },
+      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+    });
+
+    if (!integration) {
+      throw new BadRequestException(
+        "Nenhuma credencial SGP ativa foi configurada para esta empresa.",
+      );
+    }
+
+    return integration;
   }
 
   private async findIntegrationOrThrow(tenantId: string, id: string) {

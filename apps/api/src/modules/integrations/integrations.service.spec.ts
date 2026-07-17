@@ -23,6 +23,10 @@ function createSgpCredentialsMock() {
   return {
     resolveActiveCredentials: async () => credentials,
     resolveCredentialsById: async () => credentials,
+    getSyncState: async () => ({
+      lastSuccessfulSyncAt: "2026-07-17T10:00:00.000Z",
+    }),
+    updateSyncState: async () => undefined,
     list: async () => [],
     get: async () => ({}),
     create: async () => ({}),
@@ -40,6 +44,9 @@ function createPrismaMock() {
         ...data,
       }),
       update: async ({ data }: { data: Record<string, unknown> }) => data,
+      findFirst: async () => ({
+        finishedAt: new Date("2026-07-17T10:00:00.000Z"),
+      }),
     },
     integrationSyncLog: {
       rows: [] as unknown[],
@@ -115,9 +122,9 @@ describe("IntegrationsService", () => {
           if (calls.length === 1) {
             return {
               body: {
-                clientes: [{ id: "1", nome: "Cliente A", cpfcnpj: "111" }],
-                contratos: [{ id: "c1", cliente_id: "1", status: "ATIVO" }],
-                titulos: [{ id: "t1", cliente_id: "1", valor: "10,00", status: "ABERTO" }],
+                clientes: [{ id: "1", nome: "Cliente A", cpfcnpj: "111", data_alteracao: "17/07/2026 11:00:00" }],
+                contratos: [{ id: "c1", cliente_id: "1", status: "ATIVO", data_alteracao: "17/07/2026 11:00:00" }],
+                titulos: [{ id: "t1", cliente_id: "1", valor: "10,00", status: "ABERTO", data_alteracao: "17/07/2026 11:00:00" }],
                 offset: 0,
                 limit: 1,
                 parcial: 1,
@@ -127,7 +134,7 @@ describe("IntegrationsService", () => {
           }
           return {
             body: {
-              clientes: [{ id: "2", nome: "Cliente B", cpfcnpj: "222" }],
+              clientes: [{ id: "2", nome: "Cliente B", cpfcnpj: "222", data_alteracao: "17/07/2026 11:00:00" }],
               offset: 1,
               limit: 1,
               parcial: 1,
@@ -161,6 +168,7 @@ describe("IntegrationsService", () => {
         ) => Promise<{
           processed: number;
           created: number;
+          unchanged: number;
           contractsCreated: number;
           invoicesCreated: number;
         }>;
@@ -169,10 +177,70 @@ describe("IntegrationsService", () => {
 
     assert.equal(result.processed, 2);
     assert.equal(result.created, 2);
+    assert.equal(result.unchanged, 0);
     assert.equal(result.contractsCreated, 1);
     assert.equal(result.invoicesCreated, 1);
     assert.equal(calls.length, 2);
+    assert.ok((calls[0] as Record<string, unknown>).alterado_desde);
     assert.ok(prisma.integrationSyncLog.rows.length >= 4);
+  });
+
+  it("skips unchanged records during incremental sync", async () => {
+    const prisma = createPrismaMock();
+    const service = new IntegrationsService(
+      {
+        discoverCustomers: async () => ({
+          body: {
+            clientes: [
+              {
+                id: "1",
+                nome: "Cliente A",
+                cpfcnpj: "111",
+                data_alteracao: "17/07/2026 09:00:00",
+              },
+              {
+                id: "2",
+                nome: "Cliente B",
+                cpfcnpj: "222",
+                data_alteracao: "17/07/2026 11:00:00",
+              },
+            ],
+          },
+        }),
+      } as never,
+      createSgpCredentialsMock() as never,
+      {
+        async upsertFromExternalSource(
+          _tenantId: string,
+          _memberId: string,
+          input: { externalId?: string },
+        ) {
+          return {
+            operation: "created" as const,
+            customer: { id: `customer-${input.externalId}` },
+          };
+        },
+      } as never,
+      prisma as never,
+    );
+
+    const result = await (
+      service as unknown as {
+        processSgpCustomers: (
+          userArg: typeof user,
+          request: { pagination: { offset: number; limit: number } },
+          runId: string,
+        ) => Promise<{
+          processed: number;
+          created: number;
+          unchanged: number;
+        }>;
+      }
+    ).processSgpCustomers(user, { pagination: { offset: 0, limit: 10 } }, "run-id");
+
+    assert.equal(result.processed, 2);
+    assert.equal(result.created, 1);
+    assert.equal(result.unchanged, 1);
   });
 
   it("records skipped runs when another sync is running", async () => {

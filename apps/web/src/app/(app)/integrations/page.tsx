@@ -99,6 +99,7 @@ export default function IntegrationsPage() {
   const [selectedCredentialId, setSelectedCredentialId] = useState<string>("");
   const [form, setForm] = useState<CredentialFormState>(emptyForm);
   const [isCreating, setIsCreating] = useState(true);
+  const [fullSync, setFullSync] = useState(false);
 
   const selectedCredential = useMemo(
     () => credentials.find((item) => item.id === selectedCredentialId) ?? null,
@@ -283,6 +284,7 @@ export default function IntegrationsPage() {
         {
           pagination: { offset: 0, limit: 100 },
           credentialId: selectedCredentialId || undefined,
+          full: fullSync,
         },
         token,
       );
@@ -508,7 +510,7 @@ export default function IntegrationsPage() {
                 ["Processados", currentRun.processed],
                 ["Criados", currentRun.created],
                 ["Atualizados", currentRun.updated],
-                ["Ignorados", currentRun.ignored],
+                ["Sem alteração", currentRun.ignored],
                 ["Erros", currentRun.errorsCount],
               ].map(([label, value]) => (
                 <div className="rounded-2xl border border-slate-800 bg-slate-950/50 p-4" key={label as string}>
@@ -517,6 +519,14 @@ export default function IntegrationsPage() {
                 </div>
               ))}
             </div>
+            {currentRun.metadata?.syncMode ? (
+              <p className="text-sm text-slate-400">
+                Modo: {currentRun.metadata.syncMode}
+                {currentRun.metadata.watermark
+                  ? ` · watermark ${new Date(currentRun.metadata.watermark).toLocaleString()}`
+                  : ""}
+              </p>
+            ) : null}
             {currentRun.errorMessage ? (
               <div className="rounded-2xl bg-red-500/10 p-4 text-red-200">
                 {currentRun.errorMessage}
@@ -558,6 +568,14 @@ export default function IntegrationsPage() {
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
+                <label className="flex items-center gap-2 rounded-xl border border-slate-800 px-3 py-2 text-sm text-slate-300">
+                  <input
+                    checked={fullSync}
+                    onChange={(event) => setFullSync(event.target.checked)}
+                    type="checkbox"
+                  />
+                  Sincronização completa
+                </label>
                 <Button disabled={Boolean(loadingAction) || credentials.length === 0} variant="secondary" onClick={testSgp}>
                   <Search size={16} />
                   Test Connection

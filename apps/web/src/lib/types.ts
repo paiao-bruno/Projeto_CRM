@@ -121,9 +121,11 @@ export type IntegrationSyncRun = {
   errorsCount: number;
   errorMessage?: string | null;
   metadata?: {
-    customers?: { created: number; updated: number };
-    contracts?: { created: number; updated: number };
-    invoices?: { created: number; updated: number };
+    syncMode?: "incremental" | "full";
+    watermark?: string | null;
+    customers?: { created: number; updated: number; unchanged?: number };
+    contracts?: { created: number; updated: number; unchanged?: number };
+    invoices?: { created: number; updated: number; unchanged?: number };
     errors?: Array<{ index: number; message: string }>;
   } | null;
   logs?: IntegrationSyncLog[];

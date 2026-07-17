@@ -1,6 +1,11 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { CustomerStatus, Prisma } from "@prisma/client";
 import { PrismaService } from "../database/prisma.service";
+import {
+  hashCustomerInput,
+  readSgpContentHash,
+  withSgpContentHash,
+} from "../integrations/sgp/sgp-sync.utils";
 import { CreateCustomerDto } from "./dto/create-customer.dto";
 import { UpdateCustomerDto } from "./dto/update-customer.dto";
 
@@ -139,6 +144,7 @@ export class CustomersService {
       },
     });
 
+    const contentHash = hashCustomerInput(input);
     const data = {
       ownerMemberId,
       name: input.name,
@@ -149,10 +155,17 @@ export class CustomersService {
       ispAccountCode: input.externalId,
       planName: input.planName,
       address: input.address,
-      metadata: input.metadata,
+      metadata: withSgpContentHash(input.metadata, contentHash),
     };
 
     if (existing) {
+      if (readSgpContentHash(existing.metadata) === contentHash) {
+        return {
+          operation: "unchanged" as const,
+          customer: existing,
+        };
+      }
+
       return {
         operation: "updated" as const,
         customer: await this.prisma.customer.update({

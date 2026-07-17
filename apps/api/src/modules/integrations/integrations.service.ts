@@ -19,6 +19,16 @@ import { SgpCredentialsService } from "./sgp/sgp-credentials.service";
 import { SgpClientService } from "./sgp/sgp-client.service";
 import { SgpRuntimeCredentials } from "./sgp/types/sgp-credentials.types";
 import { SgpDiscoveryRequest } from "./sgp/types/sgp-client.types";
+import {
+  buildSgpIncrementalFilters,
+  hashContractPayload,
+  hashInvoicePayload,
+  isChangedSince,
+  readSgpContentHash,
+  SgpIncrementalContext,
+  SgpSyncMode,
+  withSgpContentHash,
+} from "./sgp/sgp-sync.utils";
 
 type SgpCustomerMapping = {
   customer: ExternalCustomerInput;
@@ -30,12 +40,17 @@ type SyncCounters = {
   processed: number;
   created: number;
   updated: number;
+  unchanged: number;
   contractsCreated: number;
   contractsUpdated: number;
+  contractsUnchanged: number;
   invoicesCreated: number;
   invoicesUpdated: number;
+  invoicesUnchanged: number;
   ignored: number;
   errors: Array<{ index: number; message: string }>;
+  syncMode: SgpSyncMode;
+  watermark?: string | null;
 };
 
 @Injectable()
@@ -189,6 +204,7 @@ export class IntegrationsService {
     }
 
     this.runningCustomerSyncs.add(lockKey);
+    const syncMode = this.resolveSyncMode(request);
     const run = await this.prisma.integrationSyncRun.create({
       data: {
         tenantId: user.tenantId,
@@ -196,6 +212,10 @@ export class IntegrationsService {
         operation: "sgp.sync-customers",
         status: IntegrationSyncStatus.RUNNING,
         cursor: this.toJsonValue(request.pagination),
+        metadata: this.toJsonValue({
+          syncMode,
+          credentialId: request.credentialId,
+        }),
       },
     });
 
@@ -227,7 +247,10 @@ export class IntegrationsService {
     return {
       status: "started",
       runId: run.id,
-      message: "Sincronização de clientes SGP iniciada em background.",
+      message:
+        syncMode === "full"
+          ? "Sincronização completa de clientes SGP iniciada em background."
+          : "Sincronização incremental de clientes SGP iniciada em background.",
     };
   }
 
@@ -290,27 +313,34 @@ export class IntegrationsService {
     runId?: string,
   ) {
     const credentials = await this.resolveSgpCredentials(user.tenantId, request.credentialId, request);
+    const incrementalContext = await this.resolveIncrementalContext(
+      user.tenantId,
+      request,
+    );
     const startedAt = Date.now();
     const result: SyncCounters = {
       processed: 0,
       created: 0,
       updated: 0,
+      unchanged: 0,
       contractsCreated: 0,
       contractsUpdated: 0,
+      contractsUnchanged: 0,
       invoicesCreated: 0,
       invoicesUpdated: 0,
+      invoicesUnchanged: 0,
       ignored: 0,
       errors: [] as Array<{ index: number; message: string }>,
+      syncMode: incrementalContext.mode,
+      watermark: incrementalContext.since?.toISOString() ?? null,
     };
-    let pageIndex = 0;
     let pagination = request.pagination;
 
     try {
       while (true) {
-        pageIndex += 1;
         const response = await this.sgpClient.discoverCustomers(
           credentials,
-          this.buildDiscoveryPayload({ ...request, pagination }),
+          this.buildSyncPayload(request, incrementalContext, pagination),
         );
         this.assertCustomerDiscoveryResponse(response.body, request.endpoint);
         const rawCustomers = this.extractCustomers(response.body);
@@ -319,6 +349,26 @@ export class IntegrationsService {
         for (const [index, rawCustomer] of rawCustomers.entries()) {
           const globalIndex = result.processed - rawCustomers.length + index;
           try {
+            if (
+              incrementalContext.mode === "incremental" &&
+              incrementalContext.since &&
+              !isChangedSince(rawCustomer, incrementalContext.since)
+            ) {
+              result.unchanged += 1;
+              if (runId) {
+                await this.createSyncLog({
+                  tenantId: user.tenantId,
+                  runId,
+                  entity: IntegrationSyncEntity.CUSTOMER,
+                  externalId: this.firstString(rawCustomer, ["id", "cliente_id", "codigo"]),
+                  action: "unchanged",
+                  status: IntegrationSyncStatus.SKIPPED,
+                  message: "Registro inalterado desde a última sincronização.",
+                });
+              }
+              continue;
+            }
+
             const mapped = this.mapSgpCustomer(rawCustomer);
 
             if (!mapped.customer.externalId && !mapped.customer.document) {
@@ -347,8 +397,10 @@ export class IntegrationsService {
 
             if (upsert.operation === "created") {
               result.created += 1;
-            } else {
+            } else if (upsert.operation === "updated") {
               result.updated += 1;
+            } else {
+              result.unchanged += 1;
             }
             if (runId) {
               await this.createSyncLog({
@@ -357,7 +409,10 @@ export class IntegrationsService {
                 entity: IntegrationSyncEntity.CUSTOMER,
                 externalId: mapped.customer.externalId ?? mapped.customer.document,
                 action: upsert.operation,
-                status: IntegrationSyncStatus.COMPLETED,
+                status:
+                  upsert.operation === "unchanged"
+                    ? IntegrationSyncStatus.SKIPPED
+                    : IntegrationSyncStatus.COMPLETED,
                 metadata: this.toJsonValue({ customerId: upsert.customer.id }),
               });
             }
@@ -367,18 +422,22 @@ export class IntegrationsService {
               upsert.customer.id,
               mapped.contracts,
               runId,
+              incrementalContext,
             );
             result.contractsCreated += contractUpserts.created;
             result.contractsUpdated += contractUpserts.updated;
+            result.contractsUnchanged += contractUpserts.unchanged;
 
             const invoiceUpserts = await this.upsertInvoices(
               user.tenantId,
               upsert.customer.id,
               mapped.invoices,
               runId,
+              incrementalContext,
             );
             result.invoicesCreated += invoiceUpserts.created;
             result.invoicesUpdated += invoiceUpserts.updated;
+            result.invoicesUnchanged += invoiceUpserts.unchanged;
           } catch (error) {
             result.ignored += 1;
             const message = error instanceof Error ? error.message : "Erro inesperado.";
@@ -423,6 +482,12 @@ export class IntegrationsService {
         finalResult.durationMs,
         { cursor: pagination },
       );
+
+      await this.sgpCredentials.updateSyncState(user.tenantId, request.credentialId, {
+        lastSuccessfulSyncAt: new Date().toISOString(),
+        lastSyncMode: incrementalContext.mode,
+        lastSyncRunId: runId,
+      });
     }
 
     this.logger.log(
@@ -514,22 +579,31 @@ export class IntegrationsService {
         processed: counters.processed,
         created: counters.created + counters.contractsCreated + counters.invoicesCreated,
         updated: counters.updated + counters.contractsUpdated + counters.invoicesUpdated,
-        ignored: counters.ignored,
+        ignored:
+          counters.ignored +
+          counters.unchanged +
+          counters.contractsUnchanged +
+          counters.invoicesUnchanged,
         errorsCount: counters.errors.length,
         cursor: this.toJsonValue(options.cursor),
         errorMessage: options.errorMessage,
         metadata: this.toJsonValue({
+          syncMode: counters.syncMode,
+          watermark: counters.watermark,
           customers: {
             created: counters.created,
             updated: counters.updated,
+            unchanged: counters.unchanged,
           },
           contracts: {
             created: counters.contractsCreated,
             updated: counters.contractsUpdated,
+            unchanged: counters.contractsUnchanged,
           },
           invoices: {
             created: counters.invoicesCreated,
             updated: counters.invoicesUpdated,
+            unchanged: counters.invoicesUnchanged,
           },
           errors: counters.errors.slice(0, 100),
         }),
@@ -661,6 +735,64 @@ export class IntegrationsService {
       ...(request.payload ?? {}),
       ...(request.filters ?? {}),
       ...(request.pagination ?? {}),
+    };
+  }
+
+  private buildSyncPayload(
+    request: SgpDiscoveryRequest,
+    incrementalContext: SgpIncrementalContext,
+    pagination?: Record<string, unknown>,
+  ) {
+    return {
+      ...(request.payload ?? {}),
+      ...(request.filters ?? {}),
+      ...(pagination ?? request.pagination ?? {}),
+      ...(incrementalContext.mode === "incremental" ? incrementalContext.sgpFilters : {}),
+    };
+  }
+
+  private resolveSyncMode(request: SgpDiscoveryRequest): SgpSyncMode {
+    if (request.full === true || request.mode === "full") {
+      return "full";
+    }
+
+    return "incremental";
+  }
+
+  private async resolveIncrementalContext(
+    tenantId: string,
+    request: SgpDiscoveryRequest,
+  ): Promise<SgpIncrementalContext> {
+    const mode = this.resolveSyncMode(request);
+
+    if (mode === "full") {
+      return {
+        mode,
+        since: null,
+        sgpFilters: {},
+      };
+    }
+
+    const storedState = await this.sgpCredentials.getSyncState(tenantId, request.credentialId);
+    const lastRun = await this.prisma.integrationSyncRun.findFirst({
+      where: {
+        tenantId,
+        operation: "sgp.sync-customers",
+        status: {
+          in: [IntegrationSyncStatus.COMPLETED, IntegrationSyncStatus.PARTIAL],
+        },
+      },
+      orderBy: { finishedAt: "desc" },
+    });
+
+    const since = storedState.lastSuccessfulSyncAt
+      ? new Date(storedState.lastSuccessfulSyncAt)
+      : lastRun?.finishedAt ?? lastRun?.startedAt ?? null;
+
+    return {
+      mode,
+      since,
+      sgpFilters: buildSgpIncrementalFilters(since),
     };
   }
 
@@ -810,31 +942,73 @@ export class IntegrationsService {
     customerId: string,
     contracts: Array<Record<string, unknown>>,
     runId?: string,
+    incrementalContext?: SgpIncrementalContext,
   ) {
-    const result = { created: 0, updated: 0 };
+    const result = { created: 0, updated: 0, unchanged: 0 };
 
     for (const contract of contracts) {
       const externalId = this.contractExternalId(contract);
       if (!externalId) continue;
 
+      if (
+        incrementalContext?.mode === "incremental" &&
+        incrementalContext.since &&
+        !isChangedSince(contract, incrementalContext.since)
+      ) {
+        result.unchanged += 1;
+        if (runId) {
+          await this.createSyncLog({
+            tenantId,
+            runId,
+            entity: IntegrationSyncEntity.CONTRACT,
+            externalId,
+            action: "unchanged",
+            status: IntegrationSyncStatus.SKIPPED,
+          });
+        }
+        continue;
+      }
+
       const service = this.firstRecord(contract, ["servico", "serviço", "servicos", "serviços"]);
-      const data = {
+      const payload = {
         customerId,
         status: this.mapContractStatus(contract, service),
         planName: this.extractPlanName(service) ?? this.firstString(contract, ["plano", "plano_nome", "nome_plano"]),
         serviceLogin: this.firstString(service, ["login", "usuario", "usuário", "pppoe"]),
         address: this.mapAddress({}, contract, service),
-        metadata: this.toJsonValue({
-          source: "SGP",
-          importedAt: new Date().toISOString(),
-          raw: contract,
-        }),
         startedAt: this.parseDate(this.firstString(contract, ["data_inicio", "data_instalacao", "data_ativacao"])),
         endedAt: this.parseDate(this.firstString(contract, ["data_fim", "data_cancelamento"])),
       };
+      const contentHash = hashContractPayload(payload);
       const existing = await this.prisma.contract.findUnique({
         where: { tenantId_externalId: { tenantId, externalId } },
       });
+
+      if (existing && readSgpContentHash(existing.metadata) === contentHash) {
+        result.unchanged += 1;
+        if (runId) {
+          await this.createSyncLog({
+            tenantId,
+            runId,
+            entity: IntegrationSyncEntity.CONTRACT,
+            externalId,
+            action: "unchanged",
+            status: IntegrationSyncStatus.SKIPPED,
+          });
+        }
+        continue;
+      }
+
+      const data = {
+        ...payload,
+        metadata: withSgpContentHash(
+          this.toJsonValue({
+            source: "SGP",
+            raw: contract,
+          }),
+          contentHash,
+        ),
+      };
 
       if (existing) {
         await this.prisma.contract.update({
@@ -882,12 +1056,32 @@ export class IntegrationsService {
     customerId: string,
     invoices: Array<Record<string, unknown>>,
     runId?: string,
+    incrementalContext?: SgpIncrementalContext,
   ) {
-    const result = { created: 0, updated: 0 };
+    const result = { created: 0, updated: 0, unchanged: 0 };
 
     for (const invoice of invoices) {
       const externalId = this.invoiceExternalId(invoice);
       if (!externalId) continue;
+
+      if (
+        incrementalContext?.mode === "incremental" &&
+        incrementalContext.since &&
+        !isChangedSince(invoice, incrementalContext.since)
+      ) {
+        result.unchanged += 1;
+        if (runId) {
+          await this.createSyncLog({
+            tenantId,
+            runId,
+            entity: IntegrationSyncEntity.INVOICE,
+            externalId,
+            action: "unchanged",
+            status: IntegrationSyncStatus.SKIPPED,
+          });
+        }
+        continue;
+      }
 
       const contractExternalId = this.firstString(invoice, [
         "contrato",
@@ -905,7 +1099,7 @@ export class IntegrationsService {
             },
           })
         : null;
-      const data = {
+      const payload = {
         customerId,
         contractId: contract?.id,
         status: this.mapInvoiceStatus(invoice),
@@ -914,15 +1108,37 @@ export class IntegrationsService {
         ),
         dueDate: this.parseDate(this.firstString(invoice, ["vencimento", "data_vencimento", "dueDate"])),
         paidAt: this.parseDate(this.firstString(invoice, ["pagamento", "data_pagamento", "paidAt"])),
-        metadata: this.toJsonValue({
-          source: "SGP",
-          importedAt: new Date().toISOString(),
-          raw: invoice,
-        }),
       };
+      const contentHash = hashInvoicePayload(payload);
       const existing = await this.prisma.invoice.findUnique({
         where: { tenantId_externalId: { tenantId, externalId } },
       });
+
+      if (existing && readSgpContentHash(existing.metadata) === contentHash) {
+        result.unchanged += 1;
+        if (runId) {
+          await this.createSyncLog({
+            tenantId,
+            runId,
+            entity: IntegrationSyncEntity.INVOICE,
+            externalId,
+            action: "unchanged",
+            status: IntegrationSyncStatus.SKIPPED,
+          });
+        }
+        continue;
+      }
+
+      const data = {
+        ...payload,
+        metadata: withSgpContentHash(
+          this.toJsonValue({
+            source: "SGP",
+            raw: invoice,
+          }),
+          contentHash,
+        ),
+      };
 
       if (existing) {
         await this.prisma.invoice.update({

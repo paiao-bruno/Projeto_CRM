@@ -4,6 +4,8 @@ export type SgpDiscoveryRequest = {
   payload?: Record<string, unknown>;
   filters?: Record<string, unknown>;
   pagination?: Record<string, unknown>;
+  full?: boolean;
+  mode?: "incremental" | "full";
 };
 
 export type SgpHttpResponse = {
