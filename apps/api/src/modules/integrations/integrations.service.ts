@@ -1,4 +1,4 @@
-import { BadGatewayException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { BadGatewayException, BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import {
   ContractStatus,
   CustomerStatus,
@@ -13,7 +13,11 @@ import {
 } from "../customers/customers.service";
 import { AuthUser } from "../auth/types/auth-user";
 import { PrismaService } from "../database/prisma.service";
+import { CreateSgpCredentialsDto } from "./dto/create-sgp-credentials.dto";
+import { TestSgpCredentialsDto, UpdateSgpCredentialsDto } from "./dto/update-sgp-credentials.dto";
+import { SgpCredentialsService } from "./sgp/sgp-credentials.service";
 import { SgpClientService } from "./sgp/sgp-client.service";
+import { SgpRuntimeCredentials } from "./sgp/types/sgp-credentials.types";
 import { SgpDiscoveryRequest } from "./sgp/types/sgp-client.types";
 
 type SgpCustomerMapping = {
@@ -41,20 +45,98 @@ export class IntegrationsService {
 
   constructor(
     private readonly sgpClient: SgpClientService,
+    private readonly sgpCredentials: SgpCredentialsService,
     private readonly customersService: CustomersService,
     private readonly prisma: PrismaService,
   ) {}
 
-  async testSgpAuth(request: SgpDiscoveryRequest = {}) {
-    const response = await this.sgpClient.testAuth(
-      request.payload,
-      request.endpoint,
-    );
-    return response.body;
+  listSgpCredentials(tenantId: string) {
+    return this.sgpCredentials.list(tenantId);
+  }
+
+  getSgpCredentials(tenantId: string, id: string) {
+    return this.sgpCredentials.get(tenantId, id);
+  }
+
+  createSgpCredentials(tenantId: string, dto: CreateSgpCredentialsDto) {
+    return this.sgpCredentials.create(tenantId, dto);
+  }
+
+  updateSgpCredentials(tenantId: string, id: string, dto: UpdateSgpCredentialsDto) {
+    return this.sgpCredentials.update(tenantId, id, dto);
+  }
+
+  removeSgpCredentials(tenantId: string, id: string) {
+    return this.sgpCredentials.remove(tenantId, id);
+  }
+
+  async testSgpAuth(user: AuthUser, request: SgpDiscoveryRequest = {}, credentialId?: string) {
+    const credentials = await this.resolveSgpCredentials(user.tenantId, credentialId, request);
+
+    try {
+      const response = await this.sgpClient.testAuth(
+        credentials,
+        request.payload,
+        request.endpoint,
+      );
+
+      if (credentialId) {
+        await this.sgpCredentials.markConnectionResult(user.tenantId, credentialId, {
+          success: true,
+        });
+      }
+
+      return response.body;
+    } catch (error) {
+      if (credentialId) {
+        await this.sgpCredentials.markConnectionResult(user.tenantId, credentialId, {
+          success: false,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      throw error;
+    }
+  }
+
+  async testSgpCredentials(user: AuthUser, dto: TestSgpCredentialsDto, credentialId?: string) {
+    const runtimeCredentials = credentialId
+      ? await this.buildTestCredentials(user.tenantId, credentialId, dto)
+      : this.buildInlineTestCredentials(dto);
+
+    try {
+      const response = await this.sgpClient.testAuth(
+        runtimeCredentials,
+        {},
+        dto.endpoint,
+      );
+
+      if (credentialId) {
+        await this.sgpCredentials.markConnectionResult(user.tenantId, credentialId, {
+          success: true,
+        });
+      }
+
+      return {
+        ok: true,
+        body: response.body,
+      };
+    } catch (error) {
+      if (credentialId) {
+        await this.sgpCredentials.markConnectionResult(user.tenantId, credentialId, {
+          success: false,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      throw error;
+    }
   }
 
   async discoverSgpCustomers(user: AuthUser, request: SgpDiscoveryRequest = {}) {
+    const credentials = await this.resolveSgpCredentials(user.tenantId, request.credentialId, request);
     const response = await this.sgpClient.discoverCustomers(
+      credentials,
       this.buildDiscoveryPayload(request),
     );
     this.assertCustomerDiscoveryResponse(response.body, request.endpoint);
@@ -207,6 +289,7 @@ export class IntegrationsService {
     request: SgpDiscoveryRequest = {},
     runId?: string,
   ) {
+    const credentials = await this.resolveSgpCredentials(user.tenantId, request.credentialId, request);
     const startedAt = Date.now();
     const result: SyncCounters = {
       processed: 0,
@@ -226,6 +309,7 @@ export class IntegrationsService {
       while (true) {
         pageIndex += 1;
         const response = await this.sgpClient.discoverCustomers(
+          credentials,
           this.buildDiscoveryPayload({ ...request, pagination }),
         );
         this.assertCustomerDiscoveryResponse(response.body, request.endpoint);
@@ -352,12 +436,66 @@ export class IntegrationsService {
     return finalResult;
   }
 
-  async debugSgp(request: SgpDiscoveryRequest) {
+  async debugSgp(user: AuthUser, request: SgpDiscoveryRequest) {
+    const credentials = await this.resolveSgpCredentials(user.tenantId, request.credentialId, request);
     const response = await this.sgpClient.debug(
+      credentials,
       request.endpoint ?? "/",
       request.payload,
     );
     return response.body;
+  }
+
+  private async buildTestCredentials(
+    tenantId: string,
+    credentialId: string,
+    dto: TestSgpCredentialsDto,
+  ): Promise<SgpRuntimeCredentials> {
+    const stored = await this.sgpCredentials.resolveCredentialsById(tenantId, credentialId);
+
+    return {
+      apiUrl: dto.apiUrl ?? stored.apiUrl,
+      apiPort: dto.apiPort ?? stored.apiPort,
+      app: dto.app ?? stored.app,
+      token: dto.token ?? stored.token,
+    };
+  }
+
+  private buildInlineTestCredentials(dto: TestSgpCredentialsDto): SgpRuntimeCredentials {
+    const apiUrl = dto.apiUrl?.trim();
+    const app = dto.app?.trim();
+    const token = dto.token?.trim();
+
+    if (!apiUrl || !app || !token) {
+      throw new BadRequestException(
+        "Informe apiUrl, app e token para testar credenciais SGP.",
+      );
+    }
+
+    return {
+      apiUrl,
+      apiPort: dto.apiPort?.trim(),
+      app,
+      token,
+    };
+  }
+
+  private async resolveSgpCredentials(
+    tenantId: string,
+    credentialId?: string,
+    request: SgpDiscoveryRequest = {},
+  ): Promise<SgpRuntimeCredentials> {
+    const stored = credentialId
+      ? await this.sgpCredentials.resolveCredentialsById(tenantId, credentialId)
+      : await this.sgpCredentials.resolveActiveCredentials(tenantId);
+
+    return {
+      apiUrl: stored.apiUrl,
+      apiPort: stored.apiPort,
+      timeoutMs: stored.timeoutMs,
+      app: stored.app,
+      token: stored.token,
+    };
   }
 
   private async finishSyncRun(
@@ -539,7 +677,7 @@ export class IntegrationsService {
         throw new BadGatewayException({
           code: "SGP_UNEXPECTED_RESPONSE",
           message:
-            "O SGP retornou uma página de documentação/HTML em vez da lista de clientes. Verifique SGP_API_URL e o endpoint de clientes.",
+            "O SGP retornou uma página de documentação/HTML em vez da lista de clientes. Verifique a URL da API SGP e o endpoint de clientes.",
           context: {
             endpoint,
           },
@@ -558,7 +696,7 @@ export class IntegrationsService {
         throw new BadGatewayException({
           code: "SGP_UNEXPECTED_RESPONSE",
           message:
-            "O SGP retornou metadados de documentação em vez da lista de clientes. Verifique SGP_API_URL e o endpoint de clientes.",
+            "O SGP retornou metadados de documentação em vez da lista de clientes. Verifique a URL da API SGP e o endpoint de clientes.",
           context: {
             endpoint,
           },

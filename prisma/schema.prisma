@@ -36,6 +36,7 @@ enum IntegrationProvider {
   WHATSAPP
   WEBHOOK
   EXTERNAL_API
+  SGP
   OPENAI
   ANTHROPIC
   GOOGLE

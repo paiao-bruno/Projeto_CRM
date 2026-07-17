@@ -1,7 +1,18 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  UseGuards,
+} from "@nestjs/common";
 import { CurrentUser } from "../auth/current-user.decorator";
 import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { AuthUser } from "../auth/types/auth-user";
+import { CreateSgpCredentialsDto } from "./dto/create-sgp-credentials.dto";
+import { TestSgpCredentialsDto, UpdateSgpCredentialsDto } from "./dto/update-sgp-credentials.dto";
 import { IntegrationsService } from "./integrations.service";
 import { SgpDiscoveryRequest } from "./sgp/types/sgp-client.types";
 
@@ -10,9 +21,61 @@ import { SgpDiscoveryRequest } from "./sgp/types/sgp-client.types";
 export class IntegrationsController {
   constructor(private readonly integrationsService: IntegrationsService) {}
 
+  @Get("sgp/credentials")
+  listSgpCredentials(@CurrentUser() user: AuthUser) {
+    return this.integrationsService.listSgpCredentials(user.tenantId);
+  }
+
+  @Get("sgp/credentials/:id")
+  getSgpCredentials(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    return this.integrationsService.getSgpCredentials(user.tenantId, id);
+  }
+
+  @Post("sgp/credentials")
+  createSgpCredentials(
+    @CurrentUser() user: AuthUser,
+    @Body() body: CreateSgpCredentialsDto,
+  ) {
+    return this.integrationsService.createSgpCredentials(user.tenantId, body);
+  }
+
+  @Patch("sgp/credentials/:id")
+  updateSgpCredentials(
+    @CurrentUser() user: AuthUser,
+    @Param("id") id: string,
+    @Body() body: UpdateSgpCredentialsDto,
+  ) {
+    return this.integrationsService.updateSgpCredentials(user.tenantId, id, body);
+  }
+
+  @Delete("sgp/credentials/:id")
+  removeSgpCredentials(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    return this.integrationsService.removeSgpCredentials(user.tenantId, id);
+  }
+
+  @Post("sgp/credentials/:id/test")
+  testStoredSgpCredentials(
+    @CurrentUser() user: AuthUser,
+    @Param("id") id: string,
+    @Body() body: TestSgpCredentialsDto = {},
+  ) {
+    return this.integrationsService.testSgpCredentials(user, body, id);
+  }
+
+  @Post("sgp/credentials/test")
+  testSgpCredentials(
+    @CurrentUser() user: AuthUser,
+    @Body() body: TestSgpCredentialsDto,
+  ) {
+    return this.integrationsService.testSgpCredentials(user, body);
+  }
+
   @Post("sgp/test-auth")
-  testSgpAuth(@Body() body?: SgpDiscoveryRequest) {
-    return this.integrationsService.testSgpAuth(body);
+  testSgpAuth(
+    @CurrentUser() user: AuthUser,
+    @Body() body?: SgpDiscoveryRequest,
+  ) {
+    return this.integrationsService.testSgpAuth(user, body, body?.credentialId);
   }
 
   @Post("sgp/discover/customers")
@@ -24,8 +87,8 @@ export class IntegrationsController {
   }
 
   @Post("sgp/debug")
-  debugSgp(@Body() body: SgpDiscoveryRequest) {
-    return this.integrationsService.debugSgp(body);
+  debugSgp(@CurrentUser() user: AuthUser, @Body() body: SgpDiscoveryRequest) {
+    return this.integrationsService.debugSgp(user, body);
   }
 
   @Post("sgp/sync-customers")

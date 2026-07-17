@@ -3,13 +3,11 @@ import { afterEach, describe, it } from "node:test";
 import { HttpException } from "@nestjs/common";
 import { SgpClientService } from "./sgp-client.service";
 
-function createConfig(values: Record<string, string>) {
-  return {
-    get<T = string>(key: string): T | undefined {
-      return values[key] as T | undefined;
-    },
-  };
-}
+const credentials = {
+  apiUrl: "https://webmais.sgp.net.br",
+  app: "siac",
+  token: "secret-token",
+};
 
 describe("SgpClientService", () => {
   const originalFetch = global.fetch;
@@ -27,15 +25,9 @@ describe("SgpClientService", () => {
       return new Response(JSON.stringify({ ok: true }), { status: 200 });
     }) as typeof fetch;
 
-    const service = new SgpClientService(
-      createConfig({
-        SGP_API_URL: "https://webmais.sgp.net.br",
-        SGP_APP: "siac",
-        SGP_TOKEN: "secret-token",
-      }) as never,
-    );
+    const service = new SgpClientService();
 
-    await service.discoverCustomers({ page: 1 });
+    await service.discoverCustomers(credentials, { page: 1 });
 
     assert.equal(requestedUrl, "https://webmais.sgp.net.br/api/ura/clientes/");
     assert.equal((requestedInit?.headers as Record<string, string>).Authorization, "Bearer secret-token");
@@ -50,14 +42,8 @@ describe("SgpClientService", () => {
     global.fetch = (async () =>
       new Response("<!DOCTYPE html><html></html>", { status: 200 })) as typeof fetch;
 
-    const service = new SgpClientService(
-      createConfig({
-        SGP_API_URL: "https://webmais.sgp.net.br",
-        SGP_APP: "siac",
-        SGP_TOKEN: "secret-token",
-      }) as never,
-    );
+    const service = new SgpClientService();
 
-    await assert.rejects(() => service.discoverCustomers(), HttpException);
+    await assert.rejects(() => service.discoverCustomers(credentials), HttpException);
   });
 });

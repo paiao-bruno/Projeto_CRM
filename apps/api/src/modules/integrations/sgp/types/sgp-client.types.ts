@@ -1,4 +1,5 @@
 export type SgpDiscoveryRequest = {
+  credentialId?: string;
   endpoint?: string;
   payload?: Record<string, unknown>;
   filters?: Record<string, unknown>;

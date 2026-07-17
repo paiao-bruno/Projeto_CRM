@@ -129,6 +129,37 @@ export type IntegrationSyncRun = {
   logs?: IntegrationSyncLog[];
 };
 
+export type SgpCredentials = {
+  id: string;
+  tenantId: string;
+  name: string;
+  status: string;
+  healthStatus: string;
+  apiUrl: string;
+  apiPort?: string | null;
+  timeoutMs?: number | null;
+  app: string;
+  tokenConfigured: boolean;
+  tokenPreview?: string | null;
+  lastConnectedAt?: string | null;
+  lastError?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SgpCredentialsInput = {
+  name?: string;
+  apiUrl: string;
+  apiPort?: string;
+  timeoutMs?: number;
+  app: string;
+  token: string;
+};
+
+export type SgpCredentialsUpdateInput = Partial<SgpCredentialsInput> & {
+  status?: string;
+};
+
 export type AiAgent = {
   id: string;
   name: string;

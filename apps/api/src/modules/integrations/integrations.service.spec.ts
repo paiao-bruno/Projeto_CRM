@@ -13,6 +13,25 @@ const user = {
   role: "Admin",
 };
 
+const credentials = {
+  apiUrl: "https://webmais.sgp.net.br",
+  app: "siac",
+  token: "secret-token",
+};
+
+function createSgpCredentialsMock() {
+  return {
+    resolveActiveCredentials: async () => credentials,
+    resolveCredentialsById: async () => credentials,
+    list: async () => [],
+    get: async () => ({}),
+    create: async () => ({}),
+    update: async () => ({}),
+    remove: async () => ({ deleted: true }),
+    markConnectionResult: async () => undefined,
+  };
+}
+
 function createPrismaMock() {
   return {
     integrationSyncRun: {
@@ -65,12 +84,13 @@ describe("IntegrationsService", () => {
     let upserts = 0;
     const service = new IntegrationsService(
       {
-        discoverCustomers: async () => ({
+        discoverCustomers: async (_creds: typeof credentials, _payload: Record<string, unknown>) => ({
           body: {
             clientes: [{ id: 1, nome: "Cliente", cpfcnpj: "00000000000" }],
           },
         }),
       } as never,
+      createSgpCredentialsMock() as never,
       {
         upsertFromExternalSource: async () => {
           upserts += 1;
@@ -90,7 +110,7 @@ describe("IntegrationsService", () => {
     const calls: unknown[] = [];
     const service = new IntegrationsService(
       {
-        discoverCustomers: async (payload: Record<string, unknown>) => {
+        discoverCustomers: async (_creds: typeof credentials, payload: Record<string, unknown>) => {
           calls.push(payload);
           if (calls.length === 1) {
             return {
@@ -116,6 +136,7 @@ describe("IntegrationsService", () => {
           };
         },
       } as never,
+      createSgpCredentialsMock() as never,
       {
         async upsertFromExternalSource(
           _tenantId: string,
@@ -156,7 +177,12 @@ describe("IntegrationsService", () => {
 
   it("records skipped runs when another sync is running", async () => {
     const prisma = createPrismaMock();
-    const service = new IntegrationsService({} as never, {} as never, prisma as never);
+    const service = new IntegrationsService(
+      {} as never,
+      createSgpCredentialsMock() as never,
+      {} as never,
+      prisma as never,
+    );
     (service as unknown as { runningCustomerSyncs: Set<string> }).runningCustomerSyncs.add(user.tenantId);
 
     const result = await service.syncSgpCustomers(user, {});

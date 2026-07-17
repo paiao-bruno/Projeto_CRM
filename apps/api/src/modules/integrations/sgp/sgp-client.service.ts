@@ -1,10 +1,10 @@
 import { HttpException, HttpStatus, Injectable, Logger } from "@nestjs/common";
-import { ConfigService } from "@nestjs/config";
 import {
   SgpErrorCode,
   SgpHttpResponse,
   SgpRequestOptions,
 } from "./types/sgp-client.types";
+import { SgpRuntimeCredentials } from "./types/sgp-credentials.types";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_CUSTOMER_DISCOVERY_ENDPOINT = "/api/ura/consultacliente/";
@@ -22,43 +22,54 @@ const SENSITIVE_KEYS = new Set([
 export class SgpClientService {
   private readonly logger = new Logger(SgpClientService.name);
 
-  constructor(private readonly config: ConfigService) {}
-
-  testAuth(payload?: Record<string, unknown>, endpoint?: string) {
-    return this.request({
+  testAuth(
+    credentials: SgpRuntimeCredentials,
+    payload?: Record<string, unknown>,
+    endpoint?: string,
+  ) {
+    return this.request(credentials, {
       operation: "sgp.test-auth",
       endpoint: endpoint ?? DEFAULT_CUSTOMER_DISCOVERY_ENDPOINT,
       payload,
     });
   }
 
-  discoverCustomers(payload?: Record<string, unknown>) {
-    return this.request({
+  discoverCustomers(
+    credentials: SgpRuntimeCredentials,
+    payload?: Record<string, unknown>,
+  ) {
+    return this.request(credentials, {
       operation: "sgp.discover-customers",
       endpoint: OFFICIAL_CUSTOMERS_LIST_ENDPOINT,
       payload,
     });
   }
 
-  debug(endpoint: string, payload?: Record<string, unknown>) {
-    return this.request({
+  debug(
+    credentials: SgpRuntimeCredentials,
+    endpoint: string,
+    payload?: Record<string, unknown>,
+  ) {
+    return this.request(credentials, {
       operation: "sgp.debug",
       endpoint,
       payload,
     });
   }
 
-  async request(options: SgpRequestOptions): Promise<SgpHttpResponse> {
+  async request(
+    credentials: SgpRuntimeCredentials,
+    options: SgpRequestOptions,
+  ): Promise<SgpHttpResponse> {
     const startedAt = new Date();
     const startedAtMs = Date.now();
     const controller = new AbortController();
-    const timeoutMs = this.getTimeoutMs();
+    const timeoutMs = this.getTimeoutMs(credentials);
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
-      const url = this.buildUrl(options.endpoint);
-      const credentials = this.getCredentials();
-      const payload = this.buildAuthenticatedPayload(options.payload);
+      const url = this.buildUrl(credentials, options.endpoint);
+      const payload = this.buildAuthenticatedPayload(credentials, options.payload);
 
       this.logger.log(
         JSON.stringify({
@@ -177,29 +188,29 @@ export class SgpClientService {
     }
   }
 
-  private buildAuthenticatedPayload(payload: Record<string, unknown> = {}) {
-    const { app, token } = this.getCredentials();
-
+  private buildAuthenticatedPayload(
+    credentials: SgpRuntimeCredentials,
+    payload: Record<string, unknown> = {},
+  ) {
     return {
-      app,
-      token,
+      app: credentials.app,
+      token: credentials.token,
       ...payload,
     };
   }
 
-  private buildUrl(endpoint: string) {
-    const baseUrl = this.config.get<string>("SGP_API_URL");
+  private buildUrl(credentials: SgpRuntimeCredentials, endpoint: string) {
+    const baseUrl = credentials.apiUrl.trim();
 
     if (!baseUrl) {
       throw this.toHttpException(
         "SGP_CONFIG_ERROR",
-        "SGP_API_URL precisa estar configurada.",
+        "A URL da API SGP precisa estar configurada.",
         HttpStatus.BAD_REQUEST,
       );
     }
 
     try {
-      const apiPort = this.config.get<string>("SGP_API_PORT");
       const normalizedEndpoint = this.normalizeApiEndpoint(endpoint);
       const url = endpoint.startsWith("http://") || endpoint.startsWith("https://")
         ? new URL(normalizedEndpoint)
@@ -208,34 +219,19 @@ export class SgpClientService {
             baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`,
           );
 
-      if (apiPort && !url.port) {
-        url.port = apiPort;
+      if (credentials.apiPort && !url.port) {
+        url.port = credentials.apiPort;
       }
 
       return url;
     } catch {
       throw this.toHttpException(
         "SGP_INVALID_URL",
-        "SGP_API_URL ou endpoint informado é inválido.",
+        "A URL da API SGP ou endpoint informado é inválido.",
         HttpStatus.BAD_REQUEST,
         { baseUrl: this.redactUrl(baseUrl), endpoint },
       );
     }
-  }
-
-  private getCredentials() {
-    const app = this.config.get<string>("SGP_APP");
-    const token = this.config.get<string>("SGP_TOKEN");
-
-    if (!app || !token) {
-      throw this.toHttpException(
-        "SGP_CONFIG_ERROR",
-        "SGP_APP e SGP_TOKEN precisam estar configurados.",
-        HttpStatus.BAD_REQUEST,
-      );
-    }
-
-    return { app, token };
   }
 
   private normalizeApiEndpoint(endpoint: string) {
@@ -264,8 +260,8 @@ export class SgpClientService {
     return `/api${withLeadingSlash}`;
   }
 
-  private getTimeoutMs() {
-    const configuredTimeout = Number(this.config.get<string>("SGP_TIMEOUT_MS"));
+  private getTimeoutMs(credentials: SgpRuntimeCredentials) {
+    const configuredTimeout = Number(credentials.timeoutMs);
     return Number.isFinite(configuredTimeout) && configuredTimeout > 0
       ? configuredTimeout
       : DEFAULT_TIMEOUT_MS;
