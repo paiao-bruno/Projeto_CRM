@@ -42,8 +42,8 @@ export class DashboardService {
       this.prisma.teamPresence.count({ where: { tenantId, isOnline: true } }),
       this.prisma.aiAgent.count({ where: { tenantId, status: "ACTIVE" } }),
       this.prisma.deal.count({ where: { tenantId, status: "WON" } }),
-      this.prisma.contract.count({ where: { tenantId, status: "ACTIVE" } }),
-      this.prisma.invoice.count({ where: { tenantId, status: "OVERDUE" } }),
+      this.prisma.contract.count({ where: { tenantId, status: "ACTIVE", deletedAt: null } }),
+      this.prisma.invoice.count({ where: { tenantId, status: "OVERDUE", deletedAt: null } }),
       this.prisma.message.findMany({
         where: { tenantId, createdAt: { gte: since } },
         select: { createdAt: true, direction: true },

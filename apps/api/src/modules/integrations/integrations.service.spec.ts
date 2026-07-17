@@ -38,6 +38,51 @@ function createSgpCredentialsMock() {
 
 function createPrismaMock() {
   return {
+    customer: {
+      rows: [] as Array<Record<string, unknown>>,
+      async findFirst({
+        where,
+      }: {
+        where: {
+          tenantId?: string;
+          deletedAt?: null;
+          ispAccountCode?: string;
+          OR?: Array<{ ispAccountCode?: string; document?: string }>;
+        };
+      }) {
+        return (
+          this.rows.find((row) => {
+            if (row.deletedAt != null) return false;
+
+            if (where.ispAccountCode && row.ispAccountCode === where.ispAccountCode) {
+              return true;
+            }
+
+            if (where.OR?.length) {
+              return where.OR.some((condition) => {
+                if (condition.ispAccountCode && row.ispAccountCode === condition.ispAccountCode) {
+                  return true;
+                }
+                if (condition.document && row.document === condition.document) {
+                  return true;
+                }
+                return false;
+              });
+            }
+
+            return where.deletedAt === null;
+          }) ?? null
+        );
+      },
+      async findMany() {
+        return this.rows.filter((row) => row.deletedAt == null);
+      },
+      async update({ where, data }: { where: { id: string }; data: Record<string, unknown> }) {
+        const row = this.rows.find((item) => item.id === where.id);
+        if (row) Object.assign(row, data);
+        return row;
+      },
+    },
     integrationSyncRun: {
       create: async ({ data }: { data: Record<string, unknown> }) => ({
         id: "run-id",
@@ -60,6 +105,9 @@ function createPrismaMock() {
       async findUnique({ where }: { where: { tenantId_externalId: { externalId: string } } }) {
         return this.rows.get(where.tenantId_externalId.externalId) ?? null;
       },
+      async findMany() {
+        return [];
+      },
       async create({ data }: { data: Record<string, unknown> }) {
         const row = { id: `contract-${data.externalId}`, ...data };
         this.rows.set(String(data.externalId), row);
@@ -73,6 +121,9 @@ function createPrismaMock() {
       rows: new Map<string, Record<string, unknown>>(),
       async findUnique({ where }: { where: { tenantId_externalId: { externalId: string } } }) {
         return this.rows.get(where.tenantId_externalId.externalId) ?? null;
+      },
+      async findMany() {
+        return [];
       },
       async create({ data }: { data: Record<string, unknown> }) {
         const row = { id: `invoice-${data.externalId}`, ...data };
@@ -187,6 +238,15 @@ describe("IntegrationsService", () => {
 
   it("skips unchanged records during incremental sync", async () => {
     const prisma = createPrismaMock();
+    prisma.customer.rows.push({
+      id: "customer-1",
+      tenantId: user.tenantId,
+      ispAccountCode: "1",
+      document: "111",
+      deletedAt: null,
+      metadata: { source: "SGP" },
+    });
+
     const service = new IntegrationsService(
       {
         discoverCustomers: async () => ({
@@ -241,6 +301,54 @@ describe("IntegrationsService", () => {
     assert.equal(result.processed, 2);
     assert.equal(result.created, 1);
     assert.equal(result.unchanged, 1);
+  });
+
+  it("soft deletes customers missing from a full sync", async () => {
+    const prisma = createPrismaMock();
+    prisma.customer.rows.push({
+      id: "customer-1",
+      tenantId: user.tenantId,
+      ispAccountCode: "999",
+      deletedAt: null,
+      metadata: { source: "SGP" },
+    });
+
+    const service = new IntegrationsService(
+      {
+        discoverCustomers: async () => ({
+          body: {
+            clientes: [{ id: "1", nome: "Cliente A", cpfcnpj: "111" }],
+          },
+        }),
+      } as never,
+      createSgpCredentialsMock() as never,
+      {
+        async upsertFromExternalSource(
+          _tenantId: string,
+          _memberId: string,
+          input: { externalId?: string },
+        ) {
+          return {
+            operation: "created" as const,
+            customer: { id: `customer-${input.externalId}` },
+          };
+        },
+      } as never,
+      prisma as never,
+    );
+
+    const result = await (
+      service as unknown as {
+        processSgpCustomers: (
+          userArg: typeof user,
+          request: { full: boolean },
+          runId: string,
+        ) => Promise<{ customersDeleted: number }>;
+      }
+    ).processSgpCustomers(user, { full: true }, "run-id");
+
+    assert.equal(result.customersDeleted, 1);
+    assert.ok(prisma.customer.rows[0].deletedAt);
   });
 
   it("records skipped runs when another sync is running", async () => {

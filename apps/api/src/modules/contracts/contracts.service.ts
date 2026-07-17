@@ -8,6 +8,7 @@ export class ContractsService {
   async list(tenantId: string, customerId?: string, page = 1, limit = 100) {
     const where = {
       tenantId,
+      deletedAt: null,
       ...(customerId ? { customerId } : {}),
     };
     const [data, total] = await Promise.all([

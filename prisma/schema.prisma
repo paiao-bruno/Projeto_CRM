@@ -1054,6 +1054,7 @@ model Customer {
   planName       String?
   address        Json?
   metadata       Json?
+  deletedAt      DateTime?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -1075,6 +1076,7 @@ model Customer {
   @@unique([tenantId, ispAccountCode])
   @@index([tenantId, status])
   @@index([tenantId, phone])
+  @@index([tenantId, deletedAt])
 }
 
 model Contract {
@@ -1087,6 +1089,7 @@ model Contract {
   serviceLogin String?
   address      Json?
   metadata     Json?
+  deletedAt    DateTime?
   startedAt    DateTime?
   endedAt      DateTime?
   createdAt    DateTime       @default(now())
@@ -1099,6 +1102,7 @@ model Contract {
   @@unique([tenantId, externalId])
   @@index([tenantId, customerId])
   @@index([tenantId, status])
+  @@index([tenantId, deletedAt])
 }
 
 model Invoice {
@@ -1112,6 +1116,7 @@ model Invoice {
   dueDate     DateTime?
   paidAt      DateTime?
   metadata    Json?
+  deletedAt   DateTime?
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
@@ -1124,6 +1129,7 @@ model Invoice {
   @@index([tenantId, contractId])
   @@index([tenantId, status])
   @@index([tenantId, dueDate])
+  @@index([tenantId, deletedAt])
 }
 
 model CustomerContact {

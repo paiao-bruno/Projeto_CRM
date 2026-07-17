@@ -6,6 +6,9 @@ import {
   readSgpContentHash,
   withSgpContentHash,
 } from "../integrations/sgp/sgp-sync.utils";
+import {
+  withSgpRestoredMetadata,
+} from "../integrations/sgp/sgp-deletion.sync";
 import { CreateCustomerDto } from "./dto/create-customer.dto";
 import { UpdateCustomerDto } from "./dto/update-customer.dto";
 
@@ -28,6 +31,7 @@ export class CustomersService {
   async list(tenantId: string, search?: string, page = 1, limit = 100) {
     const where = {
       tenantId,
+      deletedAt: null,
       ...(search
         ? {
             OR: [
@@ -61,7 +65,7 @@ export class CustomersService {
 
   async get(tenantId: string, id: string) {
     const customer = await this.prisma.customer.findFirst({
-      where: { id, tenantId },
+      where: { id, tenantId, deletedAt: null },
       include: {
         contacts: true,
         conversations: {
@@ -114,7 +118,7 @@ export class CustomersService {
     await this.get(tenantId, id);
 
     return this.prisma.contract.findMany({
-      where: { tenantId, customerId: id },
+      where: { tenantId, customerId: id, deletedAt: null },
       orderBy: { updatedAt: "desc" },
     });
   }
@@ -123,7 +127,7 @@ export class CustomersService {
     await this.get(tenantId, id);
 
     return this.prisma.invoice.findMany({
-      where: { tenantId, customerId: id },
+      where: { tenantId, customerId: id, deletedAt: null },
       include: { contract: true },
       orderBy: [{ dueDate: "desc" }, { updatedAt: "desc" }],
     });
@@ -155,7 +159,11 @@ export class CustomersService {
       ispAccountCode: input.externalId,
       planName: input.planName,
       address: input.address,
-      metadata: withSgpContentHash(input.metadata, contentHash),
+      deletedAt: null,
+      metadata: withSgpContentHash(
+        withSgpRestoredMetadata(input.metadata),
+        contentHash,
+      ),
     };
 
     if (existing) {

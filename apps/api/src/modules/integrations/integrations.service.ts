@@ -29,6 +29,14 @@ import {
   SgpSyncMode,
   withSgpContentHash,
 } from "./sgp/sgp-sync.utils";
+import {
+  createSgpSeenExternalIds,
+  isSgpDeletedRecord,
+  isSgpManagedMetadata,
+  SgpSeenExternalIds,
+  withSgpDeletionMetadata,
+  withSgpRestoredMetadata,
+} from "./sgp/sgp-deletion.sync";
 
 type SgpCustomerMapping = {
   customer: ExternalCustomerInput;
@@ -47,6 +55,9 @@ type SyncCounters = {
   invoicesCreated: number;
   invoicesUpdated: number;
   invoicesUnchanged: number;
+  customersDeleted: number;
+  contractsDeleted: number;
+  invoicesDeleted: number;
   ignored: number;
   errors: Array<{ index: number; message: string }>;
   syncMode: SgpSyncMode;
@@ -329,12 +340,16 @@ export class IntegrationsService {
       invoicesCreated: 0,
       invoicesUpdated: 0,
       invoicesUnchanged: 0,
+      customersDeleted: 0,
+      contractsDeleted: 0,
+      invoicesDeleted: 0,
       ignored: 0,
       errors: [] as Array<{ index: number; message: string }>,
       syncMode: incrementalContext.mode,
       watermark: incrementalContext.since?.toISOString() ?? null,
     };
     let pagination = request.pagination;
+    const seenExternalIds = createSgpSeenExternalIds();
 
     try {
       while (true) {
@@ -343,33 +358,16 @@ export class IntegrationsService {
           this.buildSyncPayload(request, incrementalContext, pagination),
         );
         this.assertCustomerDiscoveryResponse(response.body, request.endpoint);
+        const responseBody = this.isRecord(response.body) ? response.body : {};
+        this.trackRootExternalIds(responseBody, seenExternalIds);
         const rawCustomers = this.extractCustomers(response.body);
         result.processed += rawCustomers.length;
 
         for (const [index, rawCustomer] of rawCustomers.entries()) {
           const globalIndex = result.processed - rawCustomers.length + index;
           try {
-            if (
-              incrementalContext.mode === "incremental" &&
-              incrementalContext.since &&
-              !isChangedSince(rawCustomer, incrementalContext.since)
-            ) {
-              result.unchanged += 1;
-              if (runId) {
-                await this.createSyncLog({
-                  tenantId: user.tenantId,
-                  runId,
-                  entity: IntegrationSyncEntity.CUSTOMER,
-                  externalId: this.firstString(rawCustomer, ["id", "cliente_id", "codigo"]),
-                  action: "unchanged",
-                  status: IntegrationSyncStatus.SKIPPED,
-                  message: "Registro inalterado desde a última sincronização.",
-                });
-              }
-              continue;
-            }
-
             const mapped = this.mapSgpCustomer(rawCustomer);
+            this.trackMappedExternalIds(mapped, seenExternalIds);
 
             if (!mapped.customer.externalId && !mapped.customer.document) {
               result.ignored += 1;
@@ -389,37 +387,85 @@ export class IntegrationsService {
               continue;
             }
 
-            const upsert = await this.customersService.upsertFromExternalSource(
-              user.tenantId,
-              user.memberId,
-              mapped.customer,
-            );
-
-            if (upsert.operation === "created") {
-              result.created += 1;
-            } else if (upsert.operation === "updated") {
-              result.updated += 1;
-            } else {
-              result.unchanged += 1;
-            }
-            if (runId) {
-              await this.createSyncLog({
-                tenantId: user.tenantId,
+            if (mapped.customer.externalId && isSgpDeletedRecord(rawCustomer)) {
+              const deleted = await this.softDeleteSgpCustomer(
+                user.tenantId,
+                mapped.customer.externalId,
                 runId,
-                entity: IntegrationSyncEntity.CUSTOMER,
-                externalId: mapped.customer.externalId ?? mapped.customer.document,
-                action: upsert.operation,
-                status:
-                  upsert.operation === "unchanged"
-                    ? IntegrationSyncStatus.SKIPPED
-                    : IntegrationSyncStatus.COMPLETED,
-                metadata: this.toJsonValue({ customerId: upsert.customer.id }),
-              });
+              );
+              if (deleted) {
+                result.customersDeleted += 1;
+              }
+              continue;
             }
+
+            const skipCustomerUpsert =
+              incrementalContext.mode === "incremental" &&
+              incrementalContext.since &&
+              !isChangedSince(rawCustomer, incrementalContext.since);
+
+            let customerRecord;
+            if (!skipCustomerUpsert) {
+              const upsert = await this.customersService.upsertFromExternalSource(
+                user.tenantId,
+                user.memberId,
+                mapped.customer,
+              );
+              customerRecord = upsert.customer;
+
+              if (upsert.operation === "created") {
+                result.created += 1;
+              } else if (upsert.operation === "updated") {
+                result.updated += 1;
+              } else {
+                result.unchanged += 1;
+              }
+              if (runId) {
+                await this.createSyncLog({
+                  tenantId: user.tenantId,
+                  runId,
+                  entity: IntegrationSyncEntity.CUSTOMER,
+                  externalId: mapped.customer.externalId ?? mapped.customer.document,
+                  action: upsert.operation,
+                  status:
+                    upsert.operation === "unchanged"
+                      ? IntegrationSyncStatus.SKIPPED
+                      : IntegrationSyncStatus.COMPLETED,
+                  metadata: this.toJsonValue({ customerId: upsert.customer.id }),
+                });
+              }
+            } else {
+              customerRecord = await this.findSgpCustomerRecord(
+                user.tenantId,
+                mapped.customer.externalId,
+                mapped.customer.document,
+              );
+
+              if (!customerRecord) {
+                result.ignored += 1;
+                continue;
+              }
+
+              result.unchanged += 1;
+              if (runId) {
+                await this.createSyncLog({
+                  tenantId: user.tenantId,
+                  runId,
+                  entity: IntegrationSyncEntity.CUSTOMER,
+                  externalId: mapped.customer.externalId ?? mapped.customer.document,
+                  action: "unchanged",
+                  status: IntegrationSyncStatus.SKIPPED,
+                  message: "Registro inalterado desde a última sincronização.",
+                });
+              }
+            }
+
+            const seenCustomerContracts = this.collectContractExternalIds(mapped.contracts);
+            const seenCustomerInvoices = this.collectInvoiceExternalIds(mapped.invoices);
 
             const contractUpserts = await this.upsertContracts(
               user.tenantId,
-              upsert.customer.id,
+              customerRecord.id,
               mapped.contracts,
               runId,
               incrementalContext,
@@ -427,10 +473,11 @@ export class IntegrationsService {
             result.contractsCreated += contractUpserts.created;
             result.contractsUpdated += contractUpserts.updated;
             result.contractsUnchanged += contractUpserts.unchanged;
+            result.contractsDeleted += contractUpserts.deleted;
 
             const invoiceUpserts = await this.upsertInvoices(
               user.tenantId,
-              upsert.customer.id,
+              customerRecord.id,
               mapped.invoices,
               runId,
               incrementalContext,
@@ -438,6 +485,20 @@ export class IntegrationsService {
             result.invoicesCreated += invoiceUpserts.created;
             result.invoicesUpdated += invoiceUpserts.updated;
             result.invoicesUnchanged += invoiceUpserts.unchanged;
+            result.invoicesDeleted += invoiceUpserts.deleted;
+
+            result.contractsDeleted += await this.reconcileMissingSgpContractsForCustomer(
+              user.tenantId,
+              customerRecord.id,
+              seenCustomerContracts,
+              runId,
+            );
+            result.invoicesDeleted += await this.reconcileMissingSgpInvoicesForCustomer(
+              user.tenantId,
+              customerRecord.id,
+              seenCustomerInvoices,
+              runId,
+            );
           } catch (error) {
             result.ignored += 1;
             const message = error instanceof Error ? error.message : "Erro inesperado.";
@@ -457,6 +518,24 @@ export class IntegrationsService {
 
         pagination = this.nextPagination(response.body, pagination);
         if (!pagination) break;
+      }
+
+      if (incrementalContext.mode === "full") {
+        result.customersDeleted += await this.reconcileMissingSgpCustomers(
+          user.tenantId,
+          seenExternalIds.customers,
+          runId,
+        );
+        result.contractsDeleted += await this.reconcileMissingSgpContracts(
+          user.tenantId,
+          seenExternalIds.contracts,
+          runId,
+        );
+        result.invoicesDeleted += await this.reconcileMissingSgpInvoices(
+          user.tenantId,
+          seenExternalIds.invoices,
+          runId,
+        );
       }
     } catch (error) {
       if (runId) {
@@ -594,16 +673,19 @@ export class IntegrationsService {
             created: counters.created,
             updated: counters.updated,
             unchanged: counters.unchanged,
+            deleted: counters.customersDeleted,
           },
           contracts: {
             created: counters.contractsCreated,
             updated: counters.contractsUpdated,
             unchanged: counters.contractsUnchanged,
+            deleted: counters.contractsDeleted,
           },
           invoices: {
             created: counters.invoicesCreated,
             updated: counters.invoicesUpdated,
             unchanged: counters.invoicesUnchanged,
+            deleted: counters.invoicesDeleted,
           },
           errors: counters.errors.slice(0, 100),
         }),
@@ -944,11 +1026,19 @@ export class IntegrationsService {
     runId?: string,
     incrementalContext?: SgpIncrementalContext,
   ) {
-    const result = { created: 0, updated: 0, unchanged: 0 };
+    const result = { created: 0, updated: 0, unchanged: 0, deleted: 0 };
 
     for (const contract of contracts) {
       const externalId = this.contractExternalId(contract);
       if (!externalId) continue;
+
+      if (isSgpDeletedRecord(contract)) {
+        const removed = await this.softDeleteSgpContract(tenantId, externalId, runId);
+        if (removed) {
+          result.deleted += 1;
+        }
+        continue;
+      }
 
       if (
         incrementalContext?.mode === "incremental" &&
@@ -1001,11 +1091,14 @@ export class IntegrationsService {
 
       const data = {
         ...payload,
+        deletedAt: null,
         metadata: withSgpContentHash(
-          this.toJsonValue({
-            source: "SGP",
-            raw: contract,
-          }),
+          withSgpRestoredMetadata(
+            this.toJsonValue({
+              source: "SGP",
+              raw: contract,
+            }),
+          ),
           contentHash,
         ),
       };
@@ -1058,11 +1151,19 @@ export class IntegrationsService {
     runId?: string,
     incrementalContext?: SgpIncrementalContext,
   ) {
-    const result = { created: 0, updated: 0, unchanged: 0 };
+    const result = { created: 0, updated: 0, unchanged: 0, deleted: 0 };
 
     for (const invoice of invoices) {
       const externalId = this.invoiceExternalId(invoice);
       if (!externalId) continue;
+
+      if (isSgpDeletedRecord(invoice)) {
+        const removed = await this.softDeleteSgpInvoice(tenantId, externalId, runId);
+        if (removed) {
+          result.deleted += 1;
+        }
+        continue;
+      }
 
       if (
         incrementalContext?.mode === "incremental" &&
@@ -1131,11 +1232,14 @@ export class IntegrationsService {
 
       const data = {
         ...payload,
+        deletedAt: null,
         metadata: withSgpContentHash(
-          this.toJsonValue({
-            source: "SGP",
-            raw: invoice,
-          }),
+          withSgpRestoredMetadata(
+            this.toJsonValue({
+              source: "SGP",
+              raw: invoice,
+            }),
+          ),
           contentHash,
         ),
       };
@@ -1533,5 +1637,425 @@ export class IntegrationsService {
         "cliente",
       ]),
     );
+  }
+
+  private trackRootExternalIds(body: Record<string, unknown>, seen: SgpSeenExternalIds) {
+    for (const contract of this.extractArray(body, ["contratos", "contrato"])) {
+      const externalId = this.contractExternalId(contract);
+      if (externalId) seen.contracts.add(externalId);
+    }
+
+    for (const invoice of this.extractArray(body, ["titulos", "títulos", "titulo"])) {
+      const externalId = this.invoiceExternalId(invoice);
+      if (externalId) seen.invoices.add(externalId);
+    }
+  }
+
+  private trackMappedExternalIds(mapped: SgpCustomerMapping, seen: SgpSeenExternalIds) {
+    if (mapped.customer.externalId) {
+      seen.customers.add(mapped.customer.externalId);
+    }
+
+    for (const contract of mapped.contracts) {
+      const externalId = this.contractExternalId(contract);
+      if (externalId) seen.contracts.add(externalId);
+    }
+
+    for (const invoice of mapped.invoices) {
+      const externalId = this.invoiceExternalId(invoice);
+      if (externalId) seen.invoices.add(externalId);
+    }
+  }
+
+  private collectContractExternalIds(contracts: Array<Record<string, unknown>>) {
+    const seen = new Set<string>();
+    for (const contract of contracts) {
+      const externalId = this.contractExternalId(contract);
+      if (externalId) seen.add(externalId);
+    }
+    return seen;
+  }
+
+  private collectInvoiceExternalIds(invoices: Array<Record<string, unknown>>) {
+    const seen = new Set<string>();
+    for (const invoice of invoices) {
+      const externalId = this.invoiceExternalId(invoice);
+      if (externalId) seen.add(externalId);
+    }
+    return seen;
+  }
+
+  private findSgpCustomerRecord(
+    tenantId: string,
+    externalId?: string,
+    document?: string,
+  ) {
+    if (!externalId && !document) {
+      return null;
+    }
+
+    return this.prisma.customer.findFirst({
+      where: {
+        tenantId,
+        deletedAt: null,
+        OR: [
+          ...(externalId ? [{ ispAccountCode: externalId }] : []),
+          ...(document ? [{ document }] : []),
+        ],
+      },
+    });
+  }
+
+  private async softDeleteSgpCustomer(
+    tenantId: string,
+    externalId: string,
+    runId?: string,
+  ) {
+    const customer = await this.prisma.customer.findFirst({
+      where: {
+        tenantId,
+        ispAccountCode: externalId,
+        deletedAt: null,
+      },
+    });
+
+    if (!customer || !isSgpManagedMetadata(customer.metadata)) {
+      return false;
+    }
+
+    await this.prisma.customer.update({
+      where: { id: customer.id },
+      data: {
+        deletedAt: new Date(),
+        status: CustomerStatus.INACTIVE,
+        metadata: withSgpDeletionMetadata(customer.metadata, "removed_in_sgp"),
+      },
+    });
+
+    if (runId) {
+      await this.createSyncLog({
+        tenantId,
+        runId,
+        entity: IntegrationSyncEntity.CUSTOMER,
+        externalId,
+        action: "deleted",
+        status: IntegrationSyncStatus.COMPLETED,
+        message: "Cliente removido no SGP e marcado como excluído no CRM.",
+      });
+    }
+
+    return true;
+  }
+
+  private async softDeleteSgpContract(
+    tenantId: string,
+    externalId: string,
+    runId?: string,
+  ) {
+    const contract = await this.prisma.contract.findUnique({
+      where: {
+        tenantId_externalId: {
+          tenantId,
+          externalId,
+        },
+      },
+    });
+
+    if (!contract || contract.deletedAt || !isSgpManagedMetadata(contract.metadata)) {
+      return false;
+    }
+
+    await this.prisma.contract.update({
+      where: { id: contract.id },
+      data: {
+        deletedAt: new Date(),
+        status: ContractStatus.CANCELED,
+        metadata: withSgpDeletionMetadata(contract.metadata, "removed_in_sgp"),
+      },
+    });
+
+    if (runId) {
+      await this.createSyncLog({
+        tenantId,
+        runId,
+        entity: IntegrationSyncEntity.CONTRACT,
+        externalId,
+        action: "deleted",
+        status: IntegrationSyncStatus.COMPLETED,
+      });
+    }
+
+    return true;
+  }
+
+  private async softDeleteSgpInvoice(
+    tenantId: string,
+    externalId: string,
+    runId?: string,
+  ) {
+    const invoice = await this.prisma.invoice.findUnique({
+      where: {
+        tenantId_externalId: {
+          tenantId,
+          externalId,
+        },
+      },
+    });
+
+    if (!invoice || invoice.deletedAt || !isSgpManagedMetadata(invoice.metadata)) {
+      return false;
+    }
+
+    await this.prisma.invoice.update({
+      where: { id: invoice.id },
+      data: {
+        deletedAt: new Date(),
+        status: InvoiceStatus.CANCELED,
+        metadata: withSgpDeletionMetadata(invoice.metadata, "removed_in_sgp"),
+      },
+    });
+
+    if (runId) {
+      await this.createSyncLog({
+        tenantId,
+        runId,
+        entity: IntegrationSyncEntity.INVOICE,
+        externalId,
+        action: "deleted",
+        status: IntegrationSyncStatus.COMPLETED,
+      });
+    }
+
+    return true;
+  }
+
+  private async reconcileMissingSgpCustomers(
+    tenantId: string,
+    seenExternalIds: Set<string>,
+    runId?: string,
+  ) {
+    const customers = await this.prisma.customer.findMany({
+      where: {
+        tenantId,
+        deletedAt: null,
+        ispAccountCode: { not: null },
+      },
+    });
+
+    let deleted = 0;
+    for (const customer of customers) {
+      if (
+        customer.ispAccountCode &&
+        isSgpManagedMetadata(customer.metadata) &&
+        !seenExternalIds.has(customer.ispAccountCode)
+      ) {
+        await this.prisma.customer.update({
+          where: { id: customer.id },
+          data: {
+            deletedAt: new Date(),
+            status: CustomerStatus.INACTIVE,
+            metadata: withSgpDeletionMetadata(
+              customer.metadata,
+              "missing_in_sgp_full_sync",
+            ),
+          },
+        });
+        deleted += 1;
+
+        if (runId) {
+          await this.createSyncLog({
+            tenantId,
+            runId,
+            entity: IntegrationSyncEntity.CUSTOMER,
+            externalId: customer.ispAccountCode,
+            action: "deleted",
+            status: IntegrationSyncStatus.COMPLETED,
+            message: "Cliente ausente no SGP durante sincronização completa.",
+          });
+        }
+      }
+    }
+
+    return deleted;
+  }
+
+  private async reconcileMissingSgpContracts(
+    tenantId: string,
+    seenExternalIds: Set<string>,
+    runId?: string,
+  ) {
+    const contracts = await this.prisma.contract.findMany({
+      where: {
+        tenantId,
+        deletedAt: null,
+      },
+    });
+
+    let deleted = 0;
+    for (const contract of contracts) {
+      if (isSgpManagedMetadata(contract.metadata) && !seenExternalIds.has(contract.externalId)) {
+        await this.prisma.contract.update({
+          where: { id: contract.id },
+          data: {
+            deletedAt: new Date(),
+            status: ContractStatus.CANCELED,
+            metadata: withSgpDeletionMetadata(
+              contract.metadata,
+              "missing_in_sgp_full_sync",
+            ),
+          },
+        });
+        deleted += 1;
+
+        if (runId) {
+          await this.createSyncLog({
+            tenantId,
+            runId,
+            entity: IntegrationSyncEntity.CONTRACT,
+            externalId: contract.externalId,
+            action: "deleted",
+            status: IntegrationSyncStatus.COMPLETED,
+          });
+        }
+      }
+    }
+
+    return deleted;
+  }
+
+  private async reconcileMissingSgpInvoices(
+    tenantId: string,
+    seenExternalIds: Set<string>,
+    runId?: string,
+  ) {
+    const invoices = await this.prisma.invoice.findMany({
+      where: {
+        tenantId,
+        deletedAt: null,
+      },
+    });
+
+    let deleted = 0;
+    for (const invoice of invoices) {
+      if (isSgpManagedMetadata(invoice.metadata) && !seenExternalIds.has(invoice.externalId)) {
+        await this.prisma.invoice.update({
+          where: { id: invoice.id },
+          data: {
+            deletedAt: new Date(),
+            status: InvoiceStatus.CANCELED,
+            metadata: withSgpDeletionMetadata(
+              invoice.metadata,
+              "missing_in_sgp_full_sync",
+            ),
+          },
+        });
+        deleted += 1;
+
+        if (runId) {
+          await this.createSyncLog({
+            tenantId,
+            runId,
+            entity: IntegrationSyncEntity.INVOICE,
+            externalId: invoice.externalId,
+            action: "deleted",
+            status: IntegrationSyncStatus.COMPLETED,
+          });
+        }
+      }
+    }
+
+    return deleted;
+  }
+
+  private async reconcileMissingSgpContractsForCustomer(
+    tenantId: string,
+    customerId: string,
+    seenExternalIds: Set<string>,
+    runId?: string,
+  ) {
+    const contracts = await this.prisma.contract.findMany({
+      where: {
+        tenantId,
+        customerId,
+        deletedAt: null,
+      },
+    });
+
+    let deleted = 0;
+    for (const contract of contracts) {
+      if (isSgpManagedMetadata(contract.metadata) && !seenExternalIds.has(contract.externalId)) {
+        await this.prisma.contract.update({
+          where: { id: contract.id },
+          data: {
+            deletedAt: new Date(),
+            status: ContractStatus.CANCELED,
+            metadata: withSgpDeletionMetadata(
+              contract.metadata,
+              "missing_in_sgp_customer_sync",
+            ),
+          },
+        });
+        deleted += 1;
+
+        if (runId) {
+          await this.createSyncLog({
+            tenantId,
+            runId,
+            entity: IntegrationSyncEntity.CONTRACT,
+            externalId: contract.externalId,
+            action: "deleted",
+            status: IntegrationSyncStatus.COMPLETED,
+          });
+        }
+      }
+    }
+
+    return deleted;
+  }
+
+  private async reconcileMissingSgpInvoicesForCustomer(
+    tenantId: string,
+    customerId: string,
+    seenExternalIds: Set<string>,
+    runId?: string,
+  ) {
+    const invoices = await this.prisma.invoice.findMany({
+      where: {
+        tenantId,
+        customerId,
+        deletedAt: null,
+      },
+    });
+
+    let deleted = 0;
+    for (const invoice of invoices) {
+      if (isSgpManagedMetadata(invoice.metadata) && !seenExternalIds.has(invoice.externalId)) {
+        await this.prisma.invoice.update({
+          where: { id: invoice.id },
+          data: {
+            deletedAt: new Date(),
+            status: InvoiceStatus.CANCELED,
+            metadata: withSgpDeletionMetadata(
+              invoice.metadata,
+              "missing_in_sgp_customer_sync",
+            ),
+          },
+        });
+        deleted += 1;
+
+        if (runId) {
+          await this.createSyncLog({
+            tenantId,
+            runId,
+            entity: IntegrationSyncEntity.INVOICE,
+            externalId: invoice.externalId,
+            action: "deleted",
+            status: IntegrationSyncStatus.COMPLETED,
+          });
+        }
+      }
+    }
+
+    return deleted;
   }
 }
