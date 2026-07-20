@@ -462,6 +462,53 @@ describe("IntegrationsService", () => {
     assert.equal((await prisma.integrationSyncRun.update({ data: { status: IntegrationSyncStatus.SKIPPED } })).status, IntegrationSyncStatus.SKIPPED);
   });
 
+  it("does not soft delete contracts on full sync when customer payload has no child records", async () => {
+    const prisma = createPrismaMock();
+    prisma.contract.rows.set("c1", {
+      id: "contract-1",
+      tenantId: user.tenantId,
+      customerId: "customer-1",
+      externalId: "c1",
+      deletedAt: null,
+      metadata: { source: "SGP" },
+    });
+
+    const service = new IntegrationsService(
+      {
+        discoverCustomers: async () => ({
+          body: {
+            clientes: [{ id: "1", nome: "Cliente A", cpfcnpj: "111" }],
+          },
+        }),
+      } as never,
+      createSgpCredentialsMock() as never,
+      {
+        async upsertFromExternalSource() {
+          return {
+            operation: "unchanged" as const,
+            customer: { id: "customer-1" },
+          };
+        },
+      } as never,
+      prisma as never,
+      createSyncHistoryMock() as never,
+    );
+
+    const result = await (
+      service as unknown as {
+        processSgpCustomers: (
+          userArg: typeof user,
+          request: Record<string, unknown>,
+          runId: string,
+        ) => Promise<{ contractsDeleted: number }>;
+      }
+    ).processSgpCustomers(user, { full: true }, "run-id");
+
+    const contract = prisma.contract.rows.get("c1");
+    assert.equal(contract?.deletedAt, null);
+    assert.equal(result.contractsDeleted, 0);
+  });
+
   it("does not soft delete contracts when customer payload has no child records", async () => {
     const prisma = createPrismaMock();
     prisma.contract.rows.set("c1", {

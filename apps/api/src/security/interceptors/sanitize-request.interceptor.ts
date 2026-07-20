@@ -11,6 +11,18 @@ import { readSecurityConfig } from "../security.config";
 import { sanitizeUnknownValue } from "../utils/sanitize.util";
 import { assertNoSqlInjection } from "../utils/sql-injection.util";
 
+function replaceObjectContents(target: Record<string, unknown>, source: unknown) {
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    return;
+  }
+
+  for (const key of Object.keys(target)) {
+    delete target[key];
+  }
+
+  Object.assign(target, source as Record<string, unknown>);
+}
+
 @Injectable()
 export class SanitizeRequestInterceptor implements NestInterceptor {
   private readonly config = readSecurityConfig(process.env);
@@ -29,20 +41,20 @@ export class SanitizeRequestInterceptor implements NestInterceptor {
 
     const request = context.switchToHttp().getRequest<{
       body?: unknown;
-      query?: unknown;
-      params?: unknown;
+      query?: Record<string, unknown>;
+      params?: Record<string, unknown>;
     }>();
 
     if (request.body !== undefined) {
       request.body = sanitizeUnknownValue(request.body);
     }
 
-    if (request.query !== undefined) {
-      request.query = sanitizeUnknownValue(request.query) as typeof request.query;
+    if (request.query && typeof request.query === "object") {
+      replaceObjectContents(request.query, sanitizeUnknownValue(request.query));
     }
 
-    if (request.params !== undefined) {
-      request.params = sanitizeUnknownValue(request.params) as typeof request.params;
+    if (request.params && typeof request.params === "object") {
+      replaceObjectContents(request.params, sanitizeUnknownValue(request.params));
     }
 
     if (this.config.sqlInjectionGuard) {

@@ -587,6 +587,8 @@ export class IntegrationsService {
     };
     let pagination = request.pagination;
     const seenExternalIds = createSgpSeenExternalIds();
+    let syncIncludedContractPayload = false;
+    let syncIncludedInvoicePayload = false;
     this.syncLogBuffer = [];
     await this.restoreIncorrectlyDeletedSgpChildren(user.tenantId);
 
@@ -599,6 +601,12 @@ export class IntegrationsService {
         this.assertCustomerDiscoveryResponse(response.body, request.endpoint);
         const responseBody = this.isRecord(response.body) ? response.body : {};
         this.trackRootExternalIds(responseBody, seenExternalIds);
+        if (this.extractArray(responseBody, ["contratos", "contrato"]).length > 0) {
+          syncIncludedContractPayload = true;
+        }
+        if (this.extractArray(responseBody, ["titulos", "títulos", "titulo"]).length > 0) {
+          syncIncludedInvoicePayload = true;
+        }
         const rawCustomers = this.extractCustomers(response.body);
         result.processed += rawCustomers.length;
 
@@ -607,6 +615,12 @@ export class IntegrationsService {
           try {
             const mapped = this.mapSgpCustomer(rawCustomer);
             this.trackMappedExternalIds(mapped, seenExternalIds);
+            if (mapped.contracts.length > 0) {
+              syncIncludedContractPayload = true;
+            }
+            if (mapped.invoices.length > 0) {
+              syncIncludedInvoicePayload = true;
+            }
 
             if (!mapped.customer.externalId && !mapped.customer.document) {
               result.ignored += 1;
@@ -772,16 +786,20 @@ export class IntegrationsService {
           seenExternalIds.customers,
           runId,
         );
-        result.contractsDeleted += await this.reconcileMissingSgpContracts(
-          user.tenantId,
-          seenExternalIds.contracts,
-          runId,
-        );
-        result.invoicesDeleted += await this.reconcileMissingSgpInvoices(
-          user.tenantId,
-          seenExternalIds.invoices,
-          runId,
-        );
+        if (syncIncludedContractPayload) {
+          result.contractsDeleted += await this.reconcileMissingSgpContracts(
+            user.tenantId,
+            seenExternalIds.contracts,
+            runId,
+          );
+        }
+        if (syncIncludedInvoicePayload) {
+          result.invoicesDeleted += await this.reconcileMissingSgpInvoices(
+            user.tenantId,
+            seenExternalIds.invoices,
+            runId,
+          );
+        }
       }
     } catch (error) {
       if (runId) {
