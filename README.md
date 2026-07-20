@@ -44,6 +44,18 @@ Copie o arquivo de ambiente e suba os servicos de dados:
 ```bash
 cp .env.example .env
 docker compose up -d postgres redis
+npm run db:migrate:deploy
+```
+
+### Migrations Prisma
+
+O projeto usa `prisma migrate` (nao utiliza `db push`):
+
+```bash
+npm run db:migrate:deploy   # aplica migrations (producao/CI/dev)
+npm run db:migrate          # cria/aplica migrations em desenvolvimento
+npm run db:migrate:status   # status das migrations
+npm run prisma:validate:migrations
 ```
 
 Quando o monorepo de aplicacao for criado, a API NestJS usara `DATABASE_URL` e `REDIS_URL` desse ambiente.

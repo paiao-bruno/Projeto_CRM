@@ -6,13 +6,17 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "node scripts/ensure-db.mjs && npm run prisma:generate && npm run db:push && node scripts/dev.mjs",
+    "dev": "node scripts/ensure-db.mjs && npm run prisma:generate && npm run db:migrate:deploy && node scripts/dev.mjs",
     "dev:no-db": "node scripts/dev.mjs",
     "build": "npm run build -w apps/api && npm run build -w apps/web",
     "typecheck": "npm run typecheck -w apps/api && npm run typecheck -w apps/web",
-    "db:push": "prisma db push --schema prisma/schema.prisma",
+    "db:migrate": "prisma migrate dev --schema prisma/schema.prisma",
+    "db:migrate:deploy": "prisma migrate deploy --schema prisma/schema.prisma",
+    "db:migrate:status": "prisma migrate status --schema prisma/schema.prisma",
+    "db:migrate:reset": "prisma migrate reset --schema prisma/schema.prisma --force",
     "prisma:generate": "prisma generate --schema prisma/schema.prisma",
     "prisma:validate": "prisma validate --schema prisma/schema.prisma",
+    "prisma:validate:migrations": "node scripts/validate-prisma.mjs",
     "prisma:format": "prisma format --schema prisma/schema.prisma"
   },
   "repository": {
