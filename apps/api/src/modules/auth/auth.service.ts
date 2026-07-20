@@ -2,6 +2,7 @@ import { Injectable, UnauthorizedException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { JwtService } from "@nestjs/jwt";
 import { compare } from "bcryptjs";
+import { resolveRequiredSecret } from "../../config/production-env";
 import { PrismaService } from "../database/prisma.service";
 import { LoginDto } from "./dto/login.dto";
 import { AuthUser } from "./types/auth-user";
@@ -70,7 +71,7 @@ export class AuthService {
 
     return {
       accessToken: await this.jwt.signAsync(payload, {
-        secret: this.config.get<string>("JWT_ACCESS_SECRET", "dev-access-secret"),
+        secret: resolveRequiredSecret(this.config, "JWT_ACCESS_SECRET", "dev-access-secret"),
         expiresIn: "8h",
       }),
       user: payload,

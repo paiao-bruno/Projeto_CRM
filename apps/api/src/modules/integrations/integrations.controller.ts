@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  NotFoundException,
   Param,
   Patch,
   Post,
@@ -112,6 +113,13 @@ export class IntegrationsController {
 
   @Post("sgp/debug")
   debugSgp(@CurrentUser() user: AuthUser, @Body() body: SgpDiscoveryRequest) {
+    if (
+      process.env.NODE_ENV === "production" &&
+      process.env.SGP_DEBUG_ENABLED !== "true"
+    ) {
+      throw new NotFoundException();
+    }
+
     return this.integrationsService.debugSgp(user, body);
   }
 

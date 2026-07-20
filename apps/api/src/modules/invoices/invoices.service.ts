@@ -14,9 +14,18 @@ export class InvoicesService {
     const [data, total] = await Promise.all([
       this.prisma.invoice.findMany({
         where,
-        include: {
-          customer: true,
-          contract: true,
+        select: {
+          id: true,
+          tenantId: true,
+          customerId: true,
+          contractId: true,
+          externalId: true,
+          status: true,
+          amountCents: true,
+          dueDate: true,
+          paidAt: true,
+          createdAt: true,
+          updatedAt: true,
         },
         orderBy: [{ dueDate: "desc" }, { updatedAt: "desc" }],
         skip: (page - 1) * limit,

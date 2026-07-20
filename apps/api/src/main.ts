@@ -1,14 +1,16 @@
-import { ValidationPipe } from "@nestjs/common";
+import { Logger, ValidationPipe } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { NestFactory } from "@nestjs/core";
 import helmet from "helmet";
 import { AppModule } from "./app.module";
+import { assertProductionEnvironment } from "./config/production-env";
 import { createGlobalValidationPipe } from "./security/pipes/global-validation.pipe";
 import { readSecurityConfig } from "./security/security.config";
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const config = app.get(ConfigService);
+  assertProductionEnvironment(config);
   const security = readSecurityConfig({
     ...process.env,
     NODE_ENV: config.get<string>("NODE_ENV") ?? process.env.NODE_ENV,
@@ -36,7 +38,7 @@ async function bootstrap() {
 
   const port = config.get<number>("PORT", 4000);
   await app.listen(port);
-  console.log(`API running on http://localhost:${port}/api`);
+  Logger.log(`API running on http://localhost:${port}/api`, "Bootstrap");
 }
 
 void bootstrap();

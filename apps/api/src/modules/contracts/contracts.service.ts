@@ -14,8 +14,16 @@ export class ContractsService {
     const [data, total] = await Promise.all([
       this.prisma.contract.findMany({
         where,
-        include: {
-          customer: true,
+        select: {
+          id: true,
+          tenantId: true,
+          customerId: true,
+          externalId: true,
+          status: true,
+          planName: true,
+          serviceLogin: true,
+          createdAt: true,
+          updatedAt: true,
         },
         orderBy: { updatedAt: "desc" },
         skip: (page - 1) * limit,

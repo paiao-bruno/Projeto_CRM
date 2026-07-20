@@ -16,3 +16,8 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+
+# Validation / homologation reports
+sgp-validation-report.json
+homologation-report.json
+load-test-report.json

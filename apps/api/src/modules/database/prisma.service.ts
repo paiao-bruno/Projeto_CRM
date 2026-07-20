@@ -3,6 +3,7 @@ import { ConfigService } from "@nestjs/config";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 import { Pool } from "pg";
+import { resolveRequiredSecret } from "../../config/production-env";
 
 @Injectable()
 export class PrismaService
@@ -12,9 +13,11 @@ export class PrismaService
   private readonly pool: Pool;
 
   constructor(config: ConfigService) {
-    const connectionString =
-      config.get<string>("DATABASE_URL") ??
-      "postgresql://crm:crm@localhost:5432/isp_crm?schema=public";
+    const connectionString = resolveRequiredSecret(
+      config,
+      "DATABASE_URL",
+      "postgresql://crm:crm@localhost:5432/isp_crm?schema=public",
+    );
 
     const pool = new Pool({ connectionString });
     const adapter = new PrismaPg(pool);

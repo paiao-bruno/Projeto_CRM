@@ -19,7 +19,9 @@
     "prisma:generate": "prisma generate --schema prisma/schema.prisma",
     "prisma:validate": "prisma validate --schema prisma/schema.prisma",
     "prisma:validate:migrations": "node scripts/validate-prisma.mjs",
-    "prisma:format": "prisma format --schema prisma/schema.prisma"
+    "prisma:format": "prisma format --schema prisma/schema.prisma",
+    "homologate:sgp": "node scripts/homologate-sgp-real.mjs",
+    "load-test": "node scripts/load-test.mjs"
   },
   "repository": {
     "type": "git",

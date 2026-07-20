@@ -10,8 +10,9 @@ import { Label } from "@/components/ui/label";
 
 export default function LoginPage() {
   const { login } = useAuth();
-  const [email, setEmail] = useState("admin@ispcrm.local");
-  const [password, setPassword] = useState("admin123");
+  const isProduction = process.env.NODE_ENV === "production";
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -52,7 +53,9 @@ export default function LoginPage() {
           </p>
         </div>
 
-        <p className="text-sm text-slate-500">Login demo: admin@ispcrm.local / admin123</p>
+        {!isProduction ? (
+          <p className="text-sm text-slate-500">Ambiente local: use as credenciais configuradas no seed.</p>
+        ) : null}
       </section>
 
       <section className="flex items-center justify-center p-6">
@@ -60,7 +63,9 @@ export default function LoginPage() {
           <CardHeader>
             <CardTitle className="text-2xl">Entrar no CRM</CardTitle>
             <p className="text-sm text-slate-400">
-              Use as credenciais demo para acessar a aplicacao local.
+              {isProduction
+                ? "Informe suas credenciais de acesso ao CRM."
+                : "Use as credenciais do ambiente local para acessar a aplicação."}
             </p>
           </CardHeader>
           <CardContent>

@@ -15,6 +15,9 @@ import { SeedModule } from "./modules/seed/seed.module";
 import { readSecurityConfig } from "./security/security.config";
 import { SecurityModule } from "./security/security.module";
 
+const seedEnabled =
+  process.env.NODE_ENV !== "production" && process.env.AUTO_SEED_DEMO !== "false";
+
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -40,7 +43,7 @@ import { SecurityModule } from "./security/security.module";
     }),
     SecurityModule,
     DatabaseModule,
-    SeedModule,
+    ...(seedEnabled ? [SeedModule] : []),
     AuthModule,
     DashboardModule,
     CustomersModule,

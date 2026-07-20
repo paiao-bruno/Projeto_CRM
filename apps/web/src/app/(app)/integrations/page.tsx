@@ -405,7 +405,7 @@ export default function IntegrationsPage() {
       </div>
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard icon={Plug} title="Total Integrations" value={credentials.length || 1} hint="SGP API" />
+        <MetricCard icon={Plug} title="Total Integrations" value={credentials.length} hint="SGP API" />
         <MetricCard icon={CheckCircle2} title="Active Integrations" value={activeCredentials || (connectionState === "online" ? 1 : 0)} hint={activeCredentials ? "configured" : connectionState === "online" ? "online" : "pending setup"} />
         <MetricCard icon={Activity} title="Last Preview" value={lastPreview?.processed ?? 0} hint="customers read" />
         <MetricCard icon={Database} title="Preview Relations" value={(lastPreview?.customers ?? []).reduce((total, item) => total + item.contractsCount + item.invoicesCount, 0)} hint="contracts + invoices" />
