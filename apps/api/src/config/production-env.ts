@@ -4,6 +4,8 @@ const PRODUCTION_REQUIRED_KEYS = [
   "DATABASE_URL",
   "JWT_ACCESS_SECRET",
   "ENCRYPTION_KEY",
+  "APP_URL",
+  "CORS_ORIGINS",
 ] as const;
 
 export function assertProductionEnvironment(config: ConfigService) {
@@ -27,6 +29,24 @@ export function assertProductionEnvironment(config: ConfigService) {
   const jwtSecret = config.get<string>("JWT_ACCESS_SECRET") ?? "";
   if (jwtSecret.length < 32) {
     throw new Error("JWT_ACCESS_SECRET deve ter ao menos 32 caracteres em produção.");
+  }
+
+  const corsOrigins = (config.get<string>("CORS_ORIGINS") ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  if (corsOrigins.length === 0) {
+    throw new Error("CORS_ORIGINS deve listar ao menos uma origem em produção.");
+  }
+
+  if (corsOrigins.includes("*")) {
+    throw new Error("CORS_ORIGINS não pode conter '*' quando credenciais estão habilitadas.");
+  }
+
+  const appUrl = config.get<string>("APP_URL") ?? "";
+  if (!appUrl.startsWith("https://")) {
+    throw new Error("APP_URL deve usar HTTPS em produção.");
   }
 }
 

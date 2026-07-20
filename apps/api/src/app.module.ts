@@ -10,6 +10,7 @@ import { CustomersModule } from "./modules/customers/customers.module";
 import { DashboardModule } from "./modules/dashboard/dashboard.module";
 import { DatabaseModule } from "./modules/database/database.module";
 import { IntegrationsModule } from "./modules/integrations/integrations.module";
+import { HealthModule } from "./modules/health/health.module";
 import { InvoicesModule } from "./modules/invoices/invoices.module";
 import { SeedModule } from "./modules/seed/seed.module";
 import { readSecurityConfig } from "./security/security.config";
@@ -52,6 +53,7 @@ const seedEnabled =
     IntegrationsModule,
     ContractsModule,
     InvoicesModule,
+    HealthModule,
   ],
   providers: [
     {

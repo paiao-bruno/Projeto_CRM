@@ -7,16 +7,15 @@ import {
   Patch,
   Post,
   Query,
-  UseGuards,
 } from "@nestjs/common";
 import { CurrentUser } from "../auth/current-user.decorator";
-import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { AuthUser } from "../auth/types/auth-user";
+import { RequirePermissions } from "../../security/decorators/require-permissions.decorator";
 import { CustomersService } from "./customers.service";
 import { CreateCustomerDto } from "./dto/create-customer.dto";
 import { UpdateCustomerDto } from "./dto/update-customer.dto";
 
-@UseGuards(JwtAuthGuard)
+@RequirePermissions("customers.manage")
 @Controller("customers")
 export class CustomersController {
   constructor(private readonly customersService: CustomersService) {}

@@ -1,10 +1,10 @@
-import { Controller, Get, Query, UseGuards } from "@nestjs/common";
+import { Controller, Get, Query } from "@nestjs/common";
 import { CurrentUser } from "../auth/current-user.decorator";
-import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { AuthUser } from "../auth/types/auth-user";
+import { RequirePermissions } from "../../security/decorators/require-permissions.decorator";
 import { InvoicesService } from "./invoices.service";
 
-@UseGuards(JwtAuthGuard)
+@RequirePermissions("customers.manage")
 @Controller("invoices")
 export class InvoicesController {
   constructor(private readonly invoicesService: InvoicesService) {}

@@ -8,11 +8,10 @@ import {
   Patch,
   Post,
   Query,
-  UseGuards,
 } from "@nestjs/common";
 import { CurrentUser } from "../auth/current-user.decorator";
-import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { AuthUser } from "../auth/types/auth-user";
+import { RequirePermissions } from "../../security/decorators/require-permissions.decorator";
 import { CreateSgpCredentialsDto } from "./dto/create-sgp-credentials.dto";
 import { ListSgpSyncHistoryDto } from "./dto/list-sgp-sync-history.dto";
 import { UpdateSgpAutoSyncDto } from "./dto/update-sgp-auto-sync.dto";
@@ -20,7 +19,7 @@ import { TestSgpCredentialsDto, UpdateSgpCredentialsDto } from "./dto/update-sgp
 import { IntegrationsService } from "./integrations.service";
 import { SgpDiscoveryRequest } from "./sgp/types/sgp-client.types";
 
-@UseGuards(JwtAuthGuard)
+@RequirePermissions("crm.manage")
 @Controller("integrations")
 export class IntegrationsController {
   constructor(private readonly integrationsService: IntegrationsService) {}

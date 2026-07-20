@@ -166,6 +166,7 @@ export function mapSgpSyncHistoryEntry(run: SyncRunWithRelations): SgpSyncHistor
     errorsCount: run.errorsCount,
     errors: readErrors(run),
     errorMessage: run.errorMessage,
-    stackTrace: run.stackTrace,
+    stackTrace:
+      process.env.NODE_ENV === "production" ? null : run.stackTrace,
   };
 }

@@ -1,10 +1,10 @@
-import { Controller, Get, UseGuards } from "@nestjs/common";
+import { Controller, Get } from "@nestjs/common";
 import { CurrentUser } from "../auth/current-user.decorator";
-import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { AuthUser } from "../auth/types/auth-user";
+import { RequirePermissions } from "../../security/decorators/require-permissions.decorator";
 import { DashboardService } from "./dashboard.service";
 
-@UseGuards(JwtAuthGuard)
+@RequirePermissions("dashboard.read")
 @Controller("dashboard")
 export class DashboardController {
   constructor(private readonly dashboardService: DashboardService) {}

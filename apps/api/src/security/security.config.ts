@@ -8,6 +8,8 @@ export type SecurityConfig = {
   sanitizeRequests: boolean;
   sqlInjectionGuard: boolean;
   hideValidationDetails: boolean;
+  bodySizeLimit: string;
+  exposeInternalErrors: boolean;
 };
 
 export function readSecurityConfig(env: NodeJS.ProcessEnv): SecurityConfig {
@@ -30,6 +32,8 @@ export function readSecurityConfig(env: NodeJS.ProcessEnv): SecurityConfig {
     sanitizeRequests: env.SECURITY_SANITIZE_REQUESTS !== "false",
     sqlInjectionGuard: env.SECURITY_SQL_INJECTION_GUARD !== "false",
     hideValidationDetails: env.NODE_ENV === "production",
+    bodySizeLimit: env.REQUEST_BODY_LIMIT ?? "1mb",
+    exposeInternalErrors: env.NODE_ENV !== "production",
   };
 }
 

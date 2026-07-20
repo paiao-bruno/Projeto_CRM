@@ -1,11 +1,11 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post } from "@nestjs/common";
 import { CurrentUser } from "../auth/current-user.decorator";
-import { JwtAuthGuard } from "../auth/jwt-auth.guard";
 import { AuthUser } from "../auth/types/auth-user";
+import { RequirePermissions } from "../../security/decorators/require-permissions.decorator";
 import { ChatService } from "./chat.service";
 import { SendMessageDto } from "./dto/send-message.dto";
 
-@UseGuards(JwtAuthGuard)
+@RequirePermissions("chat.read")
 @Controller("chat")
 export class ChatController {
   constructor(private readonly chatService: ChatService) {}
@@ -20,6 +20,7 @@ export class ChatController {
     return this.chatService.getConversation(user.tenantId, id);
   }
 
+  @RequirePermissions("chat.reply")
   @Post("conversations/:id/messages")
   send(
     @CurrentUser() user: AuthUser,
