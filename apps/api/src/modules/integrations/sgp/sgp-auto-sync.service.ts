@@ -2,7 +2,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { IntegrationsService } from "../integrations.service";
 import { safeJsonStringify } from "../../../security/utils/redact-sensitive.util";
-import { isAutoSyncDue } from "./sgp-auto-sync.config";
+import { isAutoSyncDue, readAutoSyncConfig, readEnvAutoSyncDefaults } from "./sgp-auto-sync.config";
 import { SgpCredentialsService } from "./sgp-credentials.service";
 
 @Injectable()
@@ -24,9 +24,9 @@ export class SgpAutoSyncService {
     const results: Array<{ tenantId: string; status: string; runId?: string; error?: string }> = [];
 
     for (const integration of integrations) {
-      const config = await this.sgpCredentials.getAutoSyncConfig(
-        integration.tenantId,
-        integration.id,
+      const config = readAutoSyncConfig(
+        integration.config,
+        readEnvAutoSyncDefaults(process.env),
       );
 
       if (!config.enabled) {

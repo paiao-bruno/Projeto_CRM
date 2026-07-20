@@ -408,7 +408,9 @@ model IntegrationSyncRun {
 
   @@index([tenantId, status, startedAt])
   @@index([tenantId, operation, startedAt])
+  @@index([tenantId, operation, status, finishedAt])
   @@index([tenantId, integrationId, startedAt])
+  @@index([operation, status, startedAt])
 }
 
 model IntegrationSyncLog {
@@ -561,6 +563,7 @@ model Integration {
   @@unique([tenantId, provider, name])
   @@index([tenantId, status])
   @@index([tenantId, healthStatus])
+  @@index([provider, status])
 }
 
 model WebhookEndpoint {
@@ -655,6 +658,7 @@ model Conversation {
   @@index([tenantId, status, lastMessageAt])
   @@index([tenantId, assignedMemberId])
   @@index([tenantId, customerId])
+  @@index([tenantId, activeAiAgentId, status])
 }
 
 model Message {
@@ -686,6 +690,9 @@ model Message {
   @@unique([tenantId, externalId])
   @@index([tenantId, conversationId, createdAt])
   @@index([tenantId, senderType])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, senderAiAgentId])
+  @@index([tenantId, senderType, createdAt])
 }
 
 model ConversationHandoff {
@@ -1100,6 +1107,8 @@ model Customer {
   @@index([tenantId, status])
   @@index([tenantId, phone])
   @@index([tenantId, deletedAt])
+  @@index([tenantId, deletedAt, ispAccountCode])
+  @@index([tenantId, deletedAt, updatedAt])
 }
 
 model Contract {
@@ -1124,7 +1133,9 @@ model Contract {
 
   @@unique([tenantId, externalId])
   @@index([tenantId, customerId])
+  @@index([tenantId, customerId, deletedAt])
   @@index([tenantId, status])
+  @@index([tenantId, status, deletedAt])
   @@index([tenantId, deletedAt])
 }
 
@@ -1149,8 +1160,10 @@ model Invoice {
 
   @@unique([tenantId, externalId])
   @@index([tenantId, customerId])
+  @@index([tenantId, customerId, deletedAt])
   @@index([tenantId, contractId])
   @@index([tenantId, status])
+  @@index([tenantId, status, deletedAt])
   @@index([tenantId, dueDate])
   @@index([tenantId, deletedAt])
 }

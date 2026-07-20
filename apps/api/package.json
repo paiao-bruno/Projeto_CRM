@@ -9,7 +9,7 @@
     "build": "nest build",
     "start": "node dist/main.js",
     "typecheck": "tsc --noEmit",
-    "test": "node --test -r ts-node/register src/**/*.spec.ts"
+    "test": "node --test -r ts-node/register $(find src -name '*.spec.ts' -print)"
   },
   "dependencies": {
     "@nestjs/common": "^11.1.6",

@@ -114,13 +114,26 @@ function createPrismaMock() {
         this.rows.push(data);
         return data;
       },
+      async createMany({ data }: { data: unknown[] }) {
+        this.rows.push(...data);
+        return { count: data.length };
+      },
     },
     contract: {
       rows: new Map<string, Record<string, unknown>>(),
       async findUnique({ where }: { where: { tenantId_externalId: { externalId: string } } }) {
         return this.rows.get(where.tenantId_externalId.externalId) ?? null;
       },
-      async findMany() {
+      async findMany({
+        where,
+      }: {
+        where?: { externalId?: { in: string[] } };
+      }) {
+        if (where?.externalId?.in) {
+          return where.externalId.in
+            .map((externalId) => this.rows.get(externalId))
+            .filter(Boolean);
+        }
         return [];
       },
       async create({ data }: { data: Record<string, unknown> }) {
@@ -137,7 +150,16 @@ function createPrismaMock() {
       async findUnique({ where }: { where: { tenantId_externalId: { externalId: string } } }) {
         return this.rows.get(where.tenantId_externalId.externalId) ?? null;
       },
-      async findMany() {
+      async findMany({
+        where,
+      }: {
+        where?: { externalId?: { in: string[] } };
+      }) {
+        if (where?.externalId?.in) {
+          return where.externalId.in
+            .map((externalId) => this.rows.get(externalId))
+            .filter(Boolean);
+        }
         return [];
       },
       async create({ data }: { data: Record<string, unknown> }) {

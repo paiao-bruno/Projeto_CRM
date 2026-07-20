@@ -112,7 +112,7 @@ export class SgpClientService {
           status: response.status,
           statusText: response.statusText,
           durationMs,
-          response: body,
+          response: this.summarizeResponse(body),
         }),
       );
 
@@ -309,6 +309,32 @@ export class SgpClientService {
     );
 
     throw exception;
+  }
+
+  private summarizeResponse(body: unknown) {
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return body;
+    }
+
+    const record = body as Record<string, unknown>;
+    const listKeys = ["clientes", "contratos", "titulos", "títulos", "data", "items", "results"];
+    const counts = Object.fromEntries(
+      listKeys
+        .filter((key) => Array.isArray(record[key]))
+        .map((key) => [key, (record[key] as unknown[]).length]),
+    );
+
+    return {
+      keys: Object.keys(record).slice(0, 20),
+      counts,
+      pagination: {
+        offset: record.offset,
+        limit: record.limit,
+        total: record.total,
+        page: record.page ?? record.pagina,
+        parcial: record.parcial ?? record.partial,
+      },
+    };
   }
 
   private redactUrl(url: string) {

@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { safeJsonStringify } from "../../security/utils/redact-sensitive.util";
+import { chunkArray, DEFAULT_BATCH_SIZE, RECONCILE_BATCH_SIZE } from "../../common/batch.util";
 import {
   ContractStatus,
   CustomerStatus,
@@ -79,6 +80,16 @@ type SyncCounters = {
 export class IntegrationsService {
   private readonly logger = new Logger(IntegrationsService.name);
   private readonly runningCustomerSyncs = new Set<string>();
+  private syncLogBuffer: Array<{
+    tenantId: string;
+    runId: string;
+    entity: IntegrationSyncEntity;
+    action: string;
+    status: IntegrationSyncStatus;
+    externalId?: string;
+    message?: string;
+    metadata?: Prisma.InputJsonValue;
+  }> = [];
 
   constructor(
     private readonly sgpClient: SgpClientService,
@@ -576,6 +587,7 @@ export class IntegrationsService {
     };
     let pagination = request.pagination;
     const seenExternalIds = createSgpSeenExternalIds();
+    this.syncLogBuffer = [];
 
     try {
       while (true) {
@@ -765,6 +777,7 @@ export class IntegrationsService {
       }
     } catch (error) {
       if (runId) {
+        await this.flushSyncLogs();
         const durationMs = Date.now() - startedAt;
         await this.finishSyncRun(runId, IntegrationSyncStatus.FAILED, result, durationMs, {
           errorMessage: error instanceof Error ? error.message : String(error),
@@ -781,6 +794,7 @@ export class IntegrationsService {
     };
 
     if (runId) {
+      await this.flushSyncLogs();
       await this.finishSyncRun(
         runId,
         result.errors.length ? IntegrationSyncStatus.PARTIAL : IntegrationSyncStatus.COMPLETED,
@@ -963,18 +977,29 @@ export class IntegrationsService {
     message?: string;
     metadata?: Prisma.InputJsonValue;
   }) {
-    await this.prisma.integrationSyncLog.create({
-      data: {
-        tenantId: input.tenantId,
-        runId: input.runId,
-        entity: input.entity,
-        externalId: input.externalId,
-        action: input.action,
-        status: input.status,
-        message: input.message,
-        metadata: input.metadata,
-      },
+    this.syncLogBuffer.push({
+      tenantId: input.tenantId,
+      runId: input.runId,
+      entity: input.entity,
+      externalId: input.externalId,
+      action: input.action,
+      status: input.status,
+      message: input.message,
+      metadata: input.metadata,
     });
+
+    if (this.syncLogBuffer.length >= DEFAULT_BATCH_SIZE) {
+      await this.flushSyncLogs();
+    }
+  }
+
+  private async flushSyncLogs() {
+    if (!this.syncLogBuffer.length) {
+      return;
+    }
+
+    const batch = this.syncLogBuffer.splice(0, this.syncLogBuffer.length);
+    await this.prisma.integrationSyncLog.createMany({ data: batch });
   }
 
   private nextPagination(
@@ -1287,6 +1312,18 @@ export class IntegrationsService {
     incrementalContext?: SgpIncrementalContext,
   ) {
     const result = { created: 0, updated: 0, unchanged: 0, deleted: 0 };
+    const contractExternalIds = contracts
+      .map((contract) => this.contractExternalId(contract))
+      .filter((externalId): externalId is string => Boolean(externalId));
+    const existingRows = contractExternalIds.length
+      ? await this.prisma.contract.findMany({
+          where: {
+            tenantId,
+            externalId: { in: contractExternalIds },
+          },
+        })
+      : [];
+    const existingByExternalId = new Map(existingRows.map((row) => [row.externalId, row]));
 
     for (const contract of contracts) {
       const externalId = this.contractExternalId(contract);
@@ -1330,9 +1367,7 @@ export class IntegrationsService {
         endedAt: this.parseDate(this.firstString(contract, ["data_fim", "data_cancelamento"])),
       };
       const contentHash = hashContractPayload(payload);
-      const existing = await this.prisma.contract.findUnique({
-        where: { tenantId_externalId: { tenantId, externalId } },
-      });
+      const existing = existingByExternalId.get(externalId);
 
       if (existing && readSgpContentHash(existing.metadata) === contentHash) {
         result.unchanged += 1;
@@ -1380,13 +1415,14 @@ export class IntegrationsService {
           });
         }
       } else {
-        await this.prisma.contract.create({
+        const created = await this.prisma.contract.create({
           data: {
             tenantId,
             externalId,
             ...data,
           },
         });
+        existingByExternalId.set(externalId, created);
         result.created += 1;
         if (runId) {
           await this.createSyncLog({
@@ -1412,6 +1448,44 @@ export class IntegrationsService {
     incrementalContext?: SgpIncrementalContext,
   ) {
     const result = { created: 0, updated: 0, unchanged: 0, deleted: 0 };
+    const invoiceExternalIds = invoices
+      .map((invoice) => this.invoiceExternalId(invoice))
+      .filter((externalId): externalId is string => Boolean(externalId));
+    const contractExternalIds = [
+      ...new Set(
+        invoices
+          .map((invoice) =>
+            this.firstString(invoice, [
+              "contrato",
+              "idcontrato",
+              "contrato_id",
+              "id_contrato",
+            ]),
+          )
+          .filter((externalId): externalId is string => Boolean(externalId)),
+      ),
+    ];
+    const [existingRows, contractRows] = await Promise.all([
+      invoiceExternalIds.length
+        ? this.prisma.invoice.findMany({
+            where: {
+              tenantId,
+              externalId: { in: invoiceExternalIds },
+            },
+          })
+        : Promise.resolve([]),
+      contractExternalIds.length
+        ? this.prisma.contract.findMany({
+            where: {
+              tenantId,
+              externalId: { in: contractExternalIds },
+            },
+            select: { id: true, externalId: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const existingByExternalId = new Map(existingRows.map((row) => [row.externalId, row]));
+    const contractIdByExternalId = new Map(contractRows.map((row) => [row.externalId, row.id]));
 
     for (const invoice of invoices) {
       const externalId = this.invoiceExternalId(invoice);
@@ -1450,19 +1524,12 @@ export class IntegrationsService {
         "contrato_id",
         "id_contrato",
       ]);
-      const contract = contractExternalId
-        ? await this.prisma.contract.findUnique({
-            where: {
-              tenantId_externalId: {
-                tenantId,
-                externalId: contractExternalId,
-              },
-            },
-          })
-        : null;
+      const contractId = contractExternalId
+        ? contractIdByExternalId.get(contractExternalId)
+        : undefined;
       const payload = {
         customerId,
-        contractId: contract?.id,
+        contractId,
         status: this.mapInvoiceStatus(invoice),
         amountCents: this.parseMoneyToCents(
           this.firstString(invoice, ["valor", "valor_total", "total", "amount"]),
@@ -1471,9 +1538,7 @@ export class IntegrationsService {
         paidAt: this.parseDate(this.firstString(invoice, ["pagamento", "data_pagamento", "paidAt"])),
       };
       const contentHash = hashInvoicePayload(payload);
-      const existing = await this.prisma.invoice.findUnique({
-        where: { tenantId_externalId: { tenantId, externalId } },
-      });
+      const existing = existingByExternalId.get(externalId);
 
       if (existing && readSgpContentHash(existing.metadata) === contentHash) {
         result.unchanged += 1;
@@ -1521,13 +1586,14 @@ export class IntegrationsService {
           });
         }
       } else {
-        await this.prisma.invoice.create({
+        const created = await this.prisma.invoice.create({
           data: {
             tenantId,
             externalId,
             ...data,
           },
         });
+        existingByExternalId.set(externalId, created);
         result.created += 1;
         if (runId) {
           await this.createSyncLog({
@@ -2100,40 +2166,50 @@ export class IntegrationsService {
         deletedAt: null,
         ispAccountCode: { not: null },
       },
+      select: {
+        id: true,
+        ispAccountCode: true,
+        metadata: true,
+      },
     });
 
-    let deleted = 0;
-    for (const customer of customers) {
-      if (
+    const toDelete = customers.filter(
+      (customer) =>
         customer.ispAccountCode &&
         isSgpManagedMetadata(customer.metadata) &&
-        !seenExternalIds.has(customer.ispAccountCode)
-      ) {
-        await this.prisma.customer.update({
-          where: { id: customer.id },
-          data: {
-            deletedAt: new Date(),
-            status: CustomerStatus.INACTIVE,
-            metadata: withSgpDeletionMetadata(
-              customer.metadata,
-              "missing_in_sgp_full_sync",
-            ),
-          },
-        });
-        deleted += 1;
+        !seenExternalIds.has(customer.ispAccountCode),
+    );
 
-        if (runId) {
-          await this.createSyncLog({
-            tenantId,
-            runId,
-            entity: IntegrationSyncEntity.CUSTOMER,
-            externalId: customer.ispAccountCode,
-            action: "deleted",
-            status: IntegrationSyncStatus.COMPLETED,
-            message: "Cliente ausente no SGP durante sincronização completa.",
+    let deleted = 0;
+    for (const batch of chunkArray(toDelete, RECONCILE_BATCH_SIZE)) {
+      await Promise.all(
+        batch.map(async (customer) => {
+          await this.prisma.customer.update({
+            where: { id: customer.id },
+            data: {
+              deletedAt: new Date(),
+              status: CustomerStatus.INACTIVE,
+              metadata: withSgpDeletionMetadata(
+                customer.metadata,
+                "missing_in_sgp_full_sync",
+              ),
+            },
           });
-        }
-      }
+
+          if (runId) {
+            await this.createSyncLog({
+              tenantId,
+              runId,
+              entity: IntegrationSyncEntity.CUSTOMER,
+              externalId: customer.ispAccountCode ?? undefined,
+              action: "deleted",
+              status: IntegrationSyncStatus.COMPLETED,
+              message: "Cliente ausente no SGP durante sincronização completa.",
+            });
+          }
+        }),
+      );
+      deleted += batch.length;
     }
 
     return deleted;
@@ -2149,35 +2225,47 @@ export class IntegrationsService {
         tenantId,
         deletedAt: null,
       },
+      select: {
+        id: true,
+        externalId: true,
+        metadata: true,
+      },
     });
 
-    let deleted = 0;
-    for (const contract of contracts) {
-      if (isSgpManagedMetadata(contract.metadata) && !seenExternalIds.has(contract.externalId)) {
-        await this.prisma.contract.update({
-          where: { id: contract.id },
-          data: {
-            deletedAt: new Date(),
-            status: ContractStatus.CANCELED,
-            metadata: withSgpDeletionMetadata(
-              contract.metadata,
-              "missing_in_sgp_full_sync",
-            ),
-          },
-        });
-        deleted += 1;
+    const toDelete = contracts.filter(
+      (contract) =>
+        isSgpManagedMetadata(contract.metadata) && !seenExternalIds.has(contract.externalId),
+    );
 
-        if (runId) {
-          await this.createSyncLog({
-            tenantId,
-            runId,
-            entity: IntegrationSyncEntity.CONTRACT,
-            externalId: contract.externalId,
-            action: "deleted",
-            status: IntegrationSyncStatus.COMPLETED,
+    let deleted = 0;
+    for (const batch of chunkArray(toDelete, RECONCILE_BATCH_SIZE)) {
+      await Promise.all(
+        batch.map(async (contract) => {
+          await this.prisma.contract.update({
+            where: { id: contract.id },
+            data: {
+              deletedAt: new Date(),
+              status: ContractStatus.CANCELED,
+              metadata: withSgpDeletionMetadata(
+                contract.metadata,
+                "missing_in_sgp_full_sync",
+              ),
+            },
           });
-        }
-      }
+
+          if (runId) {
+            await this.createSyncLog({
+              tenantId,
+              runId,
+              entity: IntegrationSyncEntity.CONTRACT,
+              externalId: contract.externalId,
+              action: "deleted",
+              status: IntegrationSyncStatus.COMPLETED,
+            });
+          }
+        }),
+      );
+      deleted += batch.length;
     }
 
     return deleted;
@@ -2193,35 +2281,47 @@ export class IntegrationsService {
         tenantId,
         deletedAt: null,
       },
+      select: {
+        id: true,
+        externalId: true,
+        metadata: true,
+      },
     });
 
-    let deleted = 0;
-    for (const invoice of invoices) {
-      if (isSgpManagedMetadata(invoice.metadata) && !seenExternalIds.has(invoice.externalId)) {
-        await this.prisma.invoice.update({
-          where: { id: invoice.id },
-          data: {
-            deletedAt: new Date(),
-            status: InvoiceStatus.CANCELED,
-            metadata: withSgpDeletionMetadata(
-              invoice.metadata,
-              "missing_in_sgp_full_sync",
-            ),
-          },
-        });
-        deleted += 1;
+    const toDelete = invoices.filter(
+      (invoice) =>
+        isSgpManagedMetadata(invoice.metadata) && !seenExternalIds.has(invoice.externalId),
+    );
 
-        if (runId) {
-          await this.createSyncLog({
-            tenantId,
-            runId,
-            entity: IntegrationSyncEntity.INVOICE,
-            externalId: invoice.externalId,
-            action: "deleted",
-            status: IntegrationSyncStatus.COMPLETED,
+    let deleted = 0;
+    for (const batch of chunkArray(toDelete, RECONCILE_BATCH_SIZE)) {
+      await Promise.all(
+        batch.map(async (invoice) => {
+          await this.prisma.invoice.update({
+            where: { id: invoice.id },
+            data: {
+              deletedAt: new Date(),
+              status: InvoiceStatus.CANCELED,
+              metadata: withSgpDeletionMetadata(
+                invoice.metadata,
+                "missing_in_sgp_full_sync",
+              ),
+            },
           });
-        }
-      }
+
+          if (runId) {
+            await this.createSyncLog({
+              tenantId,
+              runId,
+              entity: IntegrationSyncEntity.INVOICE,
+              externalId: invoice.externalId,
+              action: "deleted",
+              status: IntegrationSyncStatus.COMPLETED,
+            });
+          }
+        }),
+      );
+      deleted += batch.length;
     }
 
     return deleted;
@@ -2239,35 +2339,47 @@ export class IntegrationsService {
         customerId,
         deletedAt: null,
       },
+      select: {
+        id: true,
+        externalId: true,
+        metadata: true,
+      },
     });
 
-    let deleted = 0;
-    for (const contract of contracts) {
-      if (isSgpManagedMetadata(contract.metadata) && !seenExternalIds.has(contract.externalId)) {
-        await this.prisma.contract.update({
-          where: { id: contract.id },
-          data: {
-            deletedAt: new Date(),
-            status: ContractStatus.CANCELED,
-            metadata: withSgpDeletionMetadata(
-              contract.metadata,
-              "missing_in_sgp_customer_sync",
-            ),
-          },
-        });
-        deleted += 1;
+    const toDelete = contracts.filter(
+      (contract) =>
+        isSgpManagedMetadata(contract.metadata) && !seenExternalIds.has(contract.externalId),
+    );
 
-        if (runId) {
-          await this.createSyncLog({
-            tenantId,
-            runId,
-            entity: IntegrationSyncEntity.CONTRACT,
-            externalId: contract.externalId,
-            action: "deleted",
-            status: IntegrationSyncStatus.COMPLETED,
+    let deleted = 0;
+    for (const batch of chunkArray(toDelete, RECONCILE_BATCH_SIZE)) {
+      await Promise.all(
+        batch.map(async (contract) => {
+          await this.prisma.contract.update({
+            where: { id: contract.id },
+            data: {
+              deletedAt: new Date(),
+              status: ContractStatus.CANCELED,
+              metadata: withSgpDeletionMetadata(
+                contract.metadata,
+                "missing_in_sgp_customer_sync",
+              ),
+            },
           });
-        }
-      }
+
+          if (runId) {
+            await this.createSyncLog({
+              tenantId,
+              runId,
+              entity: IntegrationSyncEntity.CONTRACT,
+              externalId: contract.externalId,
+              action: "deleted",
+              status: IntegrationSyncStatus.COMPLETED,
+            });
+          }
+        }),
+      );
+      deleted += batch.length;
     }
 
     return deleted;
@@ -2285,35 +2397,47 @@ export class IntegrationsService {
         customerId,
         deletedAt: null,
       },
+      select: {
+        id: true,
+        externalId: true,
+        metadata: true,
+      },
     });
 
-    let deleted = 0;
-    for (const invoice of invoices) {
-      if (isSgpManagedMetadata(invoice.metadata) && !seenExternalIds.has(invoice.externalId)) {
-        await this.prisma.invoice.update({
-          where: { id: invoice.id },
-          data: {
-            deletedAt: new Date(),
-            status: InvoiceStatus.CANCELED,
-            metadata: withSgpDeletionMetadata(
-              invoice.metadata,
-              "missing_in_sgp_customer_sync",
-            ),
-          },
-        });
-        deleted += 1;
+    const toDelete = invoices.filter(
+      (invoice) =>
+        isSgpManagedMetadata(invoice.metadata) && !seenExternalIds.has(invoice.externalId),
+    );
 
-        if (runId) {
-          await this.createSyncLog({
-            tenantId,
-            runId,
-            entity: IntegrationSyncEntity.INVOICE,
-            externalId: invoice.externalId,
-            action: "deleted",
-            status: IntegrationSyncStatus.COMPLETED,
+    let deleted = 0;
+    for (const batch of chunkArray(toDelete, RECONCILE_BATCH_SIZE)) {
+      await Promise.all(
+        batch.map(async (invoice) => {
+          await this.prisma.invoice.update({
+            where: { id: invoice.id },
+            data: {
+              deletedAt: new Date(),
+              status: InvoiceStatus.CANCELED,
+              metadata: withSgpDeletionMetadata(
+                invoice.metadata,
+                "missing_in_sgp_customer_sync",
+              ),
+            },
           });
-        }
-      }
+
+          if (runId) {
+            await this.createSyncLog({
+              tenantId,
+              runId,
+              entity: IntegrationSyncEntity.INVOICE,
+              externalId: invoice.externalId,
+              action: "deleted",
+              status: IntegrationSyncStatus.COMPLETED,
+            });
+          }
+        }),
+      );
+      deleted += batch.length;
     }
 
     return deleted;

@@ -36,8 +36,8 @@ export class DashboardService {
       activeContracts,
       overdueInvoices,
       messages,
-      allMessages,
-      agentMessages,
+      directionCounts,
+      agentCountGroups,
     ] = await Promise.all([
       this.prisma.message.count({ where: { tenantId } }),
       this.prisma.conversation.count({
@@ -53,26 +53,18 @@ export class DashboardService {
         select: { createdAt: true, direction: true },
         orderBy: { createdAt: "asc" },
       }),
-      this.prisma.message.findMany({
+      this.prisma.message.groupBy({
+        by: ["direction"],
         where: { tenantId },
-        select: { direction: true },
+        _count: { _all: true },
       }),
-      this.prisma.message.findMany({
+      this.prisma.message.groupBy({
+        by: ["senderType", "senderMemberId", "senderAiAgentId"],
         where: {
           tenantId,
           senderType: { in: ["USER", "AI_AGENT"] },
         },
-        select: {
-          senderType: true,
-          senderMember: {
-            select: {
-              user: { select: { name: true } },
-            },
-          },
-          senderAiAgent: {
-            select: { name: true },
-          },
-        },
+        _count: { _all: true },
       }),
     ]);
 
@@ -105,8 +97,11 @@ export class DashboardService {
       inboundMessages === 0
         ? 100
         : Math.min(100, Math.round((outboundMessages / inboundMessages) * 100));
-    const channelDistribution = this.buildChannelDistribution(allMessages);
-    const agentPerformance = this.buildAgentPerformance(agentMessages);
+    const channelDistribution = this.buildChannelDistributionFromCounts(directionCounts);
+    const agentPerformance = await this.buildAgentPerformanceFromGroups(
+      tenantId,
+      agentCountGroups,
+    );
     const agentMemory = await this.getCachedAgentMemoryOverview(tenantId);
     const sgpSync = await this.sgpSyncDashboard.getOverview(tenantId);
 
@@ -153,7 +148,7 @@ export class DashboardService {
 
     const value = await this.getAgentMemoryOverview(tenantId);
     this.agentMemoryCache.set(cacheKey, {
-      expiresAt: Date.now() + 15_000,
+      expiresAt: Date.now() + 60_000,
       value,
     });
     return value;
@@ -603,44 +598,84 @@ export class DashboardService {
     return colors[level] ?? "#94a3b8";
   }
 
-  private buildChannelDistribution(messages: Array<{ direction: string }>) {
-    const whatsapp = messages.filter(
-      (message) => message.direction === "INBOUND",
-    ).length;
-    const internal = messages.length - whatsapp;
-    const total = Math.max(whatsapp + internal, 1);
+  private buildChannelDistributionFromCounts(
+    counts: Array<{ direction: string; _count: { _all: number } }>,
+  ) {
+    const whatsapp =
+      counts.find((entry) => entry.direction === "INBOUND")?._count._all ?? 0;
+    const total = counts.reduce((sum, entry) => sum + entry._count._all, 0);
+    const internal = total - whatsapp;
 
     return [
       {
         name: "Internal",
         value: internal,
-        percentage: Math.round((internal / total) * 100),
+        percentage: Math.round((internal / Math.max(total, 1)) * 100),
         color: "#8b8cf6",
       },
       {
         name: "WhatsApp",
         value: whatsapp,
-        percentage: Math.round((whatsapp / total) * 100),
+        percentage: Math.round((whatsapp / Math.max(total, 1)) * 100),
         color: "#34d399",
       },
     ];
   }
 
-  private buildAgentPerformance(
-    messages: Array<{
+  private async buildAgentPerformanceFromGroups(
+    tenantId: string,
+    groups: Array<{
       senderType: string;
-      senderMember: { user: { name: string } } | null;
-      senderAiAgent: { name: string } | null;
+      senderMemberId: string | null;
+      senderAiAgentId: string | null;
+      _count: { _all: number };
     }>,
   ) {
+    const memberIds = [
+      ...new Set(
+        groups
+          .map((group) => group.senderMemberId)
+          .filter((memberId): memberId is string => Boolean(memberId)),
+      ),
+    ];
+    const agentIds = [
+      ...new Set(
+        groups
+          .map((group) => group.senderAiAgentId)
+          .filter((agentId): agentId is string => Boolean(agentId)),
+      ),
+    ];
+    const [members, agents] = await Promise.all([
+      memberIds.length
+        ? this.prisma.tenantMember.findMany({
+            where: { tenantId, id: { in: memberIds } },
+            select: {
+              id: true,
+              user: { select: { name: true } },
+            },
+          })
+        : Promise.resolve([]),
+      agentIds.length
+        ? this.prisma.aiAgent.findMany({
+            where: { tenantId, id: { in: agentIds } },
+            select: { id: true, name: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const memberNameById = new Map(members.map((member) => [member.id, member.user.name]));
+    const agentNameById = new Map(agents.map((agent) => [agent.id, agent.name]));
     const counts = new Map<string, number>();
 
-    for (const message of messages) {
+    for (const group of groups) {
       const name =
-        message.senderType === "AI_AGENT"
-          ? (message.senderAiAgent?.name ?? "IA")
-          : (message.senderMember?.user.name ?? "Atendente");
-      counts.set(name, (counts.get(name) ?? 0) + 1);
+        group.senderType === "AI_AGENT"
+          ? (group.senderAiAgentId
+              ? (agentNameById.get(group.senderAiAgentId) ?? "IA")
+              : "IA")
+          : (group.senderMemberId
+              ? (memberNameById.get(group.senderMemberId) ?? "Atendente")
+              : "Atendente");
+      counts.set(name, (counts.get(name) ?? 0) + group._count._all);
     }
 
     const palette = ["#38bdf8", "#a78bfa", "#fb7185", "#2dd4bf", "#fbbf24"];

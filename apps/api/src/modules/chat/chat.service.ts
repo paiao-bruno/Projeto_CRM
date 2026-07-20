@@ -48,7 +48,14 @@ export class ChatService {
   }
 
   async sendMessage(tenantId: string, memberId: string, conversationId: string, body: string) {
-    await this.getConversation(tenantId, conversationId);
+    const conversation = await this.prisma.conversation.findFirst({
+      where: { tenantId, id: conversationId },
+      select: { id: true },
+    });
+
+    if (!conversation) {
+      throw new NotFoundException("Conversa nao encontrada.");
+    }
 
     const message = await this.prisma.message.create({
       data: {
