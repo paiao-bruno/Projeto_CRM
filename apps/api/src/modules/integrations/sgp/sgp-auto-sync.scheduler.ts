@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { SchedulerRegistry } from "@nestjs/schedule";
 import { CronJob } from "cron";
+import { safeJsonStringify } from "../../../security/utils/redact-sensitive.util";
 import { readEnvAutoSyncDefaults } from "./sgp-auto-sync.config";
 import { SgpAutoSyncService } from "./sgp-auto-sync.service";
 
@@ -28,7 +29,7 @@ export class SgpAutoSyncScheduler implements OnModuleInit, OnModuleDestroy {
       this.schedulerRegistry.addCronJob("sgp-auto-sync-cron", job);
       job.start();
       this.logger.log(
-        JSON.stringify({
+        safeJsonStringify({
           event: "sgp.auto-sync.scheduler.registered",
           mode: "cron",
           expression: defaults.cron,
@@ -43,7 +44,7 @@ export class SgpAutoSyncScheduler implements OnModuleInit, OnModuleDestroy {
     this.schedulerRegistry.addInterval("sgp-auto-sync-interval", this.intervalHandle);
 
     this.logger.log(
-      JSON.stringify({
+      safeJsonStringify({
         event: "sgp.auto-sync.scheduler.registered",
         mode: "interval",
         intervalMinutes: defaults.intervalMinutes,

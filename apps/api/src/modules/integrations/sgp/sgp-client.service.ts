@@ -1,4 +1,5 @@
 import { HttpException, HttpStatus, Injectable, Logger } from "@nestjs/common";
+import { redactSensitiveData, safeJsonStringify } from "../../../security/utils/redact-sensitive.util";
 import {
   SgpErrorCode,
   SgpHttpResponse,
@@ -9,14 +10,6 @@ import { SgpRuntimeCredentials } from "./types/sgp-credentials.types";
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_CUSTOMER_DISCOVERY_ENDPOINT = "/api/ura/consultacliente/";
 const OFFICIAL_CUSTOMERS_LIST_ENDPOINT = "/api/ura/clientes/";
-const SENSITIVE_KEYS = new Set([
-  "token",
-  "senha",
-  "password",
-  "authorization",
-  "app",
-  "secret",
-]);
 
 @Injectable()
 export class SgpClientService {
@@ -72,14 +65,14 @@ export class SgpClientService {
       const payload = this.buildAuthenticatedPayload(credentials, options.payload);
 
       this.logger.log(
-        JSON.stringify({
+        safeJsonStringify({
           event: "sgp.request.started",
           operation: options.operation,
           endpoint: options.endpoint,
           url: this.redactUrl(url.toString()),
           startedAt: startedAt.toISOString(),
           timeoutMs,
-          payload: this.sanitize(payload),
+          payload,
         }),
       );
 
@@ -112,14 +105,14 @@ export class SgpClientService {
       };
 
       this.logger.log(
-        JSON.stringify({
+        safeJsonStringify({
           event: "sgp.request.finished",
           operation: options.operation,
           endpoint: options.endpoint,
           status: response.status,
           statusText: response.statusText,
           durationMs,
-          response: this.sanitize(body),
+          response: body,
         }),
       );
 
@@ -138,7 +131,7 @@ export class SgpClientService {
             endpoint: options.endpoint,
             status: response.status,
             statusText: response.statusText,
-            body: this.sanitize(body),
+            body: redactSensitiveData(body),
           },
         );
       }
@@ -149,7 +142,7 @@ export class SgpClientService {
 
       if (error instanceof HttpException) {
         this.logger.warn(
-          JSON.stringify({
+          safeJsonStringify({
             event: "sgp.request.failed",
             operation: options.operation,
             endpoint: options.endpoint,
@@ -173,7 +166,7 @@ export class SgpClientService {
       });
 
       this.logger.error(
-        JSON.stringify({
+        safeJsonStringify({
           event: "sgp.request.failed",
           operation: options.operation,
           endpoint: options.endpoint,
@@ -305,7 +298,7 @@ export class SgpClientService {
     );
 
     this.logger.error(
-      JSON.stringify({
+      safeJsonStringify({
         event: "sgp.response.html",
         message: "O SGP retornou HTML em vez de JSON.",
         endpoint: input.endpoint,
@@ -316,29 +309,6 @@ export class SgpClientService {
     );
 
     throw exception;
-  }
-
-  private sanitize(value: unknown): unknown {
-    if (Array.isArray(value)) {
-      return value.map((item) => this.sanitize(item));
-    }
-
-    if (value && typeof value === "object") {
-      return Object.fromEntries(
-        Object.entries(value as Record<string, unknown>).map(([key, item]) => [
-          key,
-          SENSITIVE_KEYS.has(key.toLowerCase()) ? this.maskSecret(item) : this.sanitize(item),
-        ]),
-      );
-    }
-
-    return value;
-  }
-
-  private maskSecret(value: unknown) {
-    if (typeof value !== "string") return "[REDACTED]";
-    if (value.length <= 4) return "[REDACTED]";
-    return `${value.slice(0, 2)}***${value.slice(-2)}`;
   }
 
   private redactUrl(url: string) {
@@ -362,7 +332,7 @@ export class SgpClientService {
       {
         code,
         message,
-        context: context ? this.sanitize(context) : undefined,
+        context: context ? redactSensitiveData(context) : undefined,
       },
       status,
     );

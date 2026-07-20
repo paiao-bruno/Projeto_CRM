@@ -18,6 +18,12 @@ export class EncryptionService {
       );
     }
 
+    if (rawKey.length < 32) {
+      throw new InternalServerErrorException(
+        "ENCRYPTION_KEY deve ter ao menos 32 caracteres.",
+      );
+    }
+
     this.key = createHash("sha256").update(rawKey).digest();
   }
 

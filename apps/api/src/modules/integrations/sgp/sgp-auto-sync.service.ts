@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { IntegrationsService } from "../integrations.service";
+import { safeJsonStringify } from "../../../security/utils/redact-sensitive.util";
 import { isAutoSyncDue } from "./sgp-auto-sync.config";
 import { SgpCredentialsService } from "./sgp-credentials.service";
 
@@ -39,7 +40,7 @@ export class SgpAutoSyncService {
 
       if (this.runningTenants.has(integration.tenantId)) {
         this.logger.warn(
-          JSON.stringify({
+          safeJsonStringify({
             event: "sgp.auto-sync.skipped",
             tenantId: integration.tenantId,
             integrationId: integration.id,
@@ -78,7 +79,7 @@ export class SgpAutoSyncService {
     }
 
     this.logger.log(
-      JSON.stringify({
+      safeJsonStringify({
         event: "sgp.auto-sync.batch.finished",
         trigger,
         processed: results.length,

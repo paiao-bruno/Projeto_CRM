@@ -12,7 +12,9 @@ function createConfig(key: string) {
 
 describe("EncryptionService", () => {
   it("encrypts and decrypts json payloads", () => {
-    const service = new EncryptionService(createConfig("test-key") as never);
+    const service = new EncryptionService(
+      createConfig("test-key-with-at-least-32-characters-long") as never,
+    );
     const encrypted = service.encryptJson({ app: "siac", token: "secret-token" });
     const decrypted = service.decryptJson<{ app: string; token: string }>(encrypted);
 

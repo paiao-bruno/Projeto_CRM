@@ -1,4 +1,11 @@
-import { BadGatewayException, BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import {
+  BadGatewayException,
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from "@nestjs/common";
+import { safeJsonStringify } from "../../security/utils/redact-sensitive.util";
 import {
   ContractStatus,
   CustomerStatus,
@@ -206,7 +213,7 @@ export class IntegrationsService {
         },
       });
       this.logger.warn(
-        JSON.stringify({
+        safeJsonStringify({
           event: "sgp.sync-customers.skipped",
           tenantId: user.tenantId,
           runId: skippedRun.id,
@@ -244,7 +251,7 @@ export class IntegrationsService {
     void this.processSgpCustomers(user, request, run.id)
       .then((result) => {
         this.logger.log(
-          JSON.stringify({
+          safeJsonStringify({
             event: "sgp.sync-customers.finished",
             tenantId: user.tenantId,
             runId: run.id,
@@ -254,7 +261,7 @@ export class IntegrationsService {
       })
       .catch((error) => {
         this.logger.error(
-          JSON.stringify({
+          safeJsonStringify({
             event: "sgp.sync-customers.failed",
             tenantId: user.tenantId,
             runId: run.id,
@@ -305,7 +312,7 @@ export class IntegrationsService {
 
     if (recovered.count > 0) {
       this.logger.warn(
-        JSON.stringify({
+        safeJsonStringify({
           event: "sgp.sync.recovered-stale-runs",
           count: recovered.count,
           maxAgeMs,
@@ -362,7 +369,7 @@ export class IntegrationsService {
         });
 
         this.logger.log(
-          JSON.stringify({
+          safeJsonStringify({
             event: "sgp.auto-sync.completed",
             tenantId: input.tenantId,
             integrationId: input.integrationId,
@@ -398,7 +405,7 @@ export class IntegrationsService {
         }
 
         this.logger.warn(
-          JSON.stringify({
+          safeJsonStringify({
             event: "sgp.auto-sync.retry",
             tenantId: input.tenantId,
             integrationId: input.integrationId,
@@ -790,7 +797,7 @@ export class IntegrationsService {
     }
 
     this.logger.log(
-      JSON.stringify({
+      safeJsonStringify({
         event: "sgp.discover-customers.processed",
         tenantId: user.tenantId,
         ...finalResult,

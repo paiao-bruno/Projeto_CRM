@@ -22,7 +22,15 @@ export class AuthService {
           where: { status: "ACTIVE" },
           include: {
             tenant: true,
-            role: true,
+            role: {
+              include: {
+                permissions: {
+                  include: {
+                    permission: true,
+                  },
+                },
+              },
+            },
           },
           take: 1,
         },
@@ -51,6 +59,8 @@ export class AuthService {
       tenantName: membership.tenant.name,
       memberId: membership.id,
       role: membership.role?.name ?? "Atendente",
+      permissions:
+        membership.role?.permissions.map((item) => item.permission.code) ?? [],
     };
 
     await this.prisma.user.update({
