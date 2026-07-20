@@ -127,14 +127,39 @@ function createPrismaMock() {
       async findMany({
         where,
       }: {
-        where?: { externalId?: { in: string[] } };
+        where?: {
+          externalId?: { in: string[] };
+          tenantId?: string;
+          customerId?: string;
+          deletedAt?: null;
+        };
       }) {
-        if (where?.externalId?.in) {
-          return where.externalId.in
-            .map((externalId) => this.rows.get(externalId))
-            .filter(Boolean);
+        const allRows = [...this.rows.values()];
+        return allRows.filter((row) => {
+          if (where?.deletedAt === null && row.deletedAt != null) return false;
+          if (where?.tenantId && row.tenantId !== where.tenantId) return false;
+          if (where?.customerId && row.customerId !== where.customerId) return false;
+          if (where?.externalId?.in) {
+            return where.externalId.in.includes(String(row.externalId));
+          }
+          return true;
+        });
+      },
+      async updateMany({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) {
+        let count = 0;
+        for (const row of this.rows.values()) {
+          const metadata = row.metadata as Record<string, unknown> | undefined;
+          if (
+            where.metadata &&
+            typeof where.metadata === "object" &&
+            (where.metadata as { path?: string[]; equals?: string }).equals ===
+              metadata?.sgpDeletionReason
+          ) {
+            Object.assign(row, data);
+            count += 1;
+          }
         }
-        return [];
+        return { count };
       },
       async create({ data }: { data: Record<string, unknown> }) {
         const row = { id: `contract-${data.externalId}`, ...data };
@@ -142,6 +167,8 @@ function createPrismaMock() {
         return row;
       },
       async update({ where, data }: { where: { id: string }; data: Record<string, unknown> }) {
+        const row = [...this.rows.values()].find((item) => item.id === where.id);
+        if (row) Object.assign(row, data);
         return { id: where.id, ...data };
       },
     },
@@ -153,14 +180,39 @@ function createPrismaMock() {
       async findMany({
         where,
       }: {
-        where?: { externalId?: { in: string[] } };
+        where?: {
+          externalId?: { in: string[] };
+          tenantId?: string;
+          customerId?: string;
+          deletedAt?: null;
+        };
       }) {
-        if (where?.externalId?.in) {
-          return where.externalId.in
-            .map((externalId) => this.rows.get(externalId))
-            .filter(Boolean);
+        const allRows = [...this.rows.values()];
+        return allRows.filter((row) => {
+          if (where?.deletedAt === null && row.deletedAt != null) return false;
+          if (where?.tenantId && row.tenantId !== where.tenantId) return false;
+          if (where?.customerId && row.customerId !== where.customerId) return false;
+          if (where?.externalId?.in) {
+            return where.externalId.in.includes(String(row.externalId));
+          }
+          return true;
+        });
+      },
+      async updateMany({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) {
+        let count = 0;
+        for (const row of this.rows.values()) {
+          const metadata = row.metadata as Record<string, unknown> | undefined;
+          if (
+            where.metadata &&
+            typeof where.metadata === "object" &&
+            (where.metadata as { path?: string[]; equals?: string }).equals ===
+              metadata?.sgpDeletionReason
+          ) {
+            Object.assign(row, data);
+            count += 1;
+          }
         }
-        return [];
+        return { count };
       },
       async create({ data }: { data: Record<string, unknown> }) {
         const row = { id: `invoice-${data.externalId}`, ...data };
@@ -408,6 +460,52 @@ describe("IntegrationsService", () => {
     assert.equal(result.status, "already_running");
     assert.equal((result as { runId: string }).runId, "run-id");
     assert.equal((await prisma.integrationSyncRun.update({ data: { status: IntegrationSyncStatus.SKIPPED } })).status, IntegrationSyncStatus.SKIPPED);
+  });
+
+  it("does not soft delete contracts when customer payload has no child records", async () => {
+    const prisma = createPrismaMock();
+    prisma.contract.rows.set("c1", {
+      id: "contract-1",
+      tenantId: user.tenantId,
+      customerId: "customer-1",
+      externalId: "c1",
+      deletedAt: null,
+      metadata: { source: "SGP" },
+    });
+
+    const service = new IntegrationsService(
+      {
+        discoverCustomers: async () => ({
+          body: {
+            clientes: [{ id: "1", nome: "Cliente A", cpfcnpj: "111" }],
+          },
+        }),
+      } as never,
+      createSgpCredentialsMock() as never,
+      {
+        async upsertFromExternalSource() {
+          return {
+            operation: "unchanged" as const,
+            customer: { id: "customer-1" },
+          };
+        },
+      } as never,
+      prisma as never,
+      createSyncHistoryMock() as never,
+    );
+
+    await (
+      service as unknown as {
+        processSgpCustomers: (
+          userArg: typeof user,
+          request: Record<string, unknown>,
+          runId: string,
+        ) => Promise<{ contractsDeleted: number }>;
+      }
+    ).processSgpCustomers(user, {}, "run-id");
+
+    const contract = prisma.contract.rows.get("c1");
+    assert.equal(contract?.deletedAt, null);
   });
 
   it("recovers stale running sync runs", async () => {

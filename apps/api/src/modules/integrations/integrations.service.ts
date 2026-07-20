@@ -588,6 +588,7 @@ export class IntegrationsService {
     let pagination = request.pagination;
     const seenExternalIds = createSgpSeenExternalIds();
     this.syncLogBuffer = [];
+    await this.restoreIncorrectlyDeletedSgpChildren(user.tenantId);
 
     try {
       while (true) {
@@ -700,6 +701,8 @@ export class IntegrationsService {
 
             const seenCustomerContracts = this.collectContractExternalIds(mapped.contracts);
             const seenCustomerInvoices = this.collectInvoiceExternalIds(mapped.invoices);
+            const shouldReconcileCustomerContracts = mapped.contracts.length > 0;
+            const shouldReconcileCustomerInvoices = mapped.invoices.length > 0;
 
             const contractUpserts = await this.upsertContracts(
               user.tenantId,
@@ -725,18 +728,23 @@ export class IntegrationsService {
             result.invoicesUnchanged += invoiceUpserts.unchanged;
             result.invoicesDeleted += invoiceUpserts.deleted;
 
-            result.contractsDeleted += await this.reconcileMissingSgpContractsForCustomer(
-              user.tenantId,
-              customerRecord.id,
-              seenCustomerContracts,
-              runId,
-            );
-            result.invoicesDeleted += await this.reconcileMissingSgpInvoicesForCustomer(
-              user.tenantId,
-              customerRecord.id,
-              seenCustomerInvoices,
-              runId,
-            );
+            if (shouldReconcileCustomerContracts) {
+              result.contractsDeleted += await this.reconcileMissingSgpContractsForCustomer(
+                user.tenantId,
+                customerRecord.id,
+                seenCustomerContracts,
+                runId,
+              );
+            }
+
+            if (shouldReconcileCustomerInvoices) {
+              result.invoicesDeleted += await this.reconcileMissingSgpInvoicesForCustomer(
+                user.tenantId,
+                customerRecord.id,
+                seenCustomerInvoices,
+                runId,
+              );
+            }
           } catch (error) {
             result.ignored += 1;
             const message = error instanceof Error ? error.message : "Erro inesperado.";
@@ -2153,6 +2161,54 @@ export class IntegrationsService {
     }
 
     return true;
+  }
+
+  private async restoreIncorrectlyDeletedSgpChildren(tenantId: string) {
+    const restoredContracts = await this.prisma.contract.updateMany({
+      where: {
+        tenantId,
+        deletedAt: { not: null },
+        metadata: {
+          path: ["sgpDeletionReason"],
+          equals: "missing_in_sgp_customer_sync",
+        },
+      },
+      data: {
+        deletedAt: null,
+        status: ContractStatus.ACTIVE,
+      },
+    });
+
+    const restoredInvoices = await this.prisma.invoice.updateMany({
+      where: {
+        tenantId,
+        deletedAt: { not: null },
+        metadata: {
+          path: ["sgpDeletionReason"],
+          equals: "missing_in_sgp_customer_sync",
+        },
+      },
+      data: {
+        deletedAt: null,
+        status: InvoiceStatus.OPEN,
+      },
+    });
+
+    if (restoredContracts.count > 0 || restoredInvoices.count > 0) {
+      this.logger.warn(
+        safeJsonStringify({
+          event: "sgp.sync.restored-incorrect-deletions",
+          tenantId,
+          contracts: restoredContracts.count,
+          invoices: restoredInvoices.count,
+        }),
+      );
+    }
+
+    return {
+      contracts: restoredContracts.count,
+      invoices: restoredInvoices.count,
+    };
   }
 
   private async reconcileMissingSgpCustomers(
