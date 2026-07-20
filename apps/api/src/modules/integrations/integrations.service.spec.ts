@@ -409,4 +409,28 @@ describe("IntegrationsService", () => {
     assert.equal((result as { runId: string }).runId, "run-id");
     assert.equal((await prisma.integrationSyncRun.update({ data: { status: IntegrationSyncStatus.SKIPPED } })).status, IntegrationSyncStatus.SKIPPED);
   });
+
+  it("recovers stale running sync runs", async () => {
+    let recoveredWhere: unknown;
+    const prisma = {
+      integrationSyncRun: {
+        async updateMany({ where, data }: { where: unknown; data: unknown }) {
+          recoveredWhere = where;
+          return { count: 2 };
+        },
+      },
+    };
+    const service = new IntegrationsService(
+      {} as never,
+      createSgpCredentialsMock() as never,
+      {} as never,
+      prisma as never,
+      createSyncHistoryMock() as never,
+    );
+
+    const count = await service.recoverStaleSyncRuns(60_000);
+
+    assert.equal(count, 2);
+    assert.match(JSON.stringify(recoveredWhere), /RUNNING/);
+  });
 });

@@ -38,4 +38,40 @@ describe("PermissionsGuard", () => {
 
     assert.throws(() => guard.canActivate(context), ForbiddenException);
   });
+
+  it("allows requests when all required permissions are granted", () => {
+    const reflector = {
+      getAllAndOverride: (key: string) =>
+        key === PERMISSIONS_KEY ? ["dashboard.read", "integrations.manage"] : undefined,
+    } as unknown as Reflector;
+    const guard = new PermissionsGuard(reflector);
+    const context = {
+      getHandler: () => undefined,
+      getClass: () => undefined,
+      switchToHttp: () => ({
+        getRequest: () => ({
+          user: { permissions: ["dashboard.read", "integrations.manage"] },
+        }),
+      }),
+    } as never;
+
+    assert.equal(guard.canActivate(context), true);
+  });
+
+  it("blocks unauthenticated requests when permissions are required", () => {
+    const reflector = {
+      getAllAndOverride: (key: string) =>
+        key === PERMISSIONS_KEY ? ["integrations.manage"] : undefined,
+    } as unknown as Reflector;
+    const guard = new PermissionsGuard(reflector);
+    const context = {
+      getHandler: () => undefined,
+      getClass: () => undefined,
+      switchToHttp: () => ({
+        getRequest: () => ({}),
+      }),
+    } as never;
+
+    assert.throws(() => guard.canActivate(context), ForbiddenException);
+  });
 });
