@@ -23,8 +23,10 @@ import {
   CheckCircle2,
   Database,
   FileWarning,
+  History,
   MessageSquare,
   Receipt,
+  RefreshCcw,
   Sparkles,
   Timer,
   TrendingUp,
@@ -57,6 +59,37 @@ const cardLabels = {
   overdueInvoices: "Faturas vencidas",
 };
 
+function formatDuration(durationMs: number | null | undefined) {
+  if (durationMs == null) return "—";
+  if (durationMs < 1000) return `${durationMs} ms`;
+  const seconds = Math.round(durationMs / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return `${minutes}m ${remainder}s`;
+}
+
+function syncStatusVariant(status: string) {
+  if (status === "COMPLETED") return "green";
+  if (status === "FAILED") return "red";
+  if (status === "PARTIAL" || status === "RUNNING") return "amber";
+  if (status === "SKIPPED") return "slate";
+  return "blue";
+}
+
+function healthStatusVariant(status: "healthy" | "warning" | "critical" | "unknown") {
+  if (status === "healthy") return "green";
+  if (status === "warning") return "amber";
+  if (status === "critical") return "red";
+  return "slate";
+}
+
+function connectionStatusVariant(status: string) {
+  if (status === "online" || status === "syncing") return "green";
+  if (status === "error") return "red";
+  return "amber";
+}
+
 export default function DashboardPage() {
   const { token } = useAuth();
   const [data, setData] = useState<DashboardOverview | null>(null);
@@ -83,6 +116,7 @@ export default function DashboardPage() {
     0,
   );
   const memory = data.agentMemory;
+  const sgpSync = data.sgpSync;
 
   return (
     <div className="space-y-6">
@@ -112,6 +146,165 @@ export default function DashboardPage() {
             </Card>
           );
         })}
+      </section>
+
+      <section className="space-y-5">
+        <Card>
+          <CardHeader>
+            <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
+              <div className="flex items-center gap-3">
+                <span className="rounded-2xl bg-sky-400/10 p-3 text-sky-300">
+                  <RefreshCcw size={24} className={sgpSync.runningSync ? "animate-spin" : ""} />
+                </span>
+                <div>
+                  <CardTitle className="text-2xl">Sincronização SGP</CardTitle>
+                  <p className="text-sm text-slate-400">
+                    Monitoramento administrativo da integração e histórico resumido.
+                  </p>
+                </div>
+              </div>
+              {sgpSync.runningSync ? (
+                <Badge variant="amber">Sincronização em andamento</Badge>
+              ) : sgpSync.lastSync ? (
+                <Badge variant={syncStatusVariant(sgpSync.lastSync.status)}>
+                  Última: {sgpSync.lastSync.status}
+                </Badge>
+              ) : (
+                <Badge variant="slate">Sem execuções</Badge>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              {[
+                [
+                  "Última sincronização",
+                  sgpSync.lastSync
+                    ? new Date(sgpSync.lastSync.finishedAt ?? sgpSync.lastSync.startedAt).toLocaleString("pt-BR")
+                    : "—",
+                ],
+                ["Duração", formatDuration(sgpSync.lastSync?.durationMs)],
+                ["Registros processados", sgpSync.recordCount],
+                ["Erros", sgpSync.errorsCount],
+              ].map(([label, value]) => (
+                <div
+                  className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4"
+                  key={label as string}
+                >
+                  <p className="text-sm text-slate-400">{label as string}</p>
+                  <p className="mt-2 text-2xl font-semibold text-white">{value as string | number}</p>
+                </div>
+              ))}
+            </div>
+
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              {[
+                ["Tempo médio", formatDuration(sgpSync.averageDurationMs)],
+                [
+                  "Início da última sync",
+                  sgpSync.lastSync
+                    ? new Date(sgpSync.lastSync.startedAt).toLocaleString("pt-BR")
+                    : "—",
+                ],
+                ["Responsável", sgpSync.lastSync?.triggeredBy ?? "Sistema"],
+                [
+                  "Modo / origem",
+                  sgpSync.lastSync
+                    ? `${sgpSync.lastSync.syncMode ?? "—"} · ${sgpSync.lastSync.trigger ?? "—"}`
+                    : "—",
+                ],
+              ].map(([label, value]) => (
+                <div
+                  className="rounded-2xl border border-slate-800 bg-slate-950/50 p-4"
+                  key={label as string}
+                >
+                  <p className="text-sm text-slate-400">{label as string}</p>
+                  <p className="mt-2 text-lg font-semibold text-white">{value as string}</p>
+                </div>
+              ))}
+            </div>
+
+            {sgpSync.runningSync ? (
+              <div className="rounded-2xl border border-amber-400/30 bg-amber-400/10 p-4 text-amber-100">
+                Sync em andamento desde{" "}
+                {new Date(sgpSync.runningSync.startedAt).toLocaleString("pt-BR")}
+                {sgpSync.runningSync.triggeredBy
+                  ? ` · iniciada por ${sgpSync.runningSync.triggeredBy}`
+                  : ""}
+                {" · "}
+                {sgpSync.runningSync.recordCount} registros processados até o momento
+              </div>
+            ) : null}
+
+            <div className="grid gap-6 xl:grid-cols-[1fr_360px]">
+              <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+                <div className="mb-4 flex items-center gap-2">
+                  <History className="text-sky-300" size={18} />
+                  <p className="font-semibold text-white">Histórico resumido</p>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-left text-sm text-slate-300">
+                    <thead className="text-xs uppercase tracking-wide text-slate-500">
+                      <tr>
+                        <th className="px-3 py-2">Início</th>
+                        <th className="px-3 py-2">Duração</th>
+                        <th className="px-3 py-2">Registros</th>
+                        <th className="px-3 py-2">Erros</th>
+                        <th className="px-3 py-2">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sgpSync.recentHistory.length === 0 ? (
+                        <tr>
+                          <td className="px-3 py-4 text-slate-500" colSpan={5}>
+                            Nenhuma sincronização registrada.
+                          </td>
+                        </tr>
+                      ) : (
+                        sgpSync.recentHistory.map((item) => (
+                          <tr className="border-t border-slate-800" key={item.id}>
+                            <td className="px-3 py-3">
+                              {new Date(item.startedAt).toLocaleString("pt-BR")}
+                            </td>
+                            <td className="px-3 py-3">{formatDuration(item.durationMs)}</td>
+                            <td className="px-3 py-3">{item.recordCount}</td>
+                            <td className="px-3 py-3">{item.errorsCount}</td>
+                            <td className="px-3 py-3">
+                              <Badge variant={syncStatusVariant(item.status)}>{item.status}</Badge>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+                <div className="mb-4 flex items-center gap-2">
+                  <Activity className="text-emerald-300" size={18} />
+                  <p className="font-semibold text-white">Indicadores de saúde</p>
+                </div>
+                <div className="space-y-3">
+                  {sgpSync.health.map((item) => (
+                    <div
+                      className="flex items-start justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900/50 p-3"
+                      key={item.label}
+                    >
+                      <div>
+                        <p className="text-sm font-medium text-white">{item.label}</p>
+                        {item.detail ? (
+                          <p className="mt-1 text-xs text-slate-500">{item.detail}</p>
+                        ) : null}
+                      </div>
+                      <Badge variant={healthStatusVariant(item.status)}>{item.status}</Badge>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
       </section>
 
       <section className="space-y-5">
@@ -371,7 +564,7 @@ export default function DashboardPage() {
                 key={item.label}
               >
                 <span className="text-sm text-slate-200">{item.label}</span>
-                <Badge variant={item.status === "online" ? "green" : "amber"}>
+                <Badge variant={connectionStatusVariant(item.status)}>
                   {item.status}
                 </Badge>
               </div>

@@ -1,5 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import { PrismaService } from "../database/prisma.service";
+import { DashboardSgpSyncService } from "./dashboard-sgp-sync.service";
 
 type MemorySourceKey =
   | "DOCUMENT_PROCESSED"
@@ -16,7 +17,10 @@ export class DashboardService {
     { expiresAt: number; value: Awaited<ReturnType<DashboardService["getAgentMemoryOverview"]>> }
   >();
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly sgpSyncDashboard: DashboardSgpSyncService,
+  ) {}
 
   async getOverview(tenantId: string) {
     const since = new Date();
@@ -104,6 +108,7 @@ export class DashboardService {
     const channelDistribution = this.buildChannelDistribution(allMessages);
     const agentPerformance = this.buildAgentPerformance(agentMessages);
     const agentMemory = await this.getCachedAgentMemoryOverview(tenantId);
+    const sgpSync = await this.sgpSyncDashboard.getOverview(tenantId);
 
     return {
       cards: {
@@ -120,10 +125,21 @@ export class DashboardService {
       channelDistribution,
       agentPerformance,
       agentMemory,
+      sgpSync,
       health: [
         { label: "WhatsApp", status: "online" },
         { label: "Redis Realtime", status: "online" },
         { label: "Agentes IA", status: activeAiAgents > 0 ? "online" : "paused" },
+        {
+          label: "SGP Sync",
+          status: sgpSync.runningSync
+            ? "syncing"
+            : sgpSync.lastSync?.status === "COMPLETED"
+              ? "online"
+              : sgpSync.lastSync?.status === "FAILED"
+                ? "error"
+                : "paused",
+        },
       ],
     };
   }

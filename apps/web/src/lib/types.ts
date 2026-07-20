@@ -299,4 +299,44 @@ export type DashboardOverview = {
     }>;
   };
   health: Array<{ label: string; status: string }>;
+  sgpSync: {
+    lastSync: {
+      id: string;
+      startedAt: string;
+      finishedAt: string | null;
+      durationMs: number | null;
+      status: IntegrationSyncStatus;
+      recordCount: number;
+      errorsCount: number;
+      syncMode: string | null;
+      trigger: string | null;
+      triggeredBy: string | null;
+    } | null;
+    runningSync: {
+      id: string;
+      startedAt: string;
+      status: IntegrationSyncStatus;
+      recordCount: number;
+      triggeredBy: string | null;
+    } | null;
+    averageDurationMs: number | null;
+    recordCount: number;
+    errorsCount: number;
+    health: Array<{
+      label: string;
+      status: "healthy" | "warning" | "critical" | "unknown";
+      detail?: string;
+    }>;
+    recentHistory: Array<{
+      id: string;
+      startedAt: string;
+      finishedAt: string | null;
+      durationMs: number | null;
+      status: IntegrationSyncStatus;
+      recordCount: number;
+      errorsCount: number;
+      syncMode: string | null;
+      trigger: string | null;
+    }>;
+  };
 };
