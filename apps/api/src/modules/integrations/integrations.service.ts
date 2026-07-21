@@ -1514,6 +1514,7 @@ export class IntegrationsService {
         "codcli",
         "cod_cliente",
         "codigo_cliente",
+        "cliente",
       ]) ??
       this.firstString(nestedCustomer, [
         "id",

@@ -20,4 +20,6 @@ pnpm-debug.log*
 # Validation / homologation reports
 sgp-validation-report.json
 homologation-report.json
+sgp-investigation-report.json
+sgp-regression-audit.json
 load-test-report.json

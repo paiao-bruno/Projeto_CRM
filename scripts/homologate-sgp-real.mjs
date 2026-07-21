@@ -21,6 +21,7 @@ import { Client } from "pg";
 const ROOT = process.cwd();
 const RAW_API = process.env.API_URL ?? "http://localhost:4000";
 const API_URL = RAW_API.endsWith("/api") ? RAW_API : `${RAW_API.replace(/\/$/, "")}/api`;
+const WEB_URL = process.env.APP_URL ?? "http://localhost:3000";
 const DATABASE_URL =
   process.env.DATABASE_URL ??
   "postgresql://postgres:postgres@localhost:51214/isp_crm?schema=public";
@@ -40,7 +41,10 @@ const report = {
   auth: {},
   sync: {},
   data: {},
+  consistency: {},
   pagination: {},
+  frontend: {},
+  regressionAudit: {},
   errorHandling: {},
   issues: [],
   passed: [],
@@ -188,6 +192,65 @@ async function dbCounts(client, tenantId) {
   };
 }
 
+async function fetchApiTotal(token, endpoint) {
+  const res = await apiGet(token, `${endpoint}?page=1&limit=1`);
+  return res.ok ? (res.body.total ?? 0) : null;
+}
+
+async function validateConsistency(token, dbCountsAfter) {
+  const apiCustomers = await fetchApiTotal(token, "/customers");
+  const apiContracts = await fetchApiTotal(token, "/contracts");
+  const apiInvoices = await fetchApiTotal(token, "/invoices");
+
+  const consistency = {
+    db: dbCountsAfter,
+    api: {
+      customers: apiCustomers,
+      contracts: apiContracts,
+      invoices: apiInvoices,
+    },
+    matches: {
+      customers: apiCustomers === dbCountsAfter.customers,
+      contracts: apiContracts === dbCountsAfter.contracts,
+      invoices: apiInvoices === dbCountsAfter.invoices,
+    },
+  };
+
+  if (!consistency.matches.customers) {
+    fail("consistencia-clientes", `DB=${dbCountsAfter.customers} API=${apiCustomers}`);
+  } else pass("consistencia-clientes", `${dbCountsAfter.customers}`);
+  if (!consistency.matches.contracts) {
+    fail("consistencia-contratos", `DB=${dbCountsAfter.contracts} API=${apiContracts}`);
+  } else pass("consistencia-contratos", `${dbCountsAfter.contracts}`);
+  if (!consistency.matches.invoices) {
+    fail("consistencia-faturas", `DB=${dbCountsAfter.invoices} API=${apiInvoices}`);
+  } else pass("consistencia-faturas", `${dbCountsAfter.invoices}`);
+
+  return consistency;
+}
+
+async function validateFrontend() {
+  const pages = ["/customers", "/contracts", "/invoices"];
+  const results = {};
+  for (const page of pages) {
+    const started = performance.now();
+    const res = await fetch(`${WEB_URL}${page}`);
+    const html = await res.text();
+    results[page] = {
+      ok: res.ok,
+      durationMs: Math.round(performance.now() - started),
+      hasLoadError: html.includes("Erro ao carregar"),
+      hasEmptyStateOnly: html.includes("0 registros") && !html.includes("SGP"),
+    };
+    if (!res.ok || results[page].hasLoadError) {
+      fail(`frontend${page}`, `HTTP ${res.status}`);
+    } else {
+      pass(`frontend${page}`, `${results[page].durationMs}ms`);
+    }
+  }
+  return results;
+}
+
 function printCredentialInstructions() {
   console.log(`
 ╔══════════════════════════════════════════════════════════════════╗
@@ -224,7 +287,21 @@ async function main() {
     tokenConfigured: Boolean(SGP.token),
   };
 
+  spawnSync("node", ["scripts/audit-sgp-regression.mjs"], { cwd: ROOT, stdio: "pipe" });
+  try {
+    report.regressionAudit = JSON.parse(
+      fs.readFileSync(path.join(ROOT, "sgp-regression-audit.json"), "utf8"),
+    );
+  } catch {
+    report.regressionAudit = { error: "audit script failed" };
+  }
+
   spawnSync("npm", ["run", "build", "-w", "apps/api"], { cwd: ROOT, stdio: "inherit" });
+  spawnSync("npm", ["run", "build", "-w", "apps/web"], {
+    cwd: ROOT,
+    stdio: "inherit",
+    env: { ...process.env, NODE_ENV: "production" },
+  });
 
   const db = new Client({ connectionString: DATABASE_URL });
   await db.connect();
@@ -292,6 +369,10 @@ async function main() {
         created: fullRun.created,
         updated: fullRun.updated,
         ignored: fullRun.ignored,
+        contractsCreated: fullRun.contracts?.created ?? fullRun.contractsCreated ?? 0,
+        contractsUpdated: fullRun.contracts?.updated ?? fullRun.contractsUpdated ?? 0,
+        invoicesCreated: fullRun.invoices?.created ?? fullRun.invoicesCreated ?? 0,
+        invoicesUpdated: fullRun.invoices?.updated ?? fullRun.invoicesUpdated ?? 0,
         customersDeleted: fullRun.customers?.deleted ?? 0,
         contractsDeleted: fullRun.contracts?.deleted ?? 0,
         invoicesDeleted: fullRun.invoices?.deleted ?? 0,
@@ -305,6 +386,21 @@ async function main() {
 
     const afterFull = await dbCounts(db, (await db.query(`SELECT "tenantId" FROM "TenantMember" LIMIT 1`)).rows[0]?.tenantId);
     report.data.afterFullSync = afterFull;
+
+    if (afterFull.customers > 0 && afterFull.contracts === 0) {
+      fail("sync-contratos-vazios", `${afterFull.customers} clientes mas 0 contratos no banco`);
+    } else if (afterFull.contracts > 0) {
+      pass("sync-contratos-persistidos", `${afterFull.contracts}`);
+    }
+
+    if (afterFull.customers > 0 && afterFull.invoices === 0) {
+      fail("sync-faturas-vazias", `${afterFull.customers} clientes mas 0 faturas no banco`);
+    } else if (afterFull.invoices > 0) {
+      pass("sync-faturas-persistidas", `${afterFull.invoices}`);
+    }
+
+    const tenantId = (await db.query(`SELECT "tenantId" FROM "TenantMember" LIMIT 1`)).rows[0]?.tenantId;
+    report.consistency = await validateConsistency(token, afterFull);
 
     const incStart = await apiPost(token, "/integrations/sgp/sync-customers", { credentialId });
     if (!incStart.ok || !incStart.body?.runId) {
@@ -351,6 +447,31 @@ async function main() {
       }
       report.pagination[endpoint] = pages;
       pass(`paginacao${endpoint}`, `${pages.length} páginas · total ${pages[0]?.total ?? 0}`);
+    }
+
+    const webProcess = spawn("npm", ["run", "start", "-w", "apps/web"], {
+      cwd: ROOT,
+      env: {
+        ...process.env,
+        NODE_ENV: "production",
+        NEXT_PUBLIC_API_URL: API_URL,
+      },
+      stdio: "ignore",
+    });
+
+    try {
+      for (let i = 0; i < 60; i += 1) {
+        try {
+          const probe = await fetch(`${WEB_URL}/login`);
+          if (probe.status < 500) break;
+        } catch {
+          // retry
+        }
+        await wait(500);
+      }
+      report.frontend = await validateFrontend();
+    } finally {
+      webProcess.kill("SIGTERM");
     }
 
     const badAuth = await apiPost(token, "/integrations/sgp/credentials/test", {
