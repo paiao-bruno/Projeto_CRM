@@ -19,6 +19,17 @@ const credentials = {
   token: "secret-token",
 };
 
+function createEmptySgpClientMock(
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    discoverCustomers: async () => ({ body: { clientes: [] } }),
+    discoverContracts: async () => ({ body: { contratos: [] } }),
+    discoverTitles: async () => ({ body: { titulos: [] } }),
+    ...overrides,
+  };
+}
+
 function createSgpCredentialsMock() {
   return {
     resolveActiveCredentials: async () => credentials,
@@ -230,13 +241,13 @@ describe("IntegrationsService", () => {
   it("discovers customers without persisting data", async () => {
     let upserts = 0;
     const service = new IntegrationsService(
-      {
+      createEmptySgpClientMock({
         discoverCustomers: async (_creds: typeof credentials, _payload: Record<string, unknown>) => ({
           body: {
             clientes: [{ id: 1, nome: "Cliente", cpfcnpj: "00000000000" }],
           },
         }),
-      } as never,
+      }) as never,
       createSgpCredentialsMock() as never,
       {
         upsertFromExternalSource: async () => {
@@ -257,7 +268,7 @@ describe("IntegrationsService", () => {
     const prisma = createPrismaMock();
     const calls: unknown[] = [];
     const service = new IntegrationsService(
-      {
+      createEmptySgpClientMock({
         discoverCustomers: async (_creds: typeof credentials, payload: Record<string, unknown>) => {
           calls.push(payload);
           if (calls.length === 1) {
@@ -283,7 +294,7 @@ describe("IntegrationsService", () => {
             },
           };
         },
-      } as never,
+      }) as never,
       createSgpCredentialsMock() as never,
       {
         async upsertFromExternalSource(
@@ -339,7 +350,7 @@ describe("IntegrationsService", () => {
     });
 
     const service = new IntegrationsService(
-      {
+      createEmptySgpClientMock({
         discoverCustomers: async () => ({
           body: {
             clientes: [
@@ -358,7 +369,7 @@ describe("IntegrationsService", () => {
             ],
           },
         }),
-      } as never,
+      }) as never,
       createSgpCredentialsMock() as never,
       {
         async upsertFromExternalSource(
@@ -406,13 +417,13 @@ describe("IntegrationsService", () => {
     });
 
     const service = new IntegrationsService(
-      {
+      createEmptySgpClientMock({
         discoverCustomers: async () => ({
           body: {
             clientes: [{ id: "1", nome: "Cliente A", cpfcnpj: "111" }],
           },
         }),
-      } as never,
+      }) as never,
       createSgpCredentialsMock() as never,
       {
         async upsertFromExternalSource(
@@ -474,13 +485,13 @@ describe("IntegrationsService", () => {
     });
 
     const service = new IntegrationsService(
-      {
+      createEmptySgpClientMock({
         discoverCustomers: async () => ({
           body: {
             clientes: [{ id: "1", nome: "Cliente A", cpfcnpj: "111" }],
           },
         }),
-      } as never,
+      }) as never,
       createSgpCredentialsMock() as never,
       {
         async upsertFromExternalSource() {
@@ -521,13 +532,13 @@ describe("IntegrationsService", () => {
     });
 
     const service = new IntegrationsService(
-      {
+      createEmptySgpClientMock({
         discoverCustomers: async () => ({
           body: {
             clientes: [{ id: "1", nome: "Cliente A", cpfcnpj: "111" }],
           },
         }),
-      } as never,
+      }) as never,
       createSgpCredentialsMock() as never,
       {
         async upsertFromExternalSource() {
@@ -553,6 +564,72 @@ describe("IntegrationsService", () => {
 
     const contract = prisma.contract.rows.get("c1");
     assert.equal(contract?.deletedAt, null);
+  });
+
+  it("persists contracts and invoices from dedicated SGP list endpoints", async () => {
+    const prisma = createPrismaMock();
+
+    const service = new IntegrationsService(
+      createEmptySgpClientMock({
+        discoverCustomers: async () => ({
+          body: {
+            clientes: [{ id: "1", nome: "Cliente A", cpfcnpj: "111" }],
+          },
+        }),
+        discoverContracts: async () => ({
+          body: {
+            contratos: [{ id: "c1", cliente_id: "1", status: "ATIVO", plano: "600 Mega" }],
+          },
+        }),
+        discoverTitles: async () => ({
+          body: {
+            titulos: [{ id: "t1", cliente_id: "1", contrato: "c1", valor: "99,90", status: "ABERTO" }],
+          },
+        }),
+      }) as never,
+      createSgpCredentialsMock() as never,
+      {
+        async upsertFromExternalSource(
+          _tenantId: string,
+          _memberId: string,
+          input: { externalId?: string },
+        ) {
+          const customer = {
+            id: `customer-${input.externalId}`,
+            tenantId: user.tenantId,
+            ispAccountCode: input.externalId,
+            document: input.externalId === "1" ? "111" : undefined,
+            deletedAt: null,
+            metadata: { source: "SGP" },
+          };
+          prisma.customer.rows.push(customer);
+          return {
+            operation: "created" as const,
+            customer,
+          };
+        },
+      } as never,
+      prisma as never,
+      createSyncHistoryMock() as never,
+    );
+
+    const result = await (
+      service as unknown as {
+        processSgpCustomers: (
+          userArg: typeof user,
+          request: Record<string, unknown>,
+          runId: string,
+        ) => Promise<{
+          contractsCreated: number;
+          invoicesCreated: number;
+        }>;
+      }
+    ).processSgpCustomers(user, { full: true }, "run-id");
+
+    assert.equal(result.contractsCreated, 1);
+    assert.equal(result.invoicesCreated, 1);
+    assert.ok(prisma.contract.rows.has("c1"));
+    assert.ok(prisma.invoice.rows.has("t1"));
   });
 
   it("recovers stale running sync runs", async () => {

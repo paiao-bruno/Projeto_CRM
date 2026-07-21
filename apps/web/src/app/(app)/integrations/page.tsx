@@ -779,7 +779,7 @@ export default function IntegrationsPage() {
                 <div>
                   <CardTitle>SGP</CardTitle>
                   <p className="mt-1 text-sm text-slate-400">
-                    Integração oficial via /api/ura/clientes/
+                    Clientes via /api/ura/clientes/ · Contratos via /api/contrato/list/ · Faturas via /api/ura/titulos/
                   </p>
                   <div className="mt-2 flex gap-2">
                     <Badge variant="blue">API Externa</Badge>

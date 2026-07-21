@@ -10,6 +10,8 @@ import { SgpRuntimeCredentials } from "./types/sgp-credentials.types";
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_CUSTOMER_DISCOVERY_ENDPOINT = "/api/ura/consultacliente/";
 const OFFICIAL_CUSTOMERS_LIST_ENDPOINT = "/api/ura/clientes/";
+const OFFICIAL_CONTRACTS_LIST_ENDPOINT = "/api/contrato/list/";
+const OFFICIAL_TITLES_LIST_ENDPOINT = "/api/ura/titulos/";
 
 @Injectable()
 export class SgpClientService {
@@ -34,6 +36,28 @@ export class SgpClientService {
     return this.request(credentials, {
       operation: "sgp.discover-customers",
       endpoint: OFFICIAL_CUSTOMERS_LIST_ENDPOINT,
+      payload,
+    });
+  }
+
+  discoverContracts(
+    credentials: SgpRuntimeCredentials,
+    payload?: Record<string, unknown>,
+  ) {
+    return this.request(credentials, {
+      operation: "sgp.discover-contracts",
+      endpoint: OFFICIAL_CONTRACTS_LIST_ENDPOINT,
+      payload,
+    });
+  }
+
+  discoverTitles(
+    credentials: SgpRuntimeCredentials,
+    payload?: Record<string, unknown>,
+  ) {
+    return this.request(credentials, {
+      operation: "sgp.discover-titles",
+      endpoint: OFFICIAL_TITLES_LIST_ENDPOINT,
       payload,
     });
   }

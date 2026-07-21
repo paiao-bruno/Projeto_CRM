@@ -21,6 +21,7 @@
     "prisma:validate:migrations": "node scripts/validate-prisma.mjs",
     "prisma:format": "prisma format --schema prisma/schema.prisma",
     "homologate:sgp": "node scripts/homologate-sgp-real.mjs",
+    "investigate:sgp": "node scripts/investigate-sgp-sync.mjs",
     "load-test": "node scripts/load-test.mjs",
     "db:test-migrate-deploy": "node scripts/test-migrate-deploy.mjs"
   },

@@ -780,6 +780,32 @@ export class IntegrationsService {
         if (!pagination) break;
       }
 
+      const dedicatedContractSync = await this.processSgpContractsFromApi(
+        user,
+        credentials,
+        request,
+        incrementalContext,
+        runId,
+        seenExternalIds,
+        result,
+      );
+      if (dedicatedContractSync) {
+        syncIncludedContractPayload = true;
+      }
+
+      const dedicatedInvoiceSync = await this.processSgpInvoicesFromApi(
+        user,
+        credentials,
+        request,
+        incrementalContext,
+        runId,
+        seenExternalIds,
+        result,
+      );
+      if (dedicatedInvoiceSync) {
+        syncIncludedInvoicePayload = true;
+      }
+
       if (incrementalContext.mode === "full") {
         result.customersDeleted += await this.reconcileMissingSgpCustomers(
           user.tenantId,
@@ -1254,6 +1280,287 @@ export class IntegrationsService {
     }
 
     return this.looksLikeCustomer(body) ? [this.attachUraRelations(body, body)] : [];
+  }
+
+  private extractContracts(body: unknown): Array<Record<string, unknown>> {
+    if (Array.isArray(body)) {
+      return body.filter(this.isRecord);
+    }
+
+    if (!this.isRecord(body)) {
+      return [];
+    }
+
+    const candidateKeys = [
+      "contratos",
+      "contrato",
+      "data",
+      "results",
+      "registros",
+      "objects",
+      "items",
+    ];
+
+    for (const key of candidateKeys) {
+      const value = body[key];
+      if (Array.isArray(value)) {
+        return value.filter(this.isRecord);
+      }
+      if (this.isRecord(value)) {
+        return [value];
+      }
+    }
+
+    return this.looksLikeContract(body) ? [body] : [];
+  }
+
+  private extractTitles(body: unknown): Array<Record<string, unknown>> {
+    if (Array.isArray(body)) {
+      return body.filter(this.isRecord);
+    }
+
+    if (!this.isRecord(body)) {
+      return [];
+    }
+
+    const candidateKeys = [
+      "titulos",
+      "títulos",
+      "titulo",
+      "data",
+      "results",
+      "registros",
+      "objects",
+      "items",
+    ];
+
+    for (const key of candidateKeys) {
+      const value = body[key];
+      if (Array.isArray(value)) {
+        return value.filter(this.isRecord);
+      }
+      if (this.isRecord(value)) {
+        return [value];
+      }
+    }
+
+    return this.looksLikeTitle(body) ? [body] : [];
+  }
+
+  private async processSgpContractsFromApi(
+    user: AuthUser,
+    credentials: SgpRuntimeCredentials,
+    request: SgpDiscoveryRequest,
+    incrementalContext: SgpIncrementalContext,
+    runId: string | undefined,
+    seenExternalIds: SgpSeenExternalIds,
+    result: SyncCounters,
+  ) {
+    let pagination = request.pagination;
+    let includedPayload = false;
+
+    while (true) {
+      const response = await this.sgpClient.discoverContracts(
+        credentials,
+        this.buildSyncPayload(request, incrementalContext, pagination),
+      );
+      this.assertListDiscoveryResponse(response.body, "/api/contrato/list/");
+      const contracts = this.extractContracts(response.body);
+      if (contracts.length > 0) {
+        includedPayload = true;
+      }
+
+      for (const contract of contracts) {
+        const externalId = this.contractExternalId(contract);
+        if (!externalId) {
+          result.ignored += 1;
+          continue;
+        }
+
+        seenExternalIds.contracts.add(externalId);
+
+        if (isSgpDeletedRecord(contract)) {
+          const removed = await this.softDeleteSgpContract(user.tenantId, externalId, runId);
+          if (removed) {
+            result.contractsDeleted += 1;
+          }
+          continue;
+        }
+
+        const customerRecord = await this.findSgpCustomerRecordForChild(user.tenantId, contract);
+        if (!customerRecord) {
+          result.ignored += 1;
+          if (runId) {
+            await this.createSyncLog({
+              tenantId: user.tenantId,
+              runId,
+              entity: IntegrationSyncEntity.CONTRACT,
+              externalId,
+              action: "ignored",
+              status: IntegrationSyncStatus.PARTIAL,
+              message: "Contrato ignorado porque o cliente relacionado ainda não existe no CRM.",
+            });
+          }
+          continue;
+        }
+
+        const upserts = await this.upsertContracts(
+          user.tenantId,
+          customerRecord.id,
+          [contract],
+          runId,
+          incrementalContext,
+        );
+        result.contractsCreated += upserts.created;
+        result.contractsUpdated += upserts.updated;
+        result.contractsUnchanged += upserts.unchanged;
+        result.contractsDeleted += upserts.deleted;
+      }
+
+      pagination = this.nextPagination(response.body, pagination);
+      if (!pagination) break;
+    }
+
+    return includedPayload;
+  }
+
+  private async processSgpInvoicesFromApi(
+    user: AuthUser,
+    credentials: SgpRuntimeCredentials,
+    request: SgpDiscoveryRequest,
+    incrementalContext: SgpIncrementalContext,
+    runId: string | undefined,
+    seenExternalIds: SgpSeenExternalIds,
+    result: SyncCounters,
+  ) {
+    let pagination = request.pagination;
+    let includedPayload = false;
+
+    while (true) {
+      const response = await this.sgpClient.discoverTitles(
+        credentials,
+        this.buildSyncPayload(request, incrementalContext, pagination),
+      );
+      this.assertListDiscoveryResponse(response.body, "/api/ura/titulos/");
+      const invoices = this.extractTitles(response.body);
+      if (invoices.length > 0) {
+        includedPayload = true;
+      }
+
+      for (const invoice of invoices) {
+        const externalId = this.invoiceExternalId(invoice);
+        if (!externalId) {
+          result.ignored += 1;
+          continue;
+        }
+
+        seenExternalIds.invoices.add(externalId);
+
+        if (isSgpDeletedRecord(invoice)) {
+          const removed = await this.softDeleteSgpInvoice(user.tenantId, externalId, runId);
+          if (removed) {
+            result.invoicesDeleted += 1;
+          }
+          continue;
+        }
+
+        const customerRecord = await this.findSgpCustomerRecordForChild(user.tenantId, invoice);
+        if (!customerRecord) {
+          result.ignored += 1;
+          if (runId) {
+            await this.createSyncLog({
+              tenantId: user.tenantId,
+              runId,
+              entity: IntegrationSyncEntity.INVOICE,
+              externalId,
+              action: "ignored",
+              status: IntegrationSyncStatus.PARTIAL,
+              message: "Fatura ignorada porque o cliente relacionado ainda não existe no CRM.",
+            });
+          }
+          continue;
+        }
+
+        const upserts = await this.upsertInvoices(
+          user.tenantId,
+          customerRecord.id,
+          [invoice],
+          runId,
+          incrementalContext,
+        );
+        result.invoicesCreated += upserts.created;
+        result.invoicesUpdated += upserts.updated;
+        result.invoicesUnchanged += upserts.unchanged;
+        result.invoicesDeleted += upserts.deleted;
+      }
+
+      pagination = this.nextPagination(response.body, pagination);
+      if (!pagination) break;
+    }
+
+    return includedPayload;
+  }
+
+  private findSgpCustomerRecordForChild(
+    tenantId: string,
+    record: Record<string, unknown>,
+  ) {
+    const nestedCustomer = this.firstRecord(record, ["cliente", "customer"]);
+    const externalId =
+      this.firstString(record, [
+        "cliente_id",
+        "idcliente",
+        "id_cliente",
+        "codcli",
+        "cod_cliente",
+        "codigo_cliente",
+      ]) ??
+      this.firstString(nestedCustomer, [
+        "id",
+        "cliente_id",
+        "idcliente",
+        "codigo",
+        "codcli",
+        "cod_cliente",
+      ]);
+    const document = this.normalizeDocument(
+      this.firstString(record, [
+        "cpfcnpj",
+        "cpf_cnpj",
+        "cpf",
+        "cnpj",
+        "documento",
+        "document",
+      ]) ??
+        this.firstString(nestedCustomer, [
+          "cpfcnpj",
+          "cpf_cnpj",
+          "cpf",
+          "cnpj",
+          "documento",
+          "document",
+        ]),
+    );
+
+    return this.findSgpCustomerRecord(tenantId, externalId, document);
+  }
+
+  private assertListDiscoveryResponse(body: unknown, endpoint: string) {
+    this.assertCustomerDiscoveryResponse(body, endpoint);
+  }
+
+  private looksLikeContract(value: Record<string, unknown>) {
+    return Boolean(
+      this.contractExternalId(value) ||
+        this.firstString(value, ["plano", "plano_nome", "nome_plano", "login", "pppoe"]),
+    );
+  }
+
+  private looksLikeTitle(value: Record<string, unknown>) {
+    return Boolean(
+      this.invoiceExternalId(value) ||
+        this.firstString(value, ["valor", "valor_total", "vencimento", "data_vencimento"]),
+    );
   }
 
   private mapSgpCustomer(raw: Record<string, unknown>): SgpCustomerMapping {

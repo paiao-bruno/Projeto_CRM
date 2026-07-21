@@ -38,6 +38,24 @@ describe("SgpClientService", () => {
     });
   });
 
+  it("calls dedicated contract and title list endpoints", async () => {
+    const requestedUrls: string[] = [];
+    global.fetch = (async (url: URL | RequestInfo) => {
+      requestedUrls.push(url.toString());
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as typeof fetch;
+
+    const service = new SgpClientService();
+
+    await service.discoverContracts(credentials, { offset: 0 });
+    await service.discoverTitles(credentials, { offset: 0 });
+
+    assert.deepEqual(requestedUrls, [
+      "https://webmais.sgp.net.br/api/contrato/list/",
+      "https://webmais.sgp.net.br/api/ura/titulos/",
+    ]);
+  });
+
   it("rejects html responses with a clear exception", async () => {
     global.fetch = (async () =>
       new Response("<!DOCTYPE html><html></html>", { status: 200 })) as typeof fetch;
