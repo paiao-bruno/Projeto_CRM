@@ -1,0 +1,25 @@
+node_modules/
+.next/
+dist/
+coverage/
+*.tsbuildinfo
+.env
+.env.local
+.env.*.local
+
+# Local storage for development uploads
+storage/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Validation / homologation reports
+sgp-validation-report.json
+homologation-report.json
+sgp-investigation-report.json
+sgp-regression-audit.json
+load-test-report.json
