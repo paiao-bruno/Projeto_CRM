@@ -1,0 +1,241 @@
+{
+    "paginacao":  {
+                      "offset":  0,
+                      "limit":  2,
+                      "parcial":  2,
+                      "total":  1095
+                  },
+    "clientes":  [
+                     {
+                         "id":  1033,
+                         "nome":  "(43) 8831-3304 NÃO INFORMOU NOME NEM CPF",
+                         "tipo":  "Pessoa Física",
+                         "cpfcnpj":  "444.317.570-90",
+                         "sexo":  null,
+                         "dataCadastro":  "2026-01-31",
+                         "endereco":  {
+                                          "logradouro":  "RUA MONTEIRO LOBATO",
+                                          "numero":  401,
+                                          "bairro":  "NÃO INFORMOU",
+                                          "cidade":  "JATAIZINHO",
+                                          "uf":  "PR",
+                                          "cep":  "86210-000",
+                                          "complemento":  "",
+                                          "latitude":  "-23.2577601",
+                                          "longitude":  "-50.9798769"
+                                      },
+                         "contratos":  [
+
+                                       ],
+                         "titulos":  [
+
+                                     ],
+                         "contatos":  {
+                                          "telefones":  [
+
+                                                        ],
+                                          "celulares":  [
+                                                            "43988313304"
+                                                        ],
+                                          "emails":  [
+
+                                                     ],
+                                          "outros":  [
+
+                                                     ]
+                                      }
+                     },
+                     {
+                         "id":  897,
+                         "nome":  "51.626.483 MAYCON RODRIGUES FERNANDES",
+                         "tipo":  "Pessoa Jurídica",
+                         "cpfcnpj":  "51.626.483/0001-75",
+                         "sexo":  null,
+                         "dataCadastro":  "2025-08-23",
+                         "endereco":  {
+                                          "logradouro":  "RUA PADRE VITORIANO VALENTE",
+                                          "numero":  688,
+                                          "bairro":  "CENTRO",
+                                          "cidade":  "IBIPORÃ",
+                                          "uf":  "PR",
+                                          "cep":  "86200-000",
+                                          "complemento":  "SALA 2",
+                                          "latitude":  "-23.2679118",
+                                          "longitude":  "-51.0511792"
+                                      },
+                         "contratos":  [
+                                           {
+                                               "id":  975,
+                                               "pop_id":  1,
+                                               "dataCadastro":  "2025-08-23",
+                                               "status":  "Ativo",
+                                               "motivo_status":  "",
+                                               "vencimento":  20,
+                                               "contratoCentralLogin":  "51626483000175",
+                                               "contratoCentralSenha":  "ygo54aka",
+                                               "formaCobranca":  "Boleto",
+                                               "endereco":  {
+                                                                "logradouro":  "RUA PADRE VITORIANO VALENTE",
+                                                                "numero":  688,
+                                                                "bairro":  "CENTRO",
+                                                                "cidade":  "IBIPORÃ",
+                                                                "uf":  "PR",
+                                                                "cep":  "86200-000",
+                                                                "complemento":  "SALA 2",
+                                                                "latitude":  "-23.2679118",
+                                                                "longitude":  "-51.0511792"
+                                                            },
+                                               "servicos":  [
+                                                                {
+                                                                    "id":  967,
+                                                                    "tipo":  "internet",
+                                                                    "plano":  {
+                                                                                  "id":  17,
+                                                                                  "descricao":  "+ INTERNET EMPRESARIAL"
+                                                                              },
+                                                                    "status":  "Ativo",
+                                                                    "login":  "51626483000175",
+                                                                    "senha":  "11t9xue4",
+                                                                    "mac":  "84:3E:92:3B:E0:0B",
+                                                                    "ip":  "45.173.233.135",
+                                                                    "grupo":  "fibra",
+                                                                    "wifi_ssid":  "",
+                                                                    "wifi_password":  "",
+                                                                    "wifi_channel":  "auto",
+                                                                    "wifi_ssid_5":  "",
+                                                                    "wifi_password_5":  "",
+                                                                    "wifi_channel_5":  "auto",
+                                                                    "onu":  {
+                                                                                "voip_sip_username":  "",
+                                                                                "splitter":  {
+                                                                                                 "porta":  5,
+                                                                                                 "id":  534,
+                                                                                                 "nome":  "P7 CTO28"
+                                                                                             },
+                                                                                "voip_mascara":  "",
+                                                                                "vlan":  944,
+                                                                                "voip_username":  "",
+                                                                                "telnet":  "",
+                                                                                "rx":  "-20.41",
+                                                                                "pon":  11,
+                                                                                "voip_service_name":  "",
+                                                                                "wifi_ssid":  "",
+                                                                                "wifi_password_5":  "",
+                                                                                "olt_id":  5,
+                                                                                "wifi_password":  "",
+                                                                                "serial":  "48575443DF8BC3A4",
+                                                                                "password":  "",
+                                                                                "voip_sip_password":  "",
+                                                                                "id":  2129,
+                                                                                "onu":  25,
+                                                                                "slot":  6,
+                                                                                "web":  "",
+                                                                                "onu_login":  "",
+                                                                                "web_port":  "",
+                                                                                "pon_vlan":  944,
+                                                                                "tx":  "2.20",
+                                                                                "voip_porta":  "",
+                                                                                "onu_password":  "",
+                                                                                "wifi_ssid_5":  "",
+                                                                                "olt_nome":  "OLTWEBMAIS-IBIPORA",
+                                                                                "wifi_channel_5":  "",
+                                                                                "voip_telefone":  "",
+                                                                                "wifi_channel":  11,
+                                                                                "voip_ip":  "",
+                                                                                "login":  "",
+                                                                                "voip_gateway":  "",
+                                                                                "voip_vlan":  ""
+                                                                            },
+                                                                    "endereco":  {
+                                                                                     "logradouro":  "RUA PADRE VITORIANO VALENTE",
+                                                                                     "numero":  688,
+                                                                                     "bairro":  "CENTRO",
+                                                                                     "cidade":  "IBIPORÃ",
+                                                                                     "uf":  "PR",
+                                                                                     "cep":  "86200-000",
+                                                                                     "complemento":  "SALA 2",
+                                                                                     "latitude":  "-23.2679118",
+                                                                                     "longitude":  "-51.0511792"
+                                                                                 }
+                                                                }
+                                                            ],
+                                               "fidelidade":  {
+
+                                                              }
+                                           }
+                                       ],
+                         "titulos":  [
+                                         {
+                                             "id":  8648,
+                                             "cliente_id":  897,
+                                             "clientecontrato_id":  975,
+                                             "portador":  "Cobrança local",
+                                             "numeroDocumento":  8745,
+                                             "nossoNumero":  "06000000002226",
+                                             "link":  "https://webmais.sgp.net.br/boleto/8745-TYP7JU60T7/",
+                                             "status":  "cancelado",
+                                             "valor":  50,
+                                             "valorJuros":  0,
+                                             "valorMulta":  0,
+                                             "valorDesconto":  0,
+                                             "valorCorrigido":  50,
+                                             "valorPago":  0,
+                                             "jurosDia":  0.02,
+                                             "multaDia":  1,
+                                             "diasAtraso":  0,
+                                             "codigoBarras":  "99991125100000050000000060000000022200000000",
+                                             "linhaDigitavel":  "",
+                                             "codigoPix":  "",
+                                             "dataEmissao":  "2025-10-06",
+                                             "dataVencimento":  "2025-10-31",
+                                             "dataPagamento":  "",
+                                             "dataCancelamento":  "2025-10-06",
+                                             "demonstrativo":  "teste de NFcom",
+                                             "formaPagamento":  ""
+                                         },
+                                         {
+                                             "id":  8376,
+                                             "cliente_id":  897,
+                                             "clientecontrato_id":  975,
+                                             "portador":  "Sicoob",
+                                             "numeroDocumento":  8473,
+                                             "nossoNumero":  "00029899",
+                                             "link":  "https://webmais.sgp.net.br/boleto/8473-HDQYRQ81PV/",
+                                             "status":  "cancelado",
+                                             "valor":  76.59,
+                                             "valorJuros":  0,
+                                             "valorMulta":  0,
+                                             "valorDesconto":  0,
+                                             "valorCorrigido":  76.59,
+                                             "valorPago":  0,
+                                             "jurosDia":  0.03,
+                                             "multaDia":  1.53,
+                                             "diasAtraso":  0,
+                                             "codigoBarras":  "75695121000000076591435501406154300029899001",
+                                             "linhaDigitavel":  "75691.43550 01406.154300 00298.990011 5 12100000007659",
+                                             "codigoPix":  "00020101021226950014br.gov.bcb.pix2573pix.sicoob.com.br/qr/payload/v2/cobv/9a8d9e39-b34f-4416-a422-2927a90238ed5204000053039865802BR5920WEBMAIS_CONEXAO_LTDA6013Nao_informado62070503***63048658",
+                                             "dataEmissao":  "2025-09-05",
+                                             "dataVencimento":  "2025-09-20",
+                                             "dataPagamento":  "",
+                                             "dataCancelamento":  "2025-09-15",
+                                             "demonstrativo":  "Referente ao Acesso a Internet via Fibra de 28/08/2025 a 20/09/2025",
+                                             "formaPagamento":  ""
+                                         }
+                                     ],
+                         "contatos":  {
+                                          "telefones":  [
+
+                                                        ],
+                                          "celulares":  [
+                                                            "14996622602"
+                                                        ],
+                                          "emails":  [
+
+                                                     ],
+                                          "outros":  [
+
+                                                     ]
+                                      }
+                     }
+                 ]
+}
