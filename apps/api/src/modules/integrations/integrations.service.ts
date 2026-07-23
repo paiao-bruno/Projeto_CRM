@@ -49,6 +49,11 @@ import {
   withSgpDeletionMetadata,
   withSgpRestoredMetadata,
 } from "./sgp/sgp-deletion.sync";
+import {
+  bodyMayContainEntityPayload,
+  extractSgpEntityRecords,
+  summarizeSgpResponseStructure,
+} from "./sgp/sgp-response-parser";
 
 type SgpCustomerMapping = {
   customer: ExternalCustomerInput;
@@ -1257,94 +1262,37 @@ export class IntegrationsService {
   }
 
   private extractCustomers(body: unknown): Array<Record<string, unknown>> {
-    if (Array.isArray(body)) {
-      return body.filter(this.isRecord);
-    }
-
-    if (!this.isRecord(body)) {
-      return [];
-    }
-
-    const candidateKeys = ["clientes", "cliente", "data", "results", "registros", "objects", "items"];
-
-    for (const key of candidateKeys) {
-      const value = body[key];
-      if (Array.isArray(value)) {
-        return value.filter(this.isRecord).map((customer) =>
-          this.attachUraRelations(customer, body),
-        );
-      }
-      if (this.isRecord(value)) {
-        return [this.attachUraRelations(value, body)];
-      }
-    }
-
-    return this.looksLikeCustomer(body) ? [this.attachUraRelations(body, body)] : [];
+    const root = this.isRecord(body) ? body : {};
+    return extractSgpEntityRecords(body, "customer").map((customer) =>
+      this.attachUraRelations(customer, root),
+    );
   }
 
   private extractContracts(body: unknown): Array<Record<string, unknown>> {
-    if (Array.isArray(body)) {
-      return body.filter(this.isRecord);
-    }
-
-    if (!this.isRecord(body)) {
-      return [];
-    }
-
-    const candidateKeys = [
-      "contratos",
-      "contrato",
-      "data",
-      "results",
-      "registros",
-      "objects",
-      "items",
-    ];
-
-    for (const key of candidateKeys) {
-      const value = body[key];
-      if (Array.isArray(value)) {
-        return value.filter(this.isRecord);
-      }
-      if (this.isRecord(value)) {
-        return [value];
-      }
-    }
-
-    return this.looksLikeContract(body) ? [body] : [];
+    return extractSgpEntityRecords(body, "contract");
   }
 
   private extractTitles(body: unknown): Array<Record<string, unknown>> {
-    if (Array.isArray(body)) {
-      return body.filter(this.isRecord);
+    return extractSgpEntityRecords(body, "invoice");
+  }
+
+  private logUnexpectedEmptyExtraction(
+    entity: "customer" | "contract" | "invoice",
+    endpoint: string,
+    body: unknown,
+  ) {
+    if (!bodyMayContainEntityPayload(body, entity)) {
+      return;
     }
 
-    if (!this.isRecord(body)) {
-      return [];
-    }
-
-    const candidateKeys = [
-      "titulos",
-      "títulos",
-      "titulo",
-      "data",
-      "results",
-      "registros",
-      "objects",
-      "items",
-    ];
-
-    for (const key of candidateKeys) {
-      const value = body[key];
-      if (Array.isArray(value)) {
-        return value.filter(this.isRecord);
-      }
-      if (this.isRecord(value)) {
-        return [value];
-      }
-    }
-
-    return this.looksLikeTitle(body) ? [body] : [];
+    this.logger.warn(
+      safeJsonStringify({
+        event: "sgp.extract.empty-unexpected",
+        entity,
+        endpoint,
+        structure: summarizeSgpResponseStructure(body),
+      }),
+    );
   }
 
   private async processSgpContractsFromApi(
@@ -1366,6 +1314,9 @@ export class IntegrationsService {
       );
       this.assertListDiscoveryResponse(response.body, "/api/contrato/list/");
       const contracts = this.extractContracts(response.body);
+      if (contracts.length === 0) {
+        this.logUnexpectedEmptyExtraction("contract", "/api/contrato/list/", response.body);
+      }
       if (contracts.length > 0) {
         includedPayload = true;
       }
@@ -1443,6 +1394,9 @@ export class IntegrationsService {
       );
       this.assertListDiscoveryResponse(response.body, "/api/ura/titulos/");
       const invoices = this.extractTitles(response.body);
+      if (invoices.length === 0) {
+        this.logUnexpectedEmptyExtraction("invoice", "/api/ura/titulos/", response.body);
+      }
       if (invoices.length > 0) {
         includedPayload = true;
       }

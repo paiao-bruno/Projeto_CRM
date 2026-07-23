@@ -17,33 +17,32 @@ import {
   Receipt,
   Search,
   Users,
+  type LucideIcon,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useRequireAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
+import { buildNavItems } from "@/lib/feature-flags";
 import { cn } from "@/lib/utils";
 
-const navItems = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/ai-agents", label: "Agents", icon: Bot },
-  { href: "/flows", label: "Flows", icon: GitBranch },
-  { href: "/integrations", label: "Integrations", icon: Plug },
-  {
-    href: "/chat",
-    label: "Chat",
-    icon: MessageCircle,
-    children: [{ href: "/team-chat", label: "Team", icon: Hash }],
-  },
-  { href: "/customers", label: "CRM", icon: Users },
-  { href: "/contracts", label: "Contratos", icon: FileText },
-  { href: "/invoices", label: "Faturas", icon: Receipt },
-  { href: "/campaigns", label: "Campaigns", icon: Megaphone },
-  { href: "/schedule", label: "Schedule", icon: CalendarDays, badge: "Acquire" },
-];
+const iconMap: Record<string, LucideIcon> = {
+  LayoutDashboard,
+  Bot,
+  GitBranch,
+  Plug,
+  MessageCircle,
+  Hash,
+  Users,
+  FileText,
+  Receipt,
+  Megaphone,
+  CalendarDays,
+};
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { user, loading, logout } = useRequireAuth();
+  const navItems = buildNavItems();
 
   if (loading || !user) {
     return (
@@ -69,7 +68,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <nav className="space-y-2">
           {navItems.map((item) => {
             const active = pathname === item.href;
-            const Icon = item.icon;
+            const Icon = iconMap[item.icon] ?? LayoutDashboard;
             return (
               <div key={item.href}>
                 <Link
@@ -83,7 +82,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 >
                   <Icon size={18} />
                   <span className="flex-1">{item.label}</span>
-                  {"badge" in item && item.badge ? (
+                  {item.badge ? (
                     <Badge className="border-cyan-200 bg-cyan-50 text-[10px] text-cyan-500">
                       {item.badge}
                     </Badge>
@@ -92,7 +91,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 {item.children ? (
                   <div className="mt-1 space-y-1 pl-6">
                     {item.children.map((child) => {
-                      const ChildIcon = child.icon;
+                      const ChildIcon = iconMap[child.icon] ?? Hash;
                       const childActive = pathname === child.href;
                       return (
                         <Link
@@ -120,7 +119,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className="mt-auto rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
           <div className="flex items-center gap-3">
             <span className="relative flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-950 text-sm font-bold text-slate-200">
-              L
+              {user.name.slice(0, 1).toUpperCase()}
               <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-white bg-emerald-400" />
             </span>
             <div>

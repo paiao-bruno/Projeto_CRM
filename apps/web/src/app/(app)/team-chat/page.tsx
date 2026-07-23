@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { FeatureGate } from "@/components/feature-gate";
 
 type TeamConversation = {
   id: string;
@@ -45,7 +46,7 @@ const conversations: TeamConversation[] = [
   },
 ];
 
-export default function TeamChatPage() {
+function TeamChatPageContent() {
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showMockConversations, setShowMockConversations] = useState(false);
@@ -229,5 +230,13 @@ export default function TeamChatPage() {
         <MessageCircle size={24} />
       </button>
     </div>
+  );
+}
+
+export default function TeamChatPage() {
+  return (
+    <FeatureGate feature="teamChat" title="Team Chat">
+      <TeamChatPageContent />
+    </FeatureGate>
   );
 }

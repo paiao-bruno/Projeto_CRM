@@ -632,6 +632,129 @@ describe("IntegrationsService", () => {
     assert.ok(prisma.invoice.rows.has("t1"));
   });
 
+  it("persists contracts and invoices from nested SGP response wrappers", async () => {
+    const prisma = createPrismaMock();
+
+    const service = new IntegrationsService(
+      createEmptySgpClientMock({
+        discoverCustomers: async () => ({
+          body: {
+            data: { clientes: [{ id: "1", nome: "Cliente A", cpfcnpj: "111" }] },
+          },
+        }),
+        discoverContracts: async () => ({
+          body: {
+            response: {
+              data: {
+                contratos: [{ id: "c1", cliente_id: "1", status: "ATIVO", plano: "600 Mega" }],
+              },
+            },
+          },
+        }),
+        discoverTitles: async () => ({
+          body: {
+            data: {
+              titulos: [{ id: "t1", cliente_id: "1", contrato: "c1", valor: "99,90", status: "ABERTO" }],
+            },
+          },
+        }),
+      }) as never,
+      createSgpCredentialsMock() as never,
+      {
+        async upsertFromExternalSource(
+          _tenantId: string,
+          _memberId: string,
+          input: { externalId?: string },
+        ) {
+          const customer = {
+            id: `customer-${input.externalId}`,
+            tenantId: user.tenantId,
+            ispAccountCode: input.externalId,
+            document: input.externalId === "1" ? "111" : undefined,
+            deletedAt: null,
+            metadata: { source: "SGP" },
+          };
+          prisma.customer.rows.push(customer);
+          return {
+            operation: "created" as const,
+            customer,
+          };
+        },
+      } as never,
+      prisma as never,
+      createSyncHistoryMock() as never,
+    );
+
+    const result = await (
+      service as unknown as {
+        processSgpCustomers: (
+          userArg: typeof user,
+          request: Record<string, unknown>,
+          runId: string,
+        ) => Promise<{
+          contractsCreated: number;
+          invoicesCreated: number;
+        }>;
+      }
+    ).processSgpCustomers(user, { full: true }, "run-id");
+
+    assert.equal(result.contractsCreated, 1);
+    assert.equal(result.invoicesCreated, 1);
+    assert.ok(prisma.contract.rows.has("c1"));
+    assert.ok(prisma.invoice.rows.has("t1"));
+  });
+
+  it("does not reconcile contracts when dedicated endpoint returns empty nested wrapper", async () => {
+    const prisma = createPrismaMock();
+    prisma.contract.rows.set("c1", {
+      id: "contract-1",
+      tenantId: user.tenantId,
+      customerId: "customer-1",
+      externalId: "c1",
+      deletedAt: null,
+      metadata: { source: "SGP" },
+    });
+
+    const service = new IntegrationsService(
+      createEmptySgpClientMock({
+        discoverCustomers: async () => ({
+          body: { clientes: [{ id: "1", nome: "Cliente A", cpfcnpj: "111" }] },
+        }),
+        discoverContracts: async () => ({
+          body: { data: { contratos: [] } },
+        }),
+        discoverTitles: async () => ({
+          body: { data: { titulos: [] } },
+        }),
+      }) as never,
+      createSgpCredentialsMock() as never,
+      {
+        async upsertFromExternalSource() {
+          return {
+            operation: "unchanged" as const,
+            customer: { id: "customer-1" },
+          };
+        },
+      } as never,
+      prisma as never,
+      createSyncHistoryMock() as never,
+    );
+
+    const result = await (
+      service as unknown as {
+        processSgpCustomers: (
+          userArg: typeof user,
+          request: { full: boolean },
+          runId: string,
+        ) => Promise<{ contractsDeleted: number; invoicesDeleted: number }>;
+      }
+    ).processSgpCustomers(user, { full: true }, "run-id");
+
+    assert.equal(result.contractsDeleted, 0);
+    assert.equal(result.invoicesDeleted, 0);
+    assert.equal(prisma.contract.rows.get("c1")?.deletedAt, null);
+  });
+
   it("recovers stale running sync runs", async () => {
     let recoveredWhere: unknown;
     const prisma = {

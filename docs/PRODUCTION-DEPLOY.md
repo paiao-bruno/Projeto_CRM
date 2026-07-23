@@ -88,10 +88,27 @@ Ou use o process manager de sua preferência (systemd, PM2, Kubernetes, etc.).
 ### Homologação SGP real
 
 ```bash
+export BOOTSTRAP_ADMIN_EMAIL="admin@suaisp.com.br"
+export BOOTSTRAP_ADMIN_PASSWORD="SenhaForte123"
 export SGP_API_URL="https://sua-instancia.sgp.net.br"
 export SGP_APP="seu-app"
 export SGP_TOKEN="seu-token"
+export SGP_TIMEOUT_MS="15000"
+npm run bootstrap:production
 npm run homologate:sgp
+```
+
+O relatório é gravado em `homologation-report.json` na raiz do projeto.
+
+### Bootstrap de produção
+
+```bash
+export BOOTSTRAP_TENANT_NAME="Minha ISP"
+export BOOTSTRAP_TENANT_SLUG="minha-isp"
+export BOOTSTRAP_ADMIN_NAME="Administrador"
+export BOOTSTRAP_ADMIN_EMAIL="admin@suaisp.com.br"
+export BOOTSTRAP_ADMIN_PASSWORD="SenhaForte123"
+npm run bootstrap:production
 ```
 
 ## 4. Plano de rollback

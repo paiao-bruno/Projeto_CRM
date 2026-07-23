@@ -4,6 +4,7 @@ import { CalendarDays, Clock, Plus, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { FeatureGate } from "@/components/feature-gate";
 
 const events = [
   {
@@ -20,7 +21,7 @@ const events = [
   },
 ];
 
-export default function SchedulePage() {
+function SchedulePageContent() {
   return (
     <div className="space-y-6">
       <div className="flex flex-col justify-between gap-4 md:flex-row md:items-start">
@@ -88,5 +89,13 @@ export default function SchedulePage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+export default function SchedulePage() {
+  return (
+    <FeatureGate feature="schedule" title="Schedule">
+      <SchedulePageContent />
+    </FeatureGate>
   );
 }
