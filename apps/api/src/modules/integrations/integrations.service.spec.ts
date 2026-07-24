@@ -115,6 +115,7 @@ function createPrismaMock() {
         ...data,
       }),
       update: async ({ data }: { data: Record<string, unknown> }) => data,
+      updateMany: async () => ({ count: 0 }),
       findUnique: async () => ({ status: "RUNNING" }),
       findFirst: async () => ({
         finishedAt: new Date("2026-07-17T10:00:00.000Z"),

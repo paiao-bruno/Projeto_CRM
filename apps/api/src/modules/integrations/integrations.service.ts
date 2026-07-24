@@ -213,6 +213,8 @@ export class IntegrationsService {
 
   async syncSgpCustomers(user: AuthUser, request: SgpDiscoveryRequest = {}) {
     const lockKey = user.tenantId;
+    const timeoutMs = Number(process.env.SGP_AUTO_SYNC_TIMEOUT_MS ?? 900_000);
+    await this.recoverStaleSyncRuns(timeoutMs);
 
     if (this.runningCustomerSyncs.has(lockKey)) {
       const skippedRun = await this.prisma.integrationSyncRun.create({
@@ -267,7 +269,11 @@ export class IntegrationsService {
       },
     });
 
-    void this.processSgpCustomers(user, request, run.id)
+    void this.withTimeout(
+      this.processSgpCustomers(user, request, run.id),
+      timeoutMs,
+      "Tempo limite da sincronização manual SGP excedido.",
+    )
       .then((result) => {
         this.logger.log(
           safeJsonStringify({
@@ -727,21 +733,32 @@ export class IntegrationsService {
               );
 
               if (!customerRecord) {
-                result.ignored += 1;
-                continue;
-              }
-
-              result.unchanged += 1;
-              if (runId) {
-                await this.createSyncLog({
-                  tenantId: user.tenantId,
-                  runId,
-                  entity: IntegrationSyncEntity.CUSTOMER,
-                  externalId: mapped.customer.externalId ?? mapped.customer.document,
-                  action: "unchanged",
-                  status: IntegrationSyncStatus.SKIPPED,
-                  message: "Registro inalterado desde a última sincronização.",
-                });
+                const upsert = await this.customersService.upsertFromExternalSource(
+                  user.tenantId,
+                  user.memberId,
+                  mapped.customer,
+                );
+                customerRecord = upsert.customer;
+                if (upsert.operation === "created") {
+                  result.created += 1;
+                } else if (upsert.operation === "updated") {
+                  result.updated += 1;
+                } else {
+                  result.unchanged += 1;
+                }
+              } else {
+                result.unchanged += 1;
+                if (runId) {
+                  await this.createSyncLog({
+                    tenantId: user.tenantId,
+                    runId,
+                    entity: IntegrationSyncEntity.CUSTOMER,
+                    externalId: mapped.customer.externalId ?? mapped.customer.document,
+                    action: "unchanged",
+                    status: IntegrationSyncStatus.SKIPPED,
+                    message: "Registro inalterado desde a última sincronização.",
+                  });
+                }
               }
             }
 
@@ -841,7 +858,7 @@ export class IntegrationsService {
         syncIncludedInvoicePayload = true;
       }
 
-      if (incrementalContext.mode === "full") {
+      if (incrementalContext.mode === "full" && result.processed > 0) {
         result.customersDeleted += await this.reconcileMissingSgpCustomers(
           user.tenantId,
           seenExternalIds.customers,
@@ -861,12 +878,23 @@ export class IntegrationsService {
             runId,
           );
         }
+      } else if (incrementalContext.mode === "full" && result.processed === 0) {
+        const message =
+          "Sincronização completa não retornou clientes do SGP. Reconciliação foi ignorada para evitar apagar dados existentes.";
+        result.errors.push({ index: 0, message });
+        this.logger.warn(
+          safeJsonStringify({
+            event: "sgp.sync.empty-full-sync",
+            tenantId: user.tenantId,
+            runId,
+          }),
+        );
       }
     } catch (error) {
       if (runId) {
         await this.flushSyncLogs();
         const durationMs = Date.now() - startedAt;
-        await this.finishSyncRun(runId, IntegrationSyncStatus.FAILED, result, durationMs, {
+        await this.safeFinalizeSyncRun(runId, IntegrationSyncStatus.FAILED, result, durationMs, {
           errorMessage: error instanceof Error ? error.message : String(error),
           stackTrace: error instanceof Error ? error.stack : undefined,
           cursor: pagination,
@@ -882,19 +910,43 @@ export class IntegrationsService {
 
     if (runId) {
       await this.flushSyncLogs();
-      await this.finishSyncRun(
+      const hasPersistedWork =
+        result.created +
+          result.updated +
+          result.contractsCreated +
+          result.contractsUpdated +
+          result.invoicesCreated +
+          result.invoicesUpdated >
+        0;
+      const finalStatus = (() => {
+        if (result.errors.length) {
+          return IntegrationSyncStatus.PARTIAL;
+        }
+        if (result.processed === 0 && !hasPersistedWork) {
+          return IntegrationSyncStatus.FAILED;
+        }
+        return IntegrationSyncStatus.COMPLETED;
+      })();
+      const errorMessage =
+        finalStatus === IntegrationSyncStatus.FAILED
+          ? "Nenhum registro foi importado do SGP. Verifique credenciais, URL da API e endpoints de clientes/contratos/faturas."
+          : undefined;
+
+      await this.safeFinalizeSyncRun(
         runId,
-        result.errors.length ? IntegrationSyncStatus.PARTIAL : IntegrationSyncStatus.COMPLETED,
+        finalStatus,
         result,
         finalResult.durationMs,
-        { cursor: pagination },
+        { cursor: pagination, errorMessage },
       );
 
-      await this.sgpCredentials.updateSyncState(user.tenantId, request.credentialId, {
-        lastSuccessfulSyncAt: new Date().toISOString(),
-        lastSyncMode: result.syncMode,
-        lastSyncRunId: runId,
-      });
+      if (hasPersistedWork || result.processed > 0) {
+        await this.sgpCredentials.updateSyncState(user.tenantId, request.credentialId, {
+          lastSuccessfulSyncAt: new Date().toISOString(),
+          lastSyncMode: result.syncMode,
+          lastSyncRunId: runId,
+        });
+      }
     }
 
     this.logger.log(
@@ -1089,6 +1141,46 @@ export class IntegrationsService {
     await this.prisma.integrationSyncLog.createMany({ data: batch });
   }
 
+  private async safeFinalizeSyncRun(
+    runId: string,
+    status: IntegrationSyncStatus,
+    counters: SyncCounters,
+    durationMs: number,
+    options: {
+      cursor?: unknown;
+      errorMessage?: string;
+      stackTrace?: string;
+    } = {},
+  ) {
+    try {
+      await this.finishSyncRun(runId, status, counters, durationMs, options);
+    } catch (error) {
+      this.logger.error(
+        safeJsonStringify({
+          event: "sgp.sync.finalize-fallback",
+          runId,
+          status,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+      await this.prisma.integrationSyncRun.updateMany({
+        where: {
+          id: runId,
+          status: IntegrationSyncStatus.RUNNING,
+        },
+        data: {
+          status,
+          finishedAt: new Date(),
+          durationMs,
+          errorMessage:
+            options.errorMessage ??
+            (error instanceof Error ? error.message : "Falha ao finalizar sincronização."),
+          stackTrace: options.stackTrace,
+        },
+      });
+    }
+  }
+
   private async failSyncRunIfStillRunning(
     runId: string,
     errorMessage: string,
@@ -1103,7 +1195,7 @@ export class IntegrationsService {
       return;
     }
 
-    await this.finishSyncRun(
+    await this.safeFinalizeSyncRun(
       runId,
       IntegrationSyncStatus.FAILED,
       {
@@ -1749,7 +1841,8 @@ export class IntegrationsService {
       if (
         incrementalContext?.mode === "incremental" &&
         incrementalContext.since &&
-        !isChangedSince(contract, incrementalContext.since)
+        !isChangedSince(contract, incrementalContext.since) &&
+        existingByExternalId.has(externalId)
       ) {
         result.unchanged += 1;
         if (runId) {
@@ -1911,7 +2004,8 @@ export class IntegrationsService {
       if (
         incrementalContext?.mode === "incremental" &&
         incrementalContext.since &&
-        !isChangedSince(invoice, incrementalContext.since)
+        !isChangedSince(invoice, incrementalContext.since) &&
+        existingByExternalId.has(externalId)
       ) {
         result.unchanged += 1;
         if (runId) {

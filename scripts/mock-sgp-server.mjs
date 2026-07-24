@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import http from "node:http";
+import { URL } from "node:url";
 
 const PORT = Number(process.env.MOCK_SGP_PORT ?? 9090);
 
@@ -23,6 +24,58 @@ const customers = [
     data_alteracao: "20/07/2026 10:00:00",
   },
 ];
+
+const contracts = customers.map((customer) => ({
+  id: `contract-${customer.id}`,
+  contrato: `contract-${customer.id}`,
+  cliente_id: customer.id,
+  status: "ATIVO",
+  plano: "Plano 600 Mega",
+}));
+
+const invoices = customers.map((customer) => ({
+  id: `invoice-${customer.id}`,
+  titulo: `invoice-${customer.id}`,
+  cliente_id: customer.id,
+  contrato: `contract-${customer.id}`,
+  valor: "99,90",
+  status: "ABERTO",
+  vencimento: "20/08/2026",
+}));
+
+function paginate(items, payload) {
+  const offset = Number(payload.offset ?? 0);
+  const limit = Number(payload.limit ?? payload.limite ?? 100);
+  const pageItems = items.slice(offset, offset + limit);
+
+  return {
+    items: pageItems,
+    pagination: {
+      offset,
+      limit,
+      total: items.length,
+      pagina: Math.floor(offset / limit) + 1,
+      next: offset + limit < items.length,
+    },
+  };
+}
+
+function resolvePayload(url, payload) {
+  const pathname = url.pathname.toLowerCase();
+
+  if (pathname.includes("/contrato/")) {
+    const page = paginate(contracts, payload);
+    return { contratos: page.items, ...page.pagination };
+  }
+
+  if (pathname.includes("/titulos") || pathname.includes("/titulo")) {
+    const page = paginate(invoices, payload);
+    return { titulos: page.items, ...page.pagination };
+  }
+
+  const page = paginate(customers, payload);
+  return { clientes: page.items, ...page.pagination };
+}
 
 const server = http.createServer(async (req, res) => {
   if (req.method !== "POST") {
@@ -49,18 +102,11 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  const offset = Number(payload.offset ?? payload.pagina ?? 0);
-  const limit = Number(payload.limit ?? payload.limite ?? 100);
-  const pageItems = customers.slice(offset, offset + limit);
+  const url = new URL(req.url ?? "/", `http://127.0.0.1:${PORT}`);
+  const responseBody = resolvePayload(url, payload);
 
   res.writeHead(200, { "Content-Type": "application/json" });
-  res.end(
-    JSON.stringify({
-      clientes: pageItems,
-      total: customers.length,
-      pagina: Math.floor(offset / limit) + 1,
-    }),
-  );
+  res.end(JSON.stringify(responseBody));
 });
 
 server.listen(PORT, "127.0.0.1", () => {
