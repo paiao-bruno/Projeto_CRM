@@ -52,6 +52,8 @@ import {
 import {
   bodyMayContainEntityPayload,
   extractSgpEntityRecords,
+  looksLikeContract,
+  looksLikeTitle,
   summarizeSgpResponseStructure,
 } from "./sgp/sgp-response-parser";
 
@@ -606,10 +608,10 @@ export class IntegrationsService {
         this.assertCustomerDiscoveryResponse(response.body, request.endpoint);
         const responseBody = this.isRecord(response.body) ? response.body : {};
         this.trackRootExternalIds(responseBody, seenExternalIds);
-        if (this.extractArray(responseBody, ["contratos", "contrato"]).length > 0) {
+        if (extractSgpEntityRecords(responseBody, "contract").length > 0) {
           syncIncludedContractPayload = true;
         }
-        if (this.extractArray(responseBody, ["titulos", "títulos", "titulo"]).length > 0) {
+        if (extractSgpEntityRecords(responseBody, "invoice").length > 0) {
           syncIncludedInvoicePayload = true;
         }
         const rawCustomers = this.extractCustomers(response.body);
@@ -620,10 +622,12 @@ export class IntegrationsService {
           try {
             const mapped = this.mapSgpCustomer(rawCustomer);
             this.trackMappedExternalIds(mapped, seenExternalIds);
-            if (mapped.contracts.length > 0) {
+            const seenCustomerContracts = this.collectContractExternalIds(mapped.contracts);
+            const seenCustomerInvoices = this.collectInvoiceExternalIds(mapped.invoices);
+            if (seenCustomerContracts.size > 0) {
               syncIncludedContractPayload = true;
             }
-            if (mapped.invoices.length > 0) {
+            if (seenCustomerInvoices.size > 0) {
               syncIncludedInvoicePayload = true;
             }
 
@@ -718,10 +722,8 @@ export class IntegrationsService {
               }
             }
 
-            const seenCustomerContracts = this.collectContractExternalIds(mapped.contracts);
-            const seenCustomerInvoices = this.collectInvoiceExternalIds(mapped.invoices);
-            const shouldReconcileCustomerContracts = mapped.contracts.length > 0;
-            const shouldReconcileCustomerInvoices = mapped.invoices.length > 0;
+            const shouldReconcileCustomerContracts = seenCustomerContracts.size > 0;
+            const shouldReconcileCustomerInvoices = seenCustomerInvoices.size > 0;
 
             const contractUpserts = await this.upsertContracts(
               user.tenantId,
@@ -1587,8 +1589,8 @@ export class IntegrationsService {
           pagination: this.toJsonValue(raw.__sgpPagination),
         },
       },
-      contracts: this.extractArray(raw, ["__sgpContratos", "contratos", "contrato"]),
-      invoices: this.extractArray(raw, ["__sgpTitulos", "titulos", "títulos", "titulo"]),
+      contracts: this.extractEntityArray(raw, ["__sgpContratos", "contratos", "contrato"], "contract"),
+      invoices: this.extractEntityArray(raw, ["__sgpTitulos", "titulos", "títulos", "titulo"], "invoice"),
     };
   }
 
@@ -2060,10 +2062,10 @@ export class IntegrationsService {
     customer: Record<string, unknown>,
     root: Record<string, unknown>,
   ) {
-    const contratos = this.extractArray(root, ["contratos", "contrato"]);
-    const titulos = this.extractArray(root, ["titulos", "títulos", "titulo"]);
-    const relatedContracts = this.findRelatedRecords(customer, contratos);
-    const relatedTitles = this.findRelatedRecords(customer, titulos);
+    const contratos = this.extractEntityArray(root, ["contratos", "contrato"], "contract");
+    const titulos = this.extractEntityArray(root, ["titulos", "títulos", "titulo"], "invoice");
+    const relatedContracts = this.findRelatedRecords(customer, contratos, looksLikeContract);
+    const relatedTitles = this.findRelatedRecords(customer, titulos, looksLikeTitle);
 
     return {
       ...customer,
@@ -2113,28 +2115,78 @@ export class IntegrationsService {
     return Number.isFinite(parsed) ? Math.round(parsed * 100) : undefined;
   }
 
-  private extractArray(root: Record<string, unknown>, keys: string[]) {
+  private extractEntityArray(
+    root: Record<string, unknown>,
+    keys: string[],
+    kind: "contract" | "invoice",
+  ) {
+    const looksLike = kind === "contract" ? looksLikeContract : looksLikeTitle;
+    const records: Array<Record<string, unknown>> = [];
+
     for (const key of keys) {
       const value = root[key];
-      if (Array.isArray(value)) return value.filter(this.isRecord);
-      if (this.isRecord(value)) return [value];
+      if (Array.isArray(value)) {
+        records.push(...value.filter(this.isRecord).filter(looksLike));
+        continue;
+      }
+
+      if (!this.isRecord(value)) {
+        continue;
+      }
+
+      if (key.startsWith("__sgp")) {
+        if (looksLike(value)) {
+          records.push(value);
+        }
+        continue;
+      }
+
+      const nested = extractSgpEntityRecords(value, kind);
+      if (nested.length > 0) {
+        records.push(...nested);
+      } else if (looksLike(value)) {
+        records.push(value);
+      }
     }
 
-    return [];
+    return this.dedupeEntityRecords(records, kind);
+  }
+
+  private dedupeEntityRecords(
+    records: Array<Record<string, unknown>>,
+    kind: "contract" | "invoice",
+  ) {
+    const seen = new Set<string>();
+    const deduped: Array<Record<string, unknown>> = [];
+
+    for (const record of records) {
+      const externalId =
+        kind === "contract" ? this.contractExternalId(record) : this.invoiceExternalId(record);
+      const identity = externalId ?? JSON.stringify(record);
+      if (seen.has(identity)) {
+        continue;
+      }
+      seen.add(identity);
+      deduped.push(record);
+    }
+
+    return deduped;
   }
 
   private findRelatedRecords(
     customer: Record<string, unknown>,
     records: Array<Record<string, unknown>>,
+    looksLike: (record: Record<string, unknown>) => boolean,
   ) {
-    if (!records.length) return [];
+    const validRecords = records.filter(looksLike);
+    if (!validRecords.length) return [];
 
     const customerKeys = this.customerRelationKeys(customer);
     if (!customerKeys.size) {
-      return records.length === 1 ? records : [];
+      return validRecords.length === 1 ? validRecords : [];
     }
 
-    const related = records.filter((record) => {
+    const related = validRecords.filter((record) => {
       const recordKeys = this.customerRelationKeys(record);
       for (const key of recordKeys) {
         if (customerKeys.has(key)) return true;
@@ -2142,7 +2194,7 @@ export class IntegrationsService {
       return false;
     });
 
-    return related.length ? related : records.length === 1 ? records : [];
+    return related.length ? related : validRecords.length === 1 ? validRecords : [];
   }
 
   private customerRelationKeys(record: Record<string, unknown>) {
@@ -2254,12 +2306,12 @@ export class IntegrationsService {
   }
 
   private trackRootExternalIds(body: Record<string, unknown>, seen: SgpSeenExternalIds) {
-    for (const contract of this.extractArray(body, ["contratos", "contrato"])) {
+    for (const contract of this.extractEntityArray(body, ["contratos", "contrato"], "contract")) {
       const externalId = this.contractExternalId(contract);
       if (externalId) seen.contracts.add(externalId);
     }
 
-    for (const invoice of this.extractArray(body, ["titulos", "títulos", "titulo"])) {
+    for (const invoice of this.extractEntityArray(body, ["titulos", "títulos", "titulo"], "invoice")) {
       const externalId = this.invoiceExternalId(invoice);
       if (externalId) seen.invoices.add(externalId);
     }

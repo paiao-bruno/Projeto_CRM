@@ -755,6 +755,70 @@ describe("IntegrationsService", () => {
     assert.equal(prisma.contract.rows.get("c1")?.deletedAt, null);
   });
 
+  it("does not reconcile contracts when customer payload only has pagination wrappers", async () => {
+    const prisma = createPrismaMock();
+    prisma.contract.rows.set("c1", {
+      id: "contract-1",
+      tenantId: user.tenantId,
+      customerId: "customer-1",
+      externalId: "c1",
+      deletedAt: null,
+      metadata: { source: "SGP" },
+    });
+    prisma.invoice.rows.set("t1", {
+      id: "invoice-1",
+      tenantId: user.tenantId,
+      customerId: "customer-1",
+      externalId: "t1",
+      deletedAt: null,
+      metadata: { source: "SGP" },
+    });
+
+    const service = new IntegrationsService(
+      createEmptySgpClientMock({
+        discoverCustomers: async () => ({
+          body: {
+            clientes: [{ id: "1", nome: "Cliente A", cpfcnpj: "111" }],
+            contratos: { offset: 0, limit: 100, total: 0 },
+            titulos: { offset: 0, limit: 100, total: 0 },
+          },
+        }),
+        discoverContracts: async () => ({
+          body: { data: { contratos: [] } },
+        }),
+        discoverTitles: async () => ({
+          body: { data: { titulos: [] } },
+        }),
+      }) as never,
+      createSgpCredentialsMock() as never,
+      {
+        async upsertFromExternalSource() {
+          return {
+            operation: "unchanged" as const,
+            customer: { id: "customer-1" },
+          };
+        },
+      } as never,
+      prisma as never,
+      createSyncHistoryMock() as never,
+    );
+
+    const result = await (
+      service as unknown as {
+        processSgpCustomers: (
+          userArg: typeof user,
+          request: { full: boolean },
+          runId: string,
+        ) => Promise<{ contractsDeleted: number; invoicesDeleted: number }>;
+      }
+    ).processSgpCustomers(user, { full: true }, "run-id");
+
+    assert.equal(result.contractsDeleted, 0);
+    assert.equal(result.invoicesDeleted, 0);
+    assert.equal(prisma.contract.rows.get("c1")?.deletedAt, null);
+    assert.equal(prisma.invoice.rows.get("t1")?.deletedAt, null);
+  });
+
   it("recovers stale running sync runs", async () => {
     let recoveredWhere: unknown;
     const prisma = {
