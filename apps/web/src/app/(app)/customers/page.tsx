@@ -102,7 +102,7 @@ export default function CustomersPage() {
     try {
       const response = await api.post<SgpSyncStartResponse>(
         "/integrations/sgp/sync-customers",
-        { pagination: { offset: 0, limit: 100 } },
+        { pagination: { offset: 0, limit: 100 }, full: true },
         token,
       );
       setSyncMessage(response.message);

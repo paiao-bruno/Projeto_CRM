@@ -86,6 +86,7 @@ type SyncCounters = {
 @Injectable()
 export class IntegrationsService {
   private readonly logger = new Logger(IntegrationsService.name);
+  private static readonly MAX_SGP_SYNC_PAGES = 500;
   private readonly runningCustomerSyncs = new Set<string>();
   private syncLogBuffer: Array<{
     tenantId: string;
@@ -277,7 +278,7 @@ export class IntegrationsService {
           }),
         );
       })
-      .catch((error) => {
+      .catch(async (error) => {
         this.logger.error(
           safeJsonStringify({
             event: "sgp.sync-customers.failed",
@@ -285,6 +286,11 @@ export class IntegrationsService {
             runId: run.id,
             error: error instanceof Error ? error.message : String(error),
           }),
+        );
+        await this.failSyncRunIfStillRunning(
+          run.id,
+          error instanceof Error ? error.message : String(error),
+          error instanceof Error ? error.stack : undefined,
         );
       })
       .finally(() => {
@@ -567,11 +573,6 @@ export class IntegrationsService {
     request: SgpDiscoveryRequest = {},
     runId?: string,
   ) {
-    const credentials = await this.resolveSgpCredentials(user.tenantId, request.credentialId, request);
-    const incrementalContext = await this.resolveIncrementalContext(
-      user.tenantId,
-      request,
-    );
     const startedAt = Date.now();
     const result: SyncCounters = {
       processed: 0,
@@ -589,18 +590,40 @@ export class IntegrationsService {
       invoicesDeleted: 0,
       ignored: 0,
       errors: [] as Array<{ index: number; message: string }>,
-      syncMode: incrementalContext.mode,
-      watermark: incrementalContext.since?.toISOString() ?? null,
+      syncMode: "incremental",
+      watermark: null,
     };
     let pagination = request.pagination;
+    let customerPagesFetched = 0;
     const seenExternalIds = createSgpSeenExternalIds();
     let syncIncludedContractPayload = false;
     let syncIncludedInvoicePayload = false;
     this.syncLogBuffer = [];
-    await this.restoreIncorrectlyDeletedSgpChildren(user.tenantId);
 
     try {
+      const credentials = await this.resolveSgpCredentials(
+        user.tenantId,
+        request.credentialId,
+        request,
+      );
+      const incrementalContext = await this.resolveIncrementalContext(
+        user.tenantId,
+        request,
+      );
+      result.syncMode = incrementalContext.mode;
+      result.watermark = incrementalContext.since?.toISOString() ?? null;
+      await this.restoreIncorrectlyDeletedSgpChildren(user.tenantId);
+
       while (true) {
+        customerPagesFetched += 1;
+        if (customerPagesFetched > IntegrationsService.MAX_SGP_SYNC_PAGES) {
+          throw new BadGatewayException({
+            code: "SGP_PAGINATION_LIMIT",
+            message:
+              "A sincronização SGP excedeu o limite de páginas de clientes. Verifique a paginação retornada pelo SGP.",
+          });
+        }
+
         const response = await this.sgpClient.discoverCustomers(
           credentials,
           this.buildSyncPayload(request, incrementalContext, pagination),
@@ -783,7 +806,12 @@ export class IntegrationsService {
           }
         }
 
-        pagination = this.nextPagination(response.body, pagination);
+        pagination = this.resolveNextPagination(
+          response.body,
+          pagination,
+          rawCustomers.length,
+          customerPagesFetched,
+        );
         if (!pagination) break;
       }
 
@@ -864,7 +892,7 @@ export class IntegrationsService {
 
       await this.sgpCredentials.updateSyncState(user.tenantId, request.credentialId, {
         lastSuccessfulSyncAt: new Date().toISOString(),
-        lastSyncMode: incrementalContext.mode,
+        lastSyncMode: result.syncMode,
         lastSyncRunId: runId,
       });
     }
@@ -1061,6 +1089,71 @@ export class IntegrationsService {
     await this.prisma.integrationSyncLog.createMany({ data: batch });
   }
 
+  private async failSyncRunIfStillRunning(
+    runId: string,
+    errorMessage: string,
+    stackTrace?: string,
+  ) {
+    const run = await this.prisma.integrationSyncRun.findUnique({
+      where: { id: runId },
+      select: { status: true },
+    });
+
+    if (!run || run.status !== IntegrationSyncStatus.RUNNING) {
+      return;
+    }
+
+    await this.finishSyncRun(
+      runId,
+      IntegrationSyncStatus.FAILED,
+      {
+        processed: 0,
+        created: 0,
+        updated: 0,
+        unchanged: 0,
+        contractsCreated: 0,
+        contractsUpdated: 0,
+        contractsUnchanged: 0,
+        invoicesCreated: 0,
+        invoicesUpdated: 0,
+        invoicesUnchanged: 0,
+        customersDeleted: 0,
+        contractsDeleted: 0,
+        invoicesDeleted: 0,
+        ignored: 0,
+        errors: [{ index: 0, message: errorMessage }],
+        syncMode: "incremental",
+        watermark: null,
+      },
+      0,
+      { errorMessage, stackTrace },
+    );
+  }
+
+  private resolveNextPagination(
+    body: unknown,
+    currentPagination: Record<string, unknown> | undefined,
+    recordsOnPage: number,
+    pagesFetched: number,
+  ) {
+    if (recordsOnPage === 0) {
+      return undefined;
+    }
+
+    if (pagesFetched >= IntegrationsService.MAX_SGP_SYNC_PAGES) {
+      this.logger.warn(
+        safeJsonStringify({
+          event: "sgp.pagination.limit-reached",
+          pagesFetched,
+          recordsOnPage,
+        }),
+      );
+      return undefined;
+    }
+
+    return this.nextPagination(body, currentPagination);
+  }
+
   private nextPagination(
     body: unknown,
     currentPagination?: Record<string, unknown>,
@@ -1123,10 +1216,6 @@ export class IntegrationsService {
 
     if (typeof nextValue === "string" && /^\d+$/.test(nextValue)) {
       return this.withPaginationStyle(currentPagination, Number(nextValue), limit);
-    }
-
-    if (nextValue && finalTotalPages === undefined) {
-      return this.withPaginationStyle(currentPagination, currentPage + 1, limit);
     }
 
     if (finalTotalPages && currentPage < finalTotalPages) {
@@ -1308,8 +1397,18 @@ export class IntegrationsService {
   ) {
     let pagination = request.pagination;
     let includedPayload = false;
+    let pagesFetched = 0;
 
     while (true) {
+      pagesFetched += 1;
+      if (pagesFetched > IntegrationsService.MAX_SGP_SYNC_PAGES) {
+        throw new BadGatewayException({
+          code: "SGP_PAGINATION_LIMIT",
+          message:
+            "A sincronização SGP excedeu o limite de páginas de contratos. Verifique a paginação retornada pelo SGP.",
+        });
+      }
+
       const response = await this.sgpClient.discoverContracts(
         credentials,
         this.buildSyncPayload(request, incrementalContext, pagination),
@@ -1370,7 +1469,12 @@ export class IntegrationsService {
         result.contractsDeleted += upserts.deleted;
       }
 
-      pagination = this.nextPagination(response.body, pagination);
+      pagination = this.resolveNextPagination(
+        response.body,
+        pagination,
+        contracts.length,
+        pagesFetched,
+      );
       if (!pagination) break;
     }
 
@@ -1388,8 +1492,18 @@ export class IntegrationsService {
   ) {
     let pagination = request.pagination;
     let includedPayload = false;
+    let pagesFetched = 0;
 
     while (true) {
+      pagesFetched += 1;
+      if (pagesFetched > IntegrationsService.MAX_SGP_SYNC_PAGES) {
+        throw new BadGatewayException({
+          code: "SGP_PAGINATION_LIMIT",
+          message:
+            "A sincronização SGP excedeu o limite de páginas de faturas. Verifique a paginação retornada pelo SGP.",
+        });
+      }
+
       const response = await this.sgpClient.discoverTitles(
         credentials,
         this.buildSyncPayload(request, incrementalContext, pagination),
@@ -1450,7 +1564,12 @@ export class IntegrationsService {
         result.invoicesDeleted += upserts.deleted;
       }
 
-      pagination = this.nextPagination(response.body, pagination);
+      pagination = this.resolveNextPagination(
+        response.body,
+        pagination,
+        invoices.length,
+        pagesFetched,
+      );
       if (!pagination) break;
     }
 
