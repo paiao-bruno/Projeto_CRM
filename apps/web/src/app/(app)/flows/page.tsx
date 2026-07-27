@@ -28,6 +28,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { FeatureGate } from "@/components/feature-gate";
 
 type FlowStatus = "Active" | "Inactive";
 type BlockType =
@@ -219,7 +220,7 @@ function FlowNodeCard({
   );
 }
 
-export default function FlowsPage() {
+function FlowsPageContent() {
   const [flows, setFlows] = useState(initialFlows);
   const [search, setSearch] = useState("");
   const [selectedFlow, setSelectedFlow] = useState<FlowItem | null>(null);
@@ -550,5 +551,13 @@ export default function FlowsPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+export default function FlowsPage() {
+  return (
+    <FeatureGate feature="flows" title="Flows">
+      <FlowsPageContent />
+    </FeatureGate>
   );
 }

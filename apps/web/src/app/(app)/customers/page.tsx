@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
-import { Customer, IntegrationSyncRun, PaginatedResponse, SgpSyncStartResponse } from "@/lib/types";
+import { Customer, IntegrationSyncRun, PaginatedResponse, SgpCredentials, SgpSyncStartResponse } from "@/lib/types";
 
 const statusVariant = {
   ACTIVE: "green",
@@ -40,8 +40,22 @@ export default function CustomersPage() {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
+  const [credentialId, setCredentialId] = useState("");
 
   const filteredCustomers = useMemo(() => customers, [customers]);
+
+  useEffect(() => {
+    if (!token) return;
+    api
+      .get<SgpCredentials[]>("/integrations/sgp/credentials", token)
+      .then((items) => {
+        const active = items.find((item) => item.status === "ACTIVE") ?? items[0];
+        if (active) setCredentialId(active.id);
+      })
+      .catch(() => {
+        // credenciais ausentes serão reportadas ao tentar sincronizar
+      });
+  }, [token]);
 
   async function loadCustomers() {
     if (!token) return;
@@ -95,6 +109,12 @@ export default function CustomersPage() {
 
   async function syncFromSgp() {
     if (!token) return;
+    if (!credentialId) {
+      setError(
+        "Nenhuma credencial SGP configurada. Cadastre em Integrations antes de sincronizar.",
+      );
+      return;
+    }
     setError("");
     setSyncMessage("");
     setSyncing(true);
@@ -102,7 +122,11 @@ export default function CustomersPage() {
     try {
       const response = await api.post<SgpSyncStartResponse>(
         "/integrations/sgp/sync-customers",
-        { pagination: { offset: 0, limit: 100 } },
+        {
+          pagination: { offset: 0, limit: 100 },
+          full: true,
+          credentialId,
+        },
         token,
       );
       setSyncMessage(response.message);
@@ -126,6 +150,9 @@ export default function CustomersPage() {
       setSyncRun(run);
 
       if (run.status !== "RUNNING") {
+        if (run.status === "FAILED" && run.errorMessage) {
+          setError(run.errorMessage);
+        }
         setSyncMessage(`Sincronização finalizada com status ${run.status}.`);
         return;
       }

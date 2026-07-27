@@ -29,6 +29,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { FeatureGate } from "@/components/feature-gate";
 
 type CampaignStatus = "Sent" | "Scheduled" | "Drafts";
 
@@ -122,7 +123,7 @@ function MetricCard({
   );
 }
 
-export default function CampaignsPage() {
+function CampaignsPageContent() {
   const [campaigns, setCampaigns] = useState(initialCampaigns);
   const [activeTab, setActiveTab] = useState<CampaignStatus>("Sent");
   const [open, setOpen] = useState(false);
@@ -350,5 +351,13 @@ export default function CampaignsPage() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+export default function CampaignsPage() {
+  return (
+    <FeatureGate feature="campaigns" title="Campaigns">
+      <CampaignsPageContent />
+    </FeatureGate>
   );
 }

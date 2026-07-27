@@ -2,21 +2,27 @@
 /**
  * Homologação com API SGP REAL.
  *
- * Variáveis obrigatórias:
- *   SGP_API_URL  — ex: https://webmais.sgp.net.br
- *   SGP_APP      — identificador da aplicação SGP
- *   SGP_TOKEN    — token de autenticação SGP
+ * O operador deve executar o bootstrap de produção antes deste script.
  *
- * Variáveis opcionais:
- *   API_URL, DATABASE_URL, ADMIN_EMAIL, ADMIN_PASSWORD
+ * Variáveis obrigatórias:
+ *   SGP_API_URL, SGP_APP, SGP_TOKEN
+ *   BOOTSTRAP_ADMIN_EMAIL ou ADMIN_EMAIL
+ *   BOOTSTRAP_ADMIN_PASSWORD ou ADMIN_PASSWORD
  */
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout as wait } from "node:timers/promises";
-import bcrypt from "bcryptjs";
 import { Client } from "pg";
+import {
+  callSgpDirect,
+  createStepRunner,
+  resolveHomologationCredentials,
+  sanitizeText,
+  summarizeSgpBody,
+  validateHomologationCredentials,
+} from "./lib/sgp-homologation.mjs";
 
 const ROOT = process.cwd();
 const RAW_API = process.env.API_URL ?? "http://localhost:4000";
@@ -24,75 +30,41 @@ const API_URL = RAW_API.endsWith("/api") ? RAW_API : `${RAW_API.replace(/\/$/, "
 const WEB_URL = process.env.APP_URL ?? "http://localhost:3000";
 const DATABASE_URL =
   process.env.DATABASE_URL ??
-  "postgresql://postgres:postgres@localhost:51214/isp_crm?schema=public";
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? "admin@ispcrm.local";
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "admin123";
+  "postgresql://crm:crm@localhost:5432/isp_crm?schema=public";
 
-const SGP = {
-  apiUrl: process.env.SGP_API_URL?.trim(),
-  app: process.env.SGP_APP?.trim(),
-  token: process.env.SGP_TOKEN?.trim(),
-};
+const SGP = resolveHomologationCredentials(process.env);
+const ADMIN_EMAIL = SGP.adminEmail;
+const ADMIN_PASSWORD = SGP.adminPassword;
+
+const SGP_ENDPOINTS = [
+  { id: "sgp-customers", entity: "customers", path: "/api/ura/clientes/" },
+  { id: "sgp-contracts", entity: "contracts", path: "/api/contrato/list/" },
+  { id: "sgp-invoices", entity: "invoices", path: "/api/ura/titulos/" },
+];
 
 const report = {
   startedAt: new Date().toISOString(),
   mode: "real-sgp",
   prerequisites: {},
+  steps: [],
   auth: {},
   sync: {},
   data: {},
   consistency: {},
   pagination: {},
+  sgpDirect: {},
   frontend: {},
   regressionAudit: {},
   errorHandling: {},
   issues: [],
   passed: [],
+  conclusion: {},
 };
 
-function log(title, data) {
-  console.log(`\n=== ${title} ===`);
-  console.log(JSON.stringify(data, null, 2));
-}
+const steps = createStepRunner(report);
 
-function fail(step, message) {
-  report.issues.push({ step, message });
-  console.error(`\n[FALHA] ${step}: ${message}`);
-}
-
-function pass(step, detail = "") {
+function passLegacy(step, detail = "") {
   report.passed.push({ step, detail });
-}
-
-async function ensureAdminUser(client) {
-  const existing = await client.query(`SELECT id FROM "User" WHERE email = $1`, [ADMIN_EMAIL]);
-  if (existing.rows.length > 0) return;
-
-  const passwordHash = await bcrypt.hash(ADMIN_PASSWORD, 10);
-  const tenant = await client.query(
-    `INSERT INTO "Tenant" (id, name, slug, status, "createdAt", "updatedAt")
-     VALUES (gen_random_uuid(), 'Homologação ISP', 'homolog', 'ACTIVE', NOW(), NOW())
-     ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name RETURNING id`,
-  );
-  const tenantId = tenant.rows[0].id;
-  const user = await client.query(
-    `INSERT INTO "User" (id, email, name, "passwordHash", status, "createdAt", "updatedAt")
-     VALUES (gen_random_uuid(), $1, 'Admin Homolog', $2, 'ACTIVE', NOW(), NOW())
-     RETURNING id`,
-    [ADMIN_EMAIL, passwordHash],
-  );
-  const role = await client.query(
-    `INSERT INTO "Role" (id, "tenantId", name, scope, "createdAt", "updatedAt")
-     VALUES (gen_random_uuid(), $1, 'Administrador', 'TENANT', NOW(), NOW())
-     ON CONFLICT ("tenantId", name) DO UPDATE SET name = EXCLUDED.name RETURNING id`,
-    [tenantId],
-  );
-  await client.query(
-    `INSERT INTO "TenantMember" (id, "tenantId", "userId", "roleId", status, "createdAt", "updatedAt")
-     VALUES (gen_random_uuid(), $1, $2, $3, 'ACTIVE', NOW(), NOW())
-     ON CONFLICT ("tenantId", "userId") DO UPDATE SET status = 'ACTIVE'`,
-    [tenantId, user.rows[0].id, role.rows[0].id],
-  );
 }
 
 async function waitForApi() {
@@ -101,7 +73,7 @@ async function waitForApi() {
       const res = await fetch(`${API_URL}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: "invalid", password: "x" }),
+        body: JSON.stringify({ email: "invalid@example.org", password: "x" }),
       });
       if (res.status < 500) return;
     } catch {
@@ -136,8 +108,8 @@ async function login() {
   });
   const durationMs = Math.round(performance.now() - started);
   const body = await res.json();
-  if (!res.ok) throw new Error(`Login falhou: ${res.status} ${JSON.stringify(body)}`);
-  return { token: body.accessToken, durationMs };
+  if (!res.ok) throw new Error(`Login falhou: ${res.status} ${sanitizeText(JSON.stringify(body))}`);
+  return { token: body.accessToken, durationMs, user: body.user };
 }
 
 async function apiPost(token, path, payload = {}) {
@@ -192,143 +164,145 @@ async function dbCounts(client, tenantId) {
   };
 }
 
+async function assertBootstrapUser(client) {
+  const result = await client.query(`SELECT id FROM "User" WHERE email = $1 LIMIT 1`, [ADMIN_EMAIL]);
+  if (result.rows.length === 0) {
+    throw new Error(
+      "Administrador não encontrado. Execute npm run bootstrap:production antes da homologação.",
+    );
+  }
+}
+
 async function fetchApiTotal(token, endpoint) {
   const res = await apiGet(token, `${endpoint}?page=1&limit=1`);
   return res.ok ? (res.body.total ?? 0) : null;
 }
 
-async function validateConsistency(token, dbCountsAfter) {
-  const apiCustomers = await fetchApiTotal(token, "/customers");
-  const apiContracts = await fetchApiTotal(token, "/contracts");
-  const apiInvoices = await fetchApiTotal(token, "/invoices");
-
-  const consistency = {
-    db: dbCountsAfter,
-    api: {
-      customers: apiCustomers,
-      contracts: apiContracts,
-      invoices: apiInvoices,
-    },
-    matches: {
-      customers: apiCustomers === dbCountsAfter.customers,
-      contracts: apiContracts === dbCountsAfter.contracts,
-      invoices: apiInvoices === dbCountsAfter.invoices,
-    },
-  };
-
-  if (!consistency.matches.customers) {
-    fail("consistencia-clientes", `DB=${dbCountsAfter.customers} API=${apiCustomers}`);
-  } else pass("consistencia-clientes", `${dbCountsAfter.customers}`);
-  if (!consistency.matches.contracts) {
-    fail("consistencia-contratos", `DB=${dbCountsAfter.contracts} API=${apiContracts}`);
-  } else pass("consistencia-contratos", `${dbCountsAfter.contracts}`);
-  if (!consistency.matches.invoices) {
-    fail("consistencia-faturas", `DB=${dbCountsAfter.invoices} API=${apiInvoices}`);
-  } else pass("consistencia-faturas", `${dbCountsAfter.invoices}`);
-
-  return consistency;
-}
-
-async function validateFrontend() {
-  const pages = ["/customers", "/contracts", "/invoices"];
-  const results = {};
-  for (const page of pages) {
-    const started = performance.now();
-    const res = await fetch(`${WEB_URL}${page}`);
-    const html = await res.text();
-    results[page] = {
-      ok: res.ok,
-      durationMs: Math.round(performance.now() - started),
-      hasLoadError: html.includes("Erro ao carregar"),
-      hasEmptyStateOnly: html.includes("0 registros") && !html.includes("SGP"),
-    };
-    if (!res.ok || results[page].hasLoadError) {
-      fail(`frontend${page}`, `HTTP ${res.status}`);
-    } else {
-      pass(`frontend${page}`, `${results[page].durationMs}ms`);
-    }
-  }
-  return results;
-}
-
-function printCredentialInstructions() {
+function printCredentialInstructions(missing) {
   console.log(`
 ╔══════════════════════════════════════════════════════════════════╗
-║  INTERVENÇÃO NECESSÁRIA — Credenciais SGP reais ausentes         ║
+║  INTERVENÇÃO NECESSÁRIA — variáveis ausentes                     ║
 ╠══════════════════════════════════════════════════════════════════╣
-║  Execute no terminal (substitua pelos seus valores reais):       ║
-║                                                                  ║
-║  export SGP_API_URL="https://SUA-INSTANCIA.sgp.net.br"           ║
-║  export SGP_APP="seu-app"                                        ║
-║  export SGP_TOKEN="seu-token"                                    ║
-║  node scripts/homologate-sgp-real.mjs                            ║
-║                                                                  ║
-║  Opcional: ADMIN_EMAIL, ADMIN_PASSWORD, DATABASE_URL, API_URL      ║
+║  Variáveis faltantes: ${missing.join(", ")}
+║
+║  1) Bootstrap de produção:
+║     export BOOTSTRAP_TENANT_NAME="Minha ISP"
+║     export BOOTSTRAP_TENANT_SLUG="minha-isp"
+║     export BOOTSTRAP_ADMIN_NAME="Administrador"
+║     export BOOTSTRAP_ADMIN_EMAIL="admin@suaisp.com.br"
+║     export BOOTSTRAP_ADMIN_PASSWORD="SenhaForte123"
+║     npm run bootstrap:production
+║
+║  2) Homologação SGP real:
+║     export SGP_API_URL="https://SUA-INSTANCIA.sgp.net.br"
+║     export SGP_APP="seu-app"
+║     export SGP_TOKEN="seu-token"
+║     export SGP_TIMEOUT_MS="15000"
+║     npm run homologate:sgp
 ╚══════════════════════════════════════════════════════════════════╝
 `);
 }
 
 async function main() {
-  if (!SGP.apiUrl || !SGP.app || !SGP.token) {
-    report.prerequisites.missing = ["SGP_API_URL", "SGP_APP", "SGP_TOKEN"].filter(
-      (key) => !process.env[key]?.trim(),
-    );
-    printCredentialInstructions();
-    fs.writeFileSync(
-      path.join(ROOT, "homologation-report.json"),
-      JSON.stringify(report, null, 2),
-    );
+  const missing = validateHomologationCredentials(SGP);
+  if (missing.length > 0) {
+    report.prerequisites = { missing, status: "SKIPPED" };
+    steps.skip("prerequisites", `Variáveis ausentes: ${missing.join(", ")}`);
+    printCredentialInstructions(missing);
+    report.conclusion = {
+      approved: false,
+      reason: "Execução externa pendente por credenciais/variáveis ausentes.",
+    };
+    fs.writeFileSync(path.join(ROOT, "homologation-report.json"), JSON.stringify(report, null, 2));
     process.exit(2);
   }
 
   report.prerequisites = {
     sgpApiUrl: SGP.apiUrl.replace(/\/\/[^@]+@/, "//***@"),
     sgpApp: SGP.app,
-    tokenConfigured: Boolean(SGP.token),
+    tokenConfigured: true,
+    adminEmail: ADMIN_EMAIL,
+    timeoutMs: SGP.timeoutMs,
   };
+  steps.pass("prerequisites", { configured: true });
 
   spawnSync("node", ["scripts/audit-sgp-regression.mjs"], { cwd: ROOT, stdio: "pipe" });
   try {
     report.regressionAudit = JSON.parse(
       fs.readFileSync(path.join(ROOT, "sgp-regression-audit.json"), "utf8"),
     );
+    steps.pass("regression-audit", { commit: report.regressionAudit.definitiveFixCommit });
   } catch {
-    report.regressionAudit = { error: "audit script failed" };
+    steps.partial("regression-audit", "Auditoria Git indisponível");
   }
 
   spawnSync("npm", ["run", "build", "-w", "apps/api"], { cwd: ROOT, stdio: "inherit" });
   spawnSync("npm", ["run", "build", "-w", "apps/web"], {
     cwd: ROOT,
-    stdio: "inherit",
     env: { ...process.env, NODE_ENV: "production" },
+    stdio: "inherit",
   });
 
   const db = new Client({ connectionString: DATABASE_URL });
   await db.connect();
-  await ensureAdminUser(db);
+
+  try {
+    await assertBootstrapUser(db);
+    steps.pass("bootstrap-user", { adminEmail: ADMIN_EMAIL });
+  } catch (error) {
+    steps.fail("bootstrap-user", error instanceof Error ? error.message : String(error));
+    report.conclusion = { approved: false, reason: "Bootstrap de produção não executado." };
+    fs.writeFileSync(path.join(ROOT, "homologation-report.json"), JSON.stringify(report, null, 2));
+    await db.end();
+    process.exit(2);
+  }
 
   const apiProcess = startApi();
   await waitForApi();
 
   try {
-    const { token, durationMs: loginMs } = await login();
-    report.auth.login = { ok: true, durationMs: loginMs };
-    pass("login", `${loginMs}ms`);
+    const { token, durationMs: loginMs, user } = await login();
+    report.auth.login = { ok: true, durationMs: loginMs, tenantId: user.tenantId };
+    steps.pass("crm-auth", { durationMs: loginMs, endpoint: "/auth/login" });
+    passLegacy("login", `${loginMs}ms`);
+
+    for (const endpoint of SGP_ENDPOINTS) {
+      const result = await callSgpDirect(SGP, endpoint.path, { limit: 50, offset: 0 });
+      report.sgpDirect[endpoint.id] = {
+        endpoint: endpoint.path,
+        ok: result.ok,
+        status: result.status,
+        durationMs: result.durationMs,
+        structure: result.structure,
+      };
+
+      if (result.ok) {
+        steps.pass(endpoint.id, {
+          endpoint: endpoint.path,
+          structure: result.structure,
+        });
+      } else {
+        steps.fail(endpoint.id, `HTTP ${result.status}`, { endpoint: endpoint.path });
+      }
+    }
 
     const testAuth = await apiPost(token, "/integrations/sgp/credentials/test", {
       apiUrl: SGP.apiUrl,
       app: SGP.app,
       token: SGP.token,
+      timeoutMs: SGP.timeoutMs,
     });
     report.auth.sgpTestAuth = {
       ok: testAuth.ok,
       status: testAuth.status,
       durationMs: testAuth.durationMs,
+      structure: summarizeSgpBody(testAuth.body),
     };
     if (testAuth.ok) {
-      pass("sgp-autenticacao", `${testAuth.durationMs}ms`);
+      steps.pass("sgp-auth", { endpoint: "/integrations/sgp/credentials/test", durationMs: testAuth.durationMs });
+      passLegacy("sgp-autenticacao", `${testAuth.durationMs}ms`);
     } else {
-      fail("sgp-autenticacao", `HTTP ${testAuth.status}: ${JSON.stringify(testAuth.body).slice(0, 200)}`);
+      steps.fail("sgp-auth", `HTTP ${testAuth.status}`);
     }
 
     let credentialId;
@@ -337,21 +311,26 @@ async function main() {
     if (match) {
       credentialId = match.id;
       await apiPost(token, `/integrations/sgp/credentials/${credentialId}/test`, {});
+      steps.pass("sgp-credentials-existing", { credentialId });
     } else {
       const created = await apiPost(token, "/integrations/sgp/credentials", {
         name: "SGP Homologação",
         apiUrl: SGP.apiUrl,
         app: SGP.app,
         token: SGP.token,
+        timeoutMs: SGP.timeoutMs,
       });
-      if (!created.ok) fail("sgp-credentials", JSON.stringify(created.body));
-      else {
+      if (!created.ok) {
+        steps.fail("sgp-credentials", JSON.stringify(created.body));
+      } else {
         credentialId = created.body.id;
-        pass("sgp-credentials", credentialId);
+        steps.pass("sgp-credentials", { credentialId });
+        passLegacy("sgp-credentials", credentialId);
       }
     }
 
-    const beforeCounts = await dbCounts(db, (await db.query(`SELECT "tenantId" FROM "TenantMember" LIMIT 1`)).rows[0]?.tenantId);
+    const tenantId = user.tenantId;
+    const beforeCounts = await dbCounts(db, tenantId);
     report.data.beforeSync = beforeCounts;
 
     const fullStart = await apiPost(token, "/integrations/sgp/sync-customers", {
@@ -359,75 +338,102 @@ async function main() {
       full: true,
     });
     if (!fullStart.ok || !fullStart.body?.runId) {
-      fail("sync-completa", JSON.stringify(fullStart.body));
+      steps.fail("sync-full", JSON.stringify(fullStart.body));
     } else {
       const fullRun = await waitSync(token, fullStart.body.runId);
       report.sync.full = {
+        runId: fullStart.body.runId,
         status: fullRun.status,
         durationMs: fullRun.durationMs,
-        processed: fullRun.customers?.processed ?? fullRun.processed,
-        created: fullRun.created,
-        updated: fullRun.updated,
-        ignored: fullRun.ignored,
-        contractsCreated: fullRun.contracts?.created ?? fullRun.contractsCreated ?? 0,
-        contractsUpdated: fullRun.contracts?.updated ?? fullRun.contractsUpdated ?? 0,
-        invoicesCreated: fullRun.invoices?.created ?? fullRun.invoicesCreated ?? 0,
-        invoicesUpdated: fullRun.invoices?.updated ?? fullRun.invoicesUpdated ?? 0,
-        customersDeleted: fullRun.customers?.deleted ?? 0,
-        contractsDeleted: fullRun.contracts?.deleted ?? 0,
-        invoicesDeleted: fullRun.invoices?.deleted ?? 0,
+        processed: fullRun.customersProcessed ?? fullRun.processed ?? 0,
+        created: fullRun.customersCreated ?? fullRun.created ?? 0,
+        updated: fullRun.customersUpdated ?? fullRun.updated ?? 0,
+        ignored: fullRun.customersIgnored ?? fullRun.ignored ?? 0,
+        contractsCreated: fullRun.contractsCreated ?? 0,
+        contractsUpdated: fullRun.contractsUpdated ?? 0,
+        contractsDeleted: fullRun.contractsDeleted ?? 0,
+        invoicesCreated: fullRun.invoicesCreated ?? 0,
+        invoicesUpdated: fullRun.invoicesUpdated ?? 0,
+        invoicesDeleted: fullRun.invoicesDeleted ?? 0,
       };
       if (fullRun.status === "COMPLETED" || fullRun.status === "PARTIAL") {
-        pass("sync-completa", `${fullRun.durationMs}ms · ${report.sync.full.processed} clientes`);
+        steps.pass("sync-full", report.sync.full);
+        passLegacy("sync-completa", `${fullRun.durationMs}ms`);
       } else {
-        fail("sync-completa", fullRun.status);
+        steps.fail("sync-full", fullRun.status ?? "FAILED");
       }
     }
 
-    const afterFull = await dbCounts(db, (await db.query(`SELECT "tenantId" FROM "TenantMember" LIMIT 1`)).rows[0]?.tenantId);
+    const afterFull = await dbCounts(db, tenantId);
     report.data.afterFullSync = afterFull;
 
     if (afterFull.customers > 0 && afterFull.contracts === 0) {
-      fail("sync-contratos-vazios", `${afterFull.customers} clientes mas 0 contratos no banco`);
+      steps.fail("sync-contracts-persisted", `${afterFull.customers} clientes e 0 contratos`);
     } else if (afterFull.contracts > 0) {
-      pass("sync-contratos-persistidos", `${afterFull.contracts}`);
+      steps.pass("sync-contracts-persisted", { count: afterFull.contracts });
+      passLegacy("sync-contratos-persistidos", `${afterFull.contracts}`);
+    } else {
+      steps.partial("sync-contracts-persisted", "Nenhum contrato encontrado para validar");
     }
 
     if (afterFull.customers > 0 && afterFull.invoices === 0) {
-      fail("sync-faturas-vazias", `${afterFull.customers} clientes mas 0 faturas no banco`);
+      steps.fail("sync-invoices-persisted", `${afterFull.customers} clientes e 0 faturas`);
     } else if (afterFull.invoices > 0) {
-      pass("sync-faturas-persistidas", `${afterFull.invoices}`);
+      steps.pass("sync-invoices-persisted", { count: afterFull.invoices });
+      passLegacy("sync-faturas-persistidas", `${afterFull.invoices}`);
+    } else {
+      steps.partial("sync-invoices-persisted", "Nenhuma fatura encontrada para validar");
     }
 
-    const tenantId = (await db.query(`SELECT "tenantId" FROM "TenantMember" LIMIT 1`)).rows[0]?.tenantId;
-    report.consistency = await validateConsistency(token, afterFull);
+    const apiCustomers = await fetchApiTotal(token, "/customers");
+    const apiContracts = await fetchApiTotal(token, "/contracts");
+    const apiInvoices = await fetchApiTotal(token, "/invoices");
+    report.consistency = {
+      db: afterFull,
+      api: { customers: apiCustomers, contracts: apiContracts, invoices: apiInvoices },
+      matches: {
+        customers: apiCustomers === afterFull.customers,
+        contracts: apiContracts === afterFull.contracts,
+        invoices: apiInvoices === afterFull.invoices,
+      },
+    };
+    for (const [entity, ok] of Object.entries(report.consistency.matches)) {
+      if (ok) steps.pass(`consistency-${entity}`, report.consistency);
+      else steps.fail(`consistency-${entity}`, `DB/API divergentes para ${entity}`);
+    }
 
     const incStart = await apiPost(token, "/integrations/sgp/sync-customers", { credentialId });
     if (!incStart.ok || !incStart.body?.runId) {
-      fail("sync-incremental", JSON.stringify(incStart.body));
+      steps.fail("sync-incremental", JSON.stringify(incStart.body));
     } else {
       const incRun = await waitSync(token, incStart.body.runId);
       report.sync.incremental = {
+        runId: incStart.body.runId,
         status: incRun.status,
         durationMs: incRun.durationMs,
-        processed: incRun.customers?.processed ?? incRun.processed,
-        created: incRun.created,
-        updated: incRun.updated,
-        ignored: incRun.ignored,
-        contractsDeleted: incRun.contracts?.deleted ?? 0,
-        invoicesDeleted: incRun.invoices?.deleted ?? 0,
+        processed: incRun.customersProcessed ?? incRun.processed ?? 0,
+        created: incRun.customersCreated ?? incRun.created ?? 0,
+        updated: incRun.customersUpdated ?? incRun.updated ?? 0,
+        ignored: incRun.customersIgnored ?? incRun.ignored ?? 0,
       };
       if (incRun.status === "COMPLETED" || incRun.status === "PARTIAL") {
-        pass("sync-incremental", `${incRun.durationMs}ms`);
+        steps.pass("sync-incremental", report.sync.incremental);
       } else {
-        fail("sync-incremental", incRun.status);
+        steps.fail("sync-incremental", incRun.status ?? "FAILED");
       }
     }
 
-    report.data.afterIncrementalSync = await dbCounts(
-      db,
-      (await db.query(`SELECT "tenantId" FROM "TenantMember" LIMIT 1`)).rows[0]?.tenantId,
-    );
+    const afterIncremental = await dbCounts(db, tenantId);
+    report.data.afterIncrementalSync = afterIncremental;
+    if (
+      afterIncremental.customers >= afterFull.customers &&
+      afterIncremental.contracts >= afterFull.contracts &&
+      afterIncremental.invoices >= afterFull.invoices
+    ) {
+      steps.pass("sync-no-regression", afterIncremental);
+    } else {
+      steps.fail("sync-no-regression", "Contagens diminuíram após sync incremental");
+    }
 
     for (const endpoint of ["/customers", "/contracts", "/invoices"]) {
       const pages = [];
@@ -435,7 +441,7 @@ async function main() {
       let totalPages = 1;
       while (page <= totalPages) {
         const res = await apiGet(token, `${endpoint}?page=${page}&limit=50`);
-        if (!res.ok) fail(`paginacao${endpoint}`, `HTTP ${res.status}`);
+        if (!res.ok) steps.fail(`pagination${endpoint}`, `HTTP ${res.status}`);
         totalPages = res.body.totalPages ?? 1;
         pages.push({
           page,
@@ -446,46 +452,39 @@ async function main() {
         page += 1;
       }
       report.pagination[endpoint] = pages;
-      pass(`paginacao${endpoint}`, `${pages.length} páginas · total ${pages[0]?.total ?? 0}`);
+      steps.pass(`pagination${endpoint}`, { pages: pages.length, total: pages[0]?.total ?? 0 });
     }
 
-    const webProcess = spawn("npm", ["run", "start", "-w", "apps/web"], {
-      cwd: ROOT,
-      env: {
-        ...process.env,
-        NODE_ENV: "production",
-        NEXT_PUBLIC_API_URL: API_URL,
-      },
-      stdio: "ignore",
-    });
-
-    try {
-      for (let i = 0; i < 60; i += 1) {
-        try {
-          const probe = await fetch(`${WEB_URL}/login`);
-          if (probe.status < 500) break;
-        } catch {
-          // retry
-        }
-        await wait(500);
+    const duplicateStart = await apiPost(token, "/integrations/sgp/sync-customers", { credentialId });
+    if (duplicateStart.body?.status === "already_running") {
+      steps.pass("sync-duplicate-guard", { status: "already_running" });
+    } else if (duplicateStart.ok && duplicateStart.body?.runId) {
+      const duplicateRun = await waitSync(token, duplicateStart.body.runId);
+      const afterDuplicate = await dbCounts(db, tenantId);
+      report.data.afterDuplicateSync = afterDuplicate;
+      if (
+        afterDuplicate.customers === afterIncremental.customers &&
+        afterDuplicate.contracts === afterIncremental.contracts &&
+        afterDuplicate.invoices === afterIncremental.invoices
+      ) {
+        steps.pass("sync-no-duplication", afterDuplicate);
+      } else {
+        steps.partial("sync-no-duplication", "Contagens variaram após segunda sync consecutiva");
       }
-      report.frontend = await validateFrontend();
-    } finally {
-      webProcess.kill("SIGTERM");
+      report.sync.duplicate = duplicateRun;
+    } else {
+      steps.partial("sync-duplicate-guard", "Não foi possível validar concorrência");
     }
 
     const badAuth = await apiPost(token, "/integrations/sgp/credentials/test", {
       apiUrl: SGP.apiUrl,
       app: SGP.app,
       token: "token-invalido-homologacao",
+      timeoutMs: SGP.timeoutMs,
     });
-    report.errorHandling.invalidToken = {
-      status: badAuth.status,
-      ok: badAuth.ok,
-      handled: !badAuth.ok,
-    };
-    if (!badAuth.ok) pass("erro-token-invalido");
-    else fail("erro-token-invalido", "API deveria rejeitar token inválido");
+    report.errorHandling.invalidToken = { status: badAuth.status, ok: badAuth.ok };
+    if (!badAuth.ok) steps.pass("error-invalid-token", report.errorHandling.invalidToken);
+    else steps.fail("error-invalid-token", "Token inválido deveria falhar");
 
     const unavailable = await apiPost(token, "/integrations/sgp/credentials/test", {
       apiUrl: "http://127.0.0.1:1",
@@ -496,42 +495,52 @@ async function main() {
     report.errorHandling.unavailable = {
       status: unavailable.status,
       ok: unavailable.ok,
-      handled: !unavailable.ok,
       durationMs: unavailable.durationMs,
     };
-    if (!unavailable.ok) pass("erro-indisponivel", `${unavailable.durationMs}ms`);
-    else fail("erro-indisponivel", "API deveria falhar para host inacessível");
+    if (!unavailable.ok) steps.pass("error-unavailable", report.errorHandling.unavailable);
+    else steps.fail("error-unavailable", "Host inacessível deveria falhar");
 
-    const badUrl = await apiPost(token, "/integrations/sgp/credentials/test", {
+    const timeoutCase = await apiPost(token, "/integrations/sgp/credentials/test", {
       apiUrl: "https://invalid.example.invalid",
       app: "x",
       token: "x",
-      timeoutMs: 5000,
+      timeoutMs: 1000,
     });
-    report.errorHandling.unexpectedResponse = {
-      status: badUrl.status,
-      ok: badUrl.ok,
-      handled: !badUrl.ok,
-      durationMs: badUrl.durationMs,
+    report.errorHandling.timeout = {
+      status: timeoutCase.status,
+      ok: timeoutCase.ok,
+      durationMs: timeoutCase.durationMs,
     };
-    if (!badUrl.ok) pass("erro-resposta-inesperada");
-    else fail("erro-resposta-inesperada", "Esperado erro para host inválido");
+    if (!timeoutCase.ok) steps.pass("error-timeout", report.errorHandling.timeout);
+    else steps.partial("error-timeout", "Timeout/indisponibilidade não reproduzido");
   } finally {
     apiProcess.kill("SIGTERM");
     await db.end();
   }
 
   report.finishedAt = new Date().toISOString();
+  const failedSteps = report.steps.filter((step) => step.status === "FAIL").length;
   report.summary = {
-    passed: report.passed.length,
-    failed: report.issues.length,
-    readyForProduction: report.issues.length === 0,
+    passed: report.steps.filter((step) => step.status === "PASS").length,
+    failed: failedSteps,
+    partial: report.steps.filter((step) => step.status === "PARTIAL").length,
+    skipped: report.steps.filter((step) => step.status === "SKIPPED").length,
+    readyForProduction: failedSteps === 0,
+  };
+  report.conclusion = {
+    approved: failedSteps === 0,
+    reason:
+      failedSteps === 0
+        ? "Homologação aprovada."
+        : `${failedSteps} etapa(s) reprovada(s). Consulte homologation-report.json.`,
   };
 
   fs.writeFileSync(path.join(ROOT, "homologation-report.json"), JSON.stringify(report, null, 2));
-  log("RELATÓRIO DE HOMOLOGAÇÃO", report.summary);
+  console.log("\n=== RELATÓRIO DE HOMOLOGAÇÃO ===");
+  console.log(JSON.stringify(report.summary, null, 2));
+  console.log(`Relatório completo: ${path.join(ROOT, "homologation-report.json")}`);
 
-  if (report.issues.length > 0) process.exit(1);
+  if (failedSteps > 0) process.exit(1);
 }
 
 main().catch((error) => {

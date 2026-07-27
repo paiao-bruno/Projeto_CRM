@@ -1,0 +1,43 @@
+{
+  "startedAt": "2026-07-24T18:36:43.454Z",
+  "environment": "mock SGP on :9090, API on :4000, PostgreSQL isp_crm",
+  "db": {
+    "before": {
+      "customers": 0,
+      "sgpCustomers": 0,
+      "contracts": 0,
+      "invoices": 0
+    },
+    "after": {
+      "customers": 3,
+      "sgpCustomers": 3,
+      "contracts": 3,
+      "invoices": 3
+    }
+  },
+  "sync": {
+    "result": {
+      "status": "COMPLETED",
+      "errorMessage": null,
+      "customersProcessed": 3,
+      "customersCreated": 3,
+      "contractsCreated": 3,
+      "invoicesCreated": 3,
+      "durationMs": 367
+    }
+  },
+  "api": {
+    "totals": {
+      "customers": 3,
+      "contracts": 3,
+      "invoices": 3
+    }
+  },
+  "verdict": {
+    "syncCompleted": true,
+    "dbCustomers": true,
+    "dbContracts": true,
+    "dbInvoices": true,
+    "apiMatchesDb": true
+  }
+}

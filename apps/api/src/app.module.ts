@@ -23,7 +23,14 @@ const seedEnabled =
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: [".env.local", ".env"],
+      envFilePath: [
+        ".env.local",
+        ".env",
+        "../.env.local",
+        "../.env",
+        "../../.env.local",
+        "../../.env",
+      ],
     }),
     ThrottlerModule.forRootAsync({
       inject: [ConfigService],

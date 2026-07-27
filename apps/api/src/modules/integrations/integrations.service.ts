@@ -49,6 +49,13 @@ import {
   withSgpDeletionMetadata,
   withSgpRestoredMetadata,
 } from "./sgp/sgp-deletion.sync";
+import {
+  bodyMayContainEntityPayload,
+  extractSgpEntityRecords,
+  looksLikeContract,
+  looksLikeTitle,
+  summarizeSgpResponseStructure,
+} from "./sgp/sgp-response-parser";
 
 type SgpCustomerMapping = {
   customer: ExternalCustomerInput;
@@ -79,6 +86,7 @@ type SyncCounters = {
 @Injectable()
 export class IntegrationsService {
   private readonly logger = new Logger(IntegrationsService.name);
+  private static readonly MAX_SGP_SYNC_PAGES = 500;
   private readonly runningCustomerSyncs = new Set<string>();
   private syncLogBuffer: Array<{
     tenantId: string;
@@ -205,6 +213,8 @@ export class IntegrationsService {
 
   async syncSgpCustomers(user: AuthUser, request: SgpDiscoveryRequest = {}) {
     const lockKey = user.tenantId;
+    const timeoutMs = Number(process.env.SGP_AUTO_SYNC_TIMEOUT_MS ?? 900_000);
+    await this.recoverStaleSyncRuns(timeoutMs);
 
     if (this.runningCustomerSyncs.has(lockKey)) {
       const skippedRun = await this.prisma.integrationSyncRun.create({
@@ -259,7 +269,11 @@ export class IntegrationsService {
       },
     });
 
-    void this.processSgpCustomers(user, request, run.id)
+    void this.withTimeout(
+      this.processSgpCustomers(user, request, run.id),
+      timeoutMs,
+      "Tempo limite da sincronização manual SGP excedido.",
+    )
       .then((result) => {
         this.logger.log(
           safeJsonStringify({
@@ -270,7 +284,7 @@ export class IntegrationsService {
           }),
         );
       })
-      .catch((error) => {
+      .catch(async (error) => {
         this.logger.error(
           safeJsonStringify({
             event: "sgp.sync-customers.failed",
@@ -278,6 +292,11 @@ export class IntegrationsService {
             runId: run.id,
             error: error instanceof Error ? error.message : String(error),
           }),
+        );
+        await this.failSyncRunIfStillRunning(
+          run.id,
+          error instanceof Error ? error.message : String(error),
+          error instanceof Error ? error.stack : undefined,
         );
       })
       .finally(() => {
@@ -560,11 +579,6 @@ export class IntegrationsService {
     request: SgpDiscoveryRequest = {},
     runId?: string,
   ) {
-    const credentials = await this.resolveSgpCredentials(user.tenantId, request.credentialId, request);
-    const incrementalContext = await this.resolveIncrementalContext(
-      user.tenantId,
-      request,
-    );
     const startedAt = Date.now();
     const result: SyncCounters = {
       processed: 0,
@@ -582,18 +596,40 @@ export class IntegrationsService {
       invoicesDeleted: 0,
       ignored: 0,
       errors: [] as Array<{ index: number; message: string }>,
-      syncMode: incrementalContext.mode,
-      watermark: incrementalContext.since?.toISOString() ?? null,
+      syncMode: "incremental",
+      watermark: null,
     };
     let pagination = request.pagination;
+    let customerPagesFetched = 0;
     const seenExternalIds = createSgpSeenExternalIds();
     let syncIncludedContractPayload = false;
     let syncIncludedInvoicePayload = false;
     this.syncLogBuffer = [];
-    await this.restoreIncorrectlyDeletedSgpChildren(user.tenantId);
 
     try {
+      const credentials = await this.resolveSgpCredentials(
+        user.tenantId,
+        request.credentialId,
+        request,
+      );
+      const incrementalContext = await this.resolveIncrementalContext(
+        user.tenantId,
+        request,
+      );
+      result.syncMode = incrementalContext.mode;
+      result.watermark = incrementalContext.since?.toISOString() ?? null;
+      await this.restoreIncorrectlyDeletedSgpChildren(user.tenantId);
+
       while (true) {
+        customerPagesFetched += 1;
+        if (customerPagesFetched > IntegrationsService.MAX_SGP_SYNC_PAGES) {
+          throw new BadGatewayException({
+            code: "SGP_PAGINATION_LIMIT",
+            message:
+              "A sincronização SGP excedeu o limite de páginas de clientes. Verifique a paginação retornada pelo SGP.",
+          });
+        }
+
         const response = await this.sgpClient.discoverCustomers(
           credentials,
           this.buildSyncPayload(request, incrementalContext, pagination),
@@ -601,10 +637,10 @@ export class IntegrationsService {
         this.assertCustomerDiscoveryResponse(response.body, request.endpoint);
         const responseBody = this.isRecord(response.body) ? response.body : {};
         this.trackRootExternalIds(responseBody, seenExternalIds);
-        if (this.extractArray(responseBody, ["contratos", "contrato"]).length > 0) {
+        if (extractSgpEntityRecords(responseBody, "contract").length > 0) {
           syncIncludedContractPayload = true;
         }
-        if (this.extractArray(responseBody, ["titulos", "títulos", "titulo"]).length > 0) {
+        if (extractSgpEntityRecords(responseBody, "invoice").length > 0) {
           syncIncludedInvoicePayload = true;
         }
         const rawCustomers = this.extractCustomers(response.body);
@@ -615,10 +651,12 @@ export class IntegrationsService {
           try {
             const mapped = this.mapSgpCustomer(rawCustomer);
             this.trackMappedExternalIds(mapped, seenExternalIds);
-            if (mapped.contracts.length > 0) {
+            const seenCustomerContracts = this.collectContractExternalIds(mapped.contracts);
+            const seenCustomerInvoices = this.collectInvoiceExternalIds(mapped.invoices);
+            if (seenCustomerContracts.size > 0) {
               syncIncludedContractPayload = true;
             }
-            if (mapped.invoices.length > 0) {
+            if (seenCustomerInvoices.size > 0) {
               syncIncludedInvoicePayload = true;
             }
 
@@ -695,28 +733,37 @@ export class IntegrationsService {
               );
 
               if (!customerRecord) {
-                result.ignored += 1;
-                continue;
-              }
-
-              result.unchanged += 1;
-              if (runId) {
-                await this.createSyncLog({
-                  tenantId: user.tenantId,
-                  runId,
-                  entity: IntegrationSyncEntity.CUSTOMER,
-                  externalId: mapped.customer.externalId ?? mapped.customer.document,
-                  action: "unchanged",
-                  status: IntegrationSyncStatus.SKIPPED,
-                  message: "Registro inalterado desde a última sincronização.",
-                });
+                const upsert = await this.customersService.upsertFromExternalSource(
+                  user.tenantId,
+                  user.memberId,
+                  mapped.customer,
+                );
+                customerRecord = upsert.customer;
+                if (upsert.operation === "created") {
+                  result.created += 1;
+                } else if (upsert.operation === "updated") {
+                  result.updated += 1;
+                } else {
+                  result.unchanged += 1;
+                }
+              } else {
+                result.unchanged += 1;
+                if (runId) {
+                  await this.createSyncLog({
+                    tenantId: user.tenantId,
+                    runId,
+                    entity: IntegrationSyncEntity.CUSTOMER,
+                    externalId: mapped.customer.externalId ?? mapped.customer.document,
+                    action: "unchanged",
+                    status: IntegrationSyncStatus.SKIPPED,
+                    message: "Registro inalterado desde a última sincronização.",
+                  });
+                }
               }
             }
 
-            const seenCustomerContracts = this.collectContractExternalIds(mapped.contracts);
-            const seenCustomerInvoices = this.collectInvoiceExternalIds(mapped.invoices);
-            const shouldReconcileCustomerContracts = mapped.contracts.length > 0;
-            const shouldReconcileCustomerInvoices = mapped.invoices.length > 0;
+            const shouldReconcileCustomerContracts = seenCustomerContracts.size > 0;
+            const shouldReconcileCustomerInvoices = seenCustomerInvoices.size > 0;
 
             const contractUpserts = await this.upsertContracts(
               user.tenantId,
@@ -776,7 +823,12 @@ export class IntegrationsService {
           }
         }
 
-        pagination = this.nextPagination(response.body, pagination);
+        pagination = this.resolveNextPagination(
+          response.body,
+          pagination,
+          rawCustomers.length,
+          customerPagesFetched,
+        );
         if (!pagination) break;
       }
 
@@ -806,7 +858,7 @@ export class IntegrationsService {
         syncIncludedInvoicePayload = true;
       }
 
-      if (incrementalContext.mode === "full") {
+      if (incrementalContext.mode === "full" && result.processed > 0) {
         result.customersDeleted += await this.reconcileMissingSgpCustomers(
           user.tenantId,
           seenExternalIds.customers,
@@ -826,12 +878,23 @@ export class IntegrationsService {
             runId,
           );
         }
+      } else if (incrementalContext.mode === "full" && result.processed === 0) {
+        const message =
+          "Sincronização completa não retornou clientes do SGP. Reconciliação foi ignorada para evitar apagar dados existentes.";
+        result.errors.push({ index: 0, message });
+        this.logger.warn(
+          safeJsonStringify({
+            event: "sgp.sync.empty-full-sync",
+            tenantId: user.tenantId,
+            runId,
+          }),
+        );
       }
     } catch (error) {
       if (runId) {
         await this.flushSyncLogs();
         const durationMs = Date.now() - startedAt;
-        await this.finishSyncRun(runId, IntegrationSyncStatus.FAILED, result, durationMs, {
+        await this.safeFinalizeSyncRun(runId, IntegrationSyncStatus.FAILED, result, durationMs, {
           errorMessage: error instanceof Error ? error.message : String(error),
           stackTrace: error instanceof Error ? error.stack : undefined,
           cursor: pagination,
@@ -847,19 +910,43 @@ export class IntegrationsService {
 
     if (runId) {
       await this.flushSyncLogs();
-      await this.finishSyncRun(
+      const hasPersistedWork =
+        result.created +
+          result.updated +
+          result.contractsCreated +
+          result.contractsUpdated +
+          result.invoicesCreated +
+          result.invoicesUpdated >
+        0;
+      const finalStatus = (() => {
+        if (result.errors.length) {
+          return IntegrationSyncStatus.PARTIAL;
+        }
+        if (result.processed === 0 && !hasPersistedWork) {
+          return IntegrationSyncStatus.FAILED;
+        }
+        return IntegrationSyncStatus.COMPLETED;
+      })();
+      const errorMessage =
+        finalStatus === IntegrationSyncStatus.FAILED
+          ? "Nenhum registro foi importado do SGP. Verifique credenciais, URL da API e endpoints de clientes/contratos/faturas."
+          : undefined;
+
+      await this.safeFinalizeSyncRun(
         runId,
-        result.errors.length ? IntegrationSyncStatus.PARTIAL : IntegrationSyncStatus.COMPLETED,
+        finalStatus,
         result,
         finalResult.durationMs,
-        { cursor: pagination },
+        { cursor: pagination, errorMessage },
       );
 
-      await this.sgpCredentials.updateSyncState(user.tenantId, request.credentialId, {
-        lastSuccessfulSyncAt: new Date().toISOString(),
-        lastSyncMode: incrementalContext.mode,
-        lastSyncRunId: runId,
-      });
+      if (hasPersistedWork || result.processed > 0) {
+        await this.sgpCredentials.updateSyncState(user.tenantId, request.credentialId, {
+          lastSuccessfulSyncAt: new Date().toISOString(),
+          lastSyncMode: result.syncMode,
+          lastSyncRunId: runId,
+        });
+      }
     }
 
     this.logger.log(
@@ -1054,6 +1141,111 @@ export class IntegrationsService {
     await this.prisma.integrationSyncLog.createMany({ data: batch });
   }
 
+  private async safeFinalizeSyncRun(
+    runId: string,
+    status: IntegrationSyncStatus,
+    counters: SyncCounters,
+    durationMs: number,
+    options: {
+      cursor?: unknown;
+      errorMessage?: string;
+      stackTrace?: string;
+    } = {},
+  ) {
+    try {
+      await this.finishSyncRun(runId, status, counters, durationMs, options);
+    } catch (error) {
+      this.logger.error(
+        safeJsonStringify({
+          event: "sgp.sync.finalize-fallback",
+          runId,
+          status,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      );
+      await this.prisma.integrationSyncRun.updateMany({
+        where: {
+          id: runId,
+          status: IntegrationSyncStatus.RUNNING,
+        },
+        data: {
+          status,
+          finishedAt: new Date(),
+          durationMs,
+          errorMessage:
+            options.errorMessage ??
+            (error instanceof Error ? error.message : "Falha ao finalizar sincronização."),
+          stackTrace: options.stackTrace,
+        },
+      });
+    }
+  }
+
+  private async failSyncRunIfStillRunning(
+    runId: string,
+    errorMessage: string,
+    stackTrace?: string,
+  ) {
+    const run = await this.prisma.integrationSyncRun.findUnique({
+      where: { id: runId },
+      select: { status: true },
+    });
+
+    if (!run || run.status !== IntegrationSyncStatus.RUNNING) {
+      return;
+    }
+
+    await this.safeFinalizeSyncRun(
+      runId,
+      IntegrationSyncStatus.FAILED,
+      {
+        processed: 0,
+        created: 0,
+        updated: 0,
+        unchanged: 0,
+        contractsCreated: 0,
+        contractsUpdated: 0,
+        contractsUnchanged: 0,
+        invoicesCreated: 0,
+        invoicesUpdated: 0,
+        invoicesUnchanged: 0,
+        customersDeleted: 0,
+        contractsDeleted: 0,
+        invoicesDeleted: 0,
+        ignored: 0,
+        errors: [{ index: 0, message: errorMessage }],
+        syncMode: "incremental",
+        watermark: null,
+      },
+      0,
+      { errorMessage, stackTrace },
+    );
+  }
+
+  private resolveNextPagination(
+    body: unknown,
+    currentPagination: Record<string, unknown> | undefined,
+    recordsOnPage: number,
+    pagesFetched: number,
+  ) {
+    if (recordsOnPage === 0) {
+      return undefined;
+    }
+
+    if (pagesFetched >= IntegrationsService.MAX_SGP_SYNC_PAGES) {
+      this.logger.warn(
+        safeJsonStringify({
+          event: "sgp.pagination.limit-reached",
+          pagesFetched,
+          recordsOnPage,
+        }),
+      );
+      return undefined;
+    }
+
+    return this.nextPagination(body, currentPagination);
+  }
+
   private nextPagination(
     body: unknown,
     currentPagination?: Record<string, unknown>,
@@ -1116,10 +1308,6 @@ export class IntegrationsService {
 
     if (typeof nextValue === "string" && /^\d+$/.test(nextValue)) {
       return this.withPaginationStyle(currentPagination, Number(nextValue), limit);
-    }
-
-    if (nextValue && finalTotalPages === undefined) {
-      return this.withPaginationStyle(currentPagination, currentPage + 1, limit);
     }
 
     if (finalTotalPages && currentPage < finalTotalPages) {
@@ -1257,94 +1445,37 @@ export class IntegrationsService {
   }
 
   private extractCustomers(body: unknown): Array<Record<string, unknown>> {
-    if (Array.isArray(body)) {
-      return body.filter(this.isRecord);
-    }
-
-    if (!this.isRecord(body)) {
-      return [];
-    }
-
-    const candidateKeys = ["clientes", "cliente", "data", "results", "registros", "objects", "items"];
-
-    for (const key of candidateKeys) {
-      const value = body[key];
-      if (Array.isArray(value)) {
-        return value.filter(this.isRecord).map((customer) =>
-          this.attachUraRelations(customer, body),
-        );
-      }
-      if (this.isRecord(value)) {
-        return [this.attachUraRelations(value, body)];
-      }
-    }
-
-    return this.looksLikeCustomer(body) ? [this.attachUraRelations(body, body)] : [];
+    const root = this.isRecord(body) ? body : {};
+    return extractSgpEntityRecords(body, "customer").map((customer) =>
+      this.attachUraRelations(customer, root),
+    );
   }
 
   private extractContracts(body: unknown): Array<Record<string, unknown>> {
-    if (Array.isArray(body)) {
-      return body.filter(this.isRecord);
-    }
-
-    if (!this.isRecord(body)) {
-      return [];
-    }
-
-    const candidateKeys = [
-      "contratos",
-      "contrato",
-      "data",
-      "results",
-      "registros",
-      "objects",
-      "items",
-    ];
-
-    for (const key of candidateKeys) {
-      const value = body[key];
-      if (Array.isArray(value)) {
-        return value.filter(this.isRecord);
-      }
-      if (this.isRecord(value)) {
-        return [value];
-      }
-    }
-
-    return this.looksLikeContract(body) ? [body] : [];
+    return extractSgpEntityRecords(body, "contract");
   }
 
   private extractTitles(body: unknown): Array<Record<string, unknown>> {
-    if (Array.isArray(body)) {
-      return body.filter(this.isRecord);
+    return extractSgpEntityRecords(body, "invoice");
+  }
+
+  private logUnexpectedEmptyExtraction(
+    entity: "customer" | "contract" | "invoice",
+    endpoint: string,
+    body: unknown,
+  ) {
+    if (!bodyMayContainEntityPayload(body, entity)) {
+      return;
     }
 
-    if (!this.isRecord(body)) {
-      return [];
-    }
-
-    const candidateKeys = [
-      "titulos",
-      "títulos",
-      "titulo",
-      "data",
-      "results",
-      "registros",
-      "objects",
-      "items",
-    ];
-
-    for (const key of candidateKeys) {
-      const value = body[key];
-      if (Array.isArray(value)) {
-        return value.filter(this.isRecord);
-      }
-      if (this.isRecord(value)) {
-        return [value];
-      }
-    }
-
-    return this.looksLikeTitle(body) ? [body] : [];
+    this.logger.warn(
+      safeJsonStringify({
+        event: "sgp.extract.empty-unexpected",
+        entity,
+        endpoint,
+        structure: summarizeSgpResponseStructure(body),
+      }),
+    );
   }
 
   private async processSgpContractsFromApi(
@@ -1358,14 +1489,27 @@ export class IntegrationsService {
   ) {
     let pagination = request.pagination;
     let includedPayload = false;
+    let pagesFetched = 0;
 
     while (true) {
+      pagesFetched += 1;
+      if (pagesFetched > IntegrationsService.MAX_SGP_SYNC_PAGES) {
+        throw new BadGatewayException({
+          code: "SGP_PAGINATION_LIMIT",
+          message:
+            "A sincronização SGP excedeu o limite de páginas de contratos. Verifique a paginação retornada pelo SGP.",
+        });
+      }
+
       const response = await this.sgpClient.discoverContracts(
         credentials,
         this.buildSyncPayload(request, incrementalContext, pagination),
       );
       this.assertListDiscoveryResponse(response.body, "/api/contrato/list/");
       const contracts = this.extractContracts(response.body);
+      if (contracts.length === 0) {
+        this.logUnexpectedEmptyExtraction("contract", "/api/contrato/list/", response.body);
+      }
       if (contracts.length > 0) {
         includedPayload = true;
       }
@@ -1417,7 +1561,12 @@ export class IntegrationsService {
         result.contractsDeleted += upserts.deleted;
       }
 
-      pagination = this.nextPagination(response.body, pagination);
+      pagination = this.resolveNextPagination(
+        response.body,
+        pagination,
+        contracts.length,
+        pagesFetched,
+      );
       if (!pagination) break;
     }
 
@@ -1435,14 +1584,27 @@ export class IntegrationsService {
   ) {
     let pagination = request.pagination;
     let includedPayload = false;
+    let pagesFetched = 0;
 
     while (true) {
+      pagesFetched += 1;
+      if (pagesFetched > IntegrationsService.MAX_SGP_SYNC_PAGES) {
+        throw new BadGatewayException({
+          code: "SGP_PAGINATION_LIMIT",
+          message:
+            "A sincronização SGP excedeu o limite de páginas de faturas. Verifique a paginação retornada pelo SGP.",
+        });
+      }
+
       const response = await this.sgpClient.discoverTitles(
         credentials,
         this.buildSyncPayload(request, incrementalContext, pagination),
       );
       this.assertListDiscoveryResponse(response.body, "/api/ura/titulos/");
       const invoices = this.extractTitles(response.body);
+      if (invoices.length === 0) {
+        this.logUnexpectedEmptyExtraction("invoice", "/api/ura/titulos/", response.body);
+      }
       if (invoices.length > 0) {
         includedPayload = true;
       }
@@ -1494,7 +1656,12 @@ export class IntegrationsService {
         result.invoicesDeleted += upserts.deleted;
       }
 
-      pagination = this.nextPagination(response.body, pagination);
+      pagination = this.resolveNextPagination(
+        response.body,
+        pagination,
+        invoices.length,
+        pagesFetched,
+      );
       if (!pagination) break;
     }
 
@@ -1633,8 +1800,8 @@ export class IntegrationsService {
           pagination: this.toJsonValue(raw.__sgpPagination),
         },
       },
-      contracts: this.extractArray(raw, ["__sgpContratos", "contratos", "contrato"]),
-      invoices: this.extractArray(raw, ["__sgpTitulos", "titulos", "títulos", "titulo"]),
+      contracts: this.extractEntityArray(raw, ["__sgpContratos", "contratos", "contrato"], "contract"),
+      invoices: this.extractEntityArray(raw, ["__sgpTitulos", "titulos", "títulos", "titulo"], "invoice"),
     };
   }
 
@@ -1674,7 +1841,8 @@ export class IntegrationsService {
       if (
         incrementalContext?.mode === "incremental" &&
         incrementalContext.since &&
-        !isChangedSince(contract, incrementalContext.since)
+        !isChangedSince(contract, incrementalContext.since) &&
+        existingByExternalId.has(externalId)
       ) {
         result.unchanged += 1;
         if (runId) {
@@ -1836,7 +2004,8 @@ export class IntegrationsService {
       if (
         incrementalContext?.mode === "incremental" &&
         incrementalContext.since &&
-        !isChangedSince(invoice, incrementalContext.since)
+        !isChangedSince(invoice, incrementalContext.since) &&
+        existingByExternalId.has(externalId)
       ) {
         result.unchanged += 1;
         if (runId) {
@@ -2106,10 +2275,10 @@ export class IntegrationsService {
     customer: Record<string, unknown>,
     root: Record<string, unknown>,
   ) {
-    const contratos = this.extractArray(root, ["contratos", "contrato"]);
-    const titulos = this.extractArray(root, ["titulos", "títulos", "titulo"]);
-    const relatedContracts = this.findRelatedRecords(customer, contratos);
-    const relatedTitles = this.findRelatedRecords(customer, titulos);
+    const contratos = this.extractEntityArray(root, ["contratos", "contrato"], "contract");
+    const titulos = this.extractEntityArray(root, ["titulos", "títulos", "titulo"], "invoice");
+    const relatedContracts = this.findRelatedRecords(customer, contratos, looksLikeContract);
+    const relatedTitles = this.findRelatedRecords(customer, titulos, looksLikeTitle);
 
     return {
       ...customer,
@@ -2159,28 +2328,78 @@ export class IntegrationsService {
     return Number.isFinite(parsed) ? Math.round(parsed * 100) : undefined;
   }
 
-  private extractArray(root: Record<string, unknown>, keys: string[]) {
+  private extractEntityArray(
+    root: Record<string, unknown>,
+    keys: string[],
+    kind: "contract" | "invoice",
+  ) {
+    const looksLike = kind === "contract" ? looksLikeContract : looksLikeTitle;
+    const records: Array<Record<string, unknown>> = [];
+
     for (const key of keys) {
       const value = root[key];
-      if (Array.isArray(value)) return value.filter(this.isRecord);
-      if (this.isRecord(value)) return [value];
+      if (Array.isArray(value)) {
+        records.push(...value.filter(this.isRecord).filter(looksLike));
+        continue;
+      }
+
+      if (!this.isRecord(value)) {
+        continue;
+      }
+
+      if (key.startsWith("__sgp")) {
+        if (looksLike(value)) {
+          records.push(value);
+        }
+        continue;
+      }
+
+      const nested = extractSgpEntityRecords(value, kind);
+      if (nested.length > 0) {
+        records.push(...nested);
+      } else if (looksLike(value)) {
+        records.push(value);
+      }
     }
 
-    return [];
+    return this.dedupeEntityRecords(records, kind);
+  }
+
+  private dedupeEntityRecords(
+    records: Array<Record<string, unknown>>,
+    kind: "contract" | "invoice",
+  ) {
+    const seen = new Set<string>();
+    const deduped: Array<Record<string, unknown>> = [];
+
+    for (const record of records) {
+      const externalId =
+        kind === "contract" ? this.contractExternalId(record) : this.invoiceExternalId(record);
+      const identity = externalId ?? JSON.stringify(record);
+      if (seen.has(identity)) {
+        continue;
+      }
+      seen.add(identity);
+      deduped.push(record);
+    }
+
+    return deduped;
   }
 
   private findRelatedRecords(
     customer: Record<string, unknown>,
     records: Array<Record<string, unknown>>,
+    looksLike: (record: Record<string, unknown>) => boolean,
   ) {
-    if (!records.length) return [];
+    const validRecords = records.filter(looksLike);
+    if (!validRecords.length) return [];
 
     const customerKeys = this.customerRelationKeys(customer);
     if (!customerKeys.size) {
-      return records.length === 1 ? records : [];
+      return validRecords.length === 1 ? validRecords : [];
     }
 
-    const related = records.filter((record) => {
+    const related = validRecords.filter((record) => {
       const recordKeys = this.customerRelationKeys(record);
       for (const key of recordKeys) {
         if (customerKeys.has(key)) return true;
@@ -2188,7 +2407,7 @@ export class IntegrationsService {
       return false;
     });
 
-    return related.length ? related : records.length === 1 ? records : [];
+    return related.length ? related : validRecords.length === 1 ? validRecords : [];
   }
 
   private customerRelationKeys(record: Record<string, unknown>) {
@@ -2300,12 +2519,12 @@ export class IntegrationsService {
   }
 
   private trackRootExternalIds(body: Record<string, unknown>, seen: SgpSeenExternalIds) {
-    for (const contract of this.extractArray(body, ["contratos", "contrato"])) {
+    for (const contract of this.extractEntityArray(body, ["contratos", "contrato"], "contract")) {
       const externalId = this.contractExternalId(contract);
       if (externalId) seen.contracts.add(externalId);
     }
 
-    for (const invoice of this.extractArray(body, ["titulos", "títulos", "titulo"])) {
+    for (const invoice of this.extractEntityArray(body, ["titulos", "títulos", "titulo"], "invoice")) {
       const externalId = this.invoiceExternalId(invoice);
       if (externalId) seen.invoices.add(externalId);
     }

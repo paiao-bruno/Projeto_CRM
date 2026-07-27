@@ -11,13 +11,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Client } from "pg";
+import { callSgpDirect, resolveHomologationCredentials, summarizeSgpBody } from "./lib/sgp-homologation.mjs";
 
 const ROOT = process.cwd();
-const SGP = {
-  apiUrl: process.env.SGP_API_URL?.trim(),
-  app: process.env.SGP_APP?.trim(),
-  token: process.env.SGP_TOKEN?.trim(),
-};
+const SGP = resolveHomologationCredentials(process.env);
 const DATABASE_URL =
   process.env.DATABASE_URL ??
   "postgresql://postgres:postgres@localhost:51214/isp_crm?schema=public";
@@ -39,69 +36,21 @@ const report = {
 };
 
 function summarizeBody(body) {
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
-    return { type: typeof body, sample: body };
-  }
-
-  const record = body;
-  const keys = Object.keys(record);
-  const arrayKeys = keys.filter((key) => Array.isArray(record[key]));
-  const counts = Object.fromEntries(
-    arrayKeys.map((key) => [key, record[key].length]),
-  );
-
-  const firstArrayKey = arrayKeys[0];
-  const firstItem =
-    firstArrayKey && record[firstArrayKey][0] && typeof record[firstArrayKey][0] === "object"
-      ? Object.keys(record[firstArrayKey][0])
-      : [];
-
-  return {
-    keys,
-    counts,
-    pagination: {
-      offset: record.offset,
-      limit: record.limit,
-      total: record.total,
-      page: record.page ?? record.pagina,
-      parcial: record.parcial ?? record.partial,
-    },
-    firstItemKeys: firstItem,
-  };
+  return summarizeSgpBody(body);
 }
 
 async function callSgp(endpoint, payload = {}) {
-  const base = SGP.apiUrl.endsWith("/") ? SGP.apiUrl : `${SGP.apiUrl}/`;
-  const url = new URL(endpoint.path.replace(/^\//, ""), base);
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      Authorization: `Bearer ${SGP.token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      app: SGP.app,
-      token: SGP.token,
-      offset: 0,
-      limit: 5,
-      ...payload,
-    }),
+  const result = await callSgpDirect(SGP, endpoint.path, {
+    offset: 0,
+    limit: 5,
+    ...payload,
   });
-
-  const text = await response.text();
-  let body;
-  try {
-    body = text ? JSON.parse(text) : null;
-  } catch {
-    body = text;
-  }
-
   return {
-    ok: response.ok,
-    status: response.status,
-    summary: summarizeBody(body),
-    body,
+    ok: result.ok,
+    status: result.status,
+    summary: summarizeBody(result.body),
+    structure: result.structure,
+    body: result.body,
   };
 }
 

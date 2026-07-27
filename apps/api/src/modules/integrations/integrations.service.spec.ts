@@ -115,6 +115,8 @@ function createPrismaMock() {
         ...data,
       }),
       update: async ({ data }: { data: Record<string, unknown> }) => data,
+      updateMany: async () => ({ count: 0 }),
+      findUnique: async () => ({ status: "RUNNING" }),
       findFirst: async () => ({
         finishedAt: new Date("2026-07-17T10:00:00.000Z"),
       }),
@@ -630,6 +632,293 @@ describe("IntegrationsService", () => {
     assert.equal(result.invoicesCreated, 1);
     assert.ok(prisma.contract.rows.has("c1"));
     assert.ok(prisma.invoice.rows.has("t1"));
+  });
+
+  it("persists contracts and invoices from nested SGP response wrappers", async () => {
+    const prisma = createPrismaMock();
+
+    const service = new IntegrationsService(
+      createEmptySgpClientMock({
+        discoverCustomers: async () => ({
+          body: {
+            data: { clientes: [{ id: "1", nome: "Cliente A", cpfcnpj: "111" }] },
+          },
+        }),
+        discoverContracts: async () => ({
+          body: {
+            response: {
+              data: {
+                contratos: [{ id: "c1", cliente_id: "1", status: "ATIVO", plano: "600 Mega" }],
+              },
+            },
+          },
+        }),
+        discoverTitles: async () => ({
+          body: {
+            data: {
+              titulos: [{ id: "t1", cliente_id: "1", contrato: "c1", valor: "99,90", status: "ABERTO" }],
+            },
+          },
+        }),
+      }) as never,
+      createSgpCredentialsMock() as never,
+      {
+        async upsertFromExternalSource(
+          _tenantId: string,
+          _memberId: string,
+          input: { externalId?: string },
+        ) {
+          const customer = {
+            id: `customer-${input.externalId}`,
+            tenantId: user.tenantId,
+            ispAccountCode: input.externalId,
+            document: input.externalId === "1" ? "111" : undefined,
+            deletedAt: null,
+            metadata: { source: "SGP" },
+          };
+          prisma.customer.rows.push(customer);
+          return {
+            operation: "created" as const,
+            customer,
+          };
+        },
+      } as never,
+      prisma as never,
+      createSyncHistoryMock() as never,
+    );
+
+    const result = await (
+      service as unknown as {
+        processSgpCustomers: (
+          userArg: typeof user,
+          request: Record<string, unknown>,
+          runId: string,
+        ) => Promise<{
+          contractsCreated: number;
+          invoicesCreated: number;
+        }>;
+      }
+    ).processSgpCustomers(user, { full: true }, "run-id");
+
+    assert.equal(result.contractsCreated, 1);
+    assert.equal(result.invoicesCreated, 1);
+    assert.ok(prisma.contract.rows.has("c1"));
+    assert.ok(prisma.invoice.rows.has("t1"));
+  });
+
+  it("does not reconcile contracts when customer payload only has pagination wrappers", async () => {
+    const prisma = createPrismaMock();
+    prisma.contract.rows.set("c1", {
+      id: "contract-1",
+      tenantId: user.tenantId,
+      customerId: "customer-1",
+      externalId: "c1",
+      deletedAt: null,
+      metadata: { source: "SGP" },
+    });
+    prisma.invoice.rows.set("t1", {
+      id: "invoice-1",
+      tenantId: user.tenantId,
+      customerId: "customer-1",
+      externalId: "t1",
+      deletedAt: null,
+      metadata: { source: "SGP" },
+    });
+
+    const service = new IntegrationsService(
+      createEmptySgpClientMock({
+        discoverCustomers: async () => ({
+          body: {
+            clientes: [{ id: "1", nome: "Cliente A", cpfcnpj: "111" }],
+            contratos: { offset: 0, limit: 100, total: 0 },
+            titulos: { offset: 0, limit: 100, total: 0 },
+          },
+        }),
+        discoverContracts: async () => ({
+          body: { data: { contratos: [] } },
+        }),
+        discoverTitles: async () => ({
+          body: { data: { titulos: [] } },
+        }),
+      }) as never,
+      createSgpCredentialsMock() as never,
+      {
+        async upsertFromExternalSource() {
+          return {
+            operation: "unchanged" as const,
+            customer: { id: "customer-1" },
+          };
+        },
+      } as never,
+      prisma as never,
+      createSyncHistoryMock() as never,
+    );
+
+    const result = await (
+      service as unknown as {
+        processSgpCustomers: (
+          userArg: typeof user,
+          request: { full: boolean },
+          runId: string,
+        ) => Promise<{ contractsDeleted: number; invoicesDeleted: number }>;
+      }
+    ).processSgpCustomers(user, { full: true }, "run-id");
+
+    assert.equal(result.contractsDeleted, 0);
+    assert.equal(result.invoicesDeleted, 0);
+    assert.equal(prisma.contract.rows.get("c1")?.deletedAt, null);
+    assert.equal(prisma.invoice.rows.get("t1")?.deletedAt, null);
+  });
+
+  it("does not reconcile contracts when dedicated endpoint returns empty nested wrapper", async () => {
+    const prisma = createPrismaMock();
+    prisma.contract.rows.set("c1", {
+      id: "contract-1",
+      tenantId: user.tenantId,
+      customerId: "customer-1",
+      externalId: "c1",
+      deletedAt: null,
+      metadata: { source: "SGP" },
+    });
+
+    const service = new IntegrationsService(
+      createEmptySgpClientMock({
+        discoverCustomers: async () => ({
+          body: { clientes: [{ id: "1", nome: "Cliente A", cpfcnpj: "111" }] },
+        }),
+        discoverContracts: async () => ({
+          body: { data: { contratos: [] } },
+        }),
+        discoverTitles: async () => ({
+          body: { data: { titulos: [] } },
+        }),
+      }) as never,
+      createSgpCredentialsMock() as never,
+      {
+        async upsertFromExternalSource() {
+          return {
+            operation: "unchanged" as const,
+            customer: { id: "customer-1" },
+          };
+        },
+      } as never,
+      prisma as never,
+      createSyncHistoryMock() as never,
+    );
+
+    const result = await (
+      service as unknown as {
+        processSgpCustomers: (
+          userArg: typeof user,
+          request: { full: boolean },
+          runId: string,
+        ) => Promise<{ contractsDeleted: number; invoicesDeleted: number }>;
+      }
+    ).processSgpCustomers(user, { full: true }, "run-id");
+
+    assert.equal(result.contractsDeleted, 0);
+    assert.equal(result.invoicesDeleted, 0);
+    assert.equal(prisma.contract.rows.get("c1")?.deletedAt, null);
+  });
+
+  it("stops customer pagination when SGP keeps returning next without totals", async () => {
+    let customerCalls = 0;
+    let finishedStatus: string | undefined;
+    const prisma = createPrismaMock();
+    const originalUpdate = prisma.integrationSyncRun.update.bind(prisma.integrationSyncRun);
+    prisma.integrationSyncRun.update = async (args: {
+      data: { status?: string };
+    }) => {
+      if (args.data.status) finishedStatus = args.data.status;
+      return originalUpdate(args as never);
+    };
+
+    const service = new IntegrationsService(
+      createEmptySgpClientMock({
+        discoverCustomers: async () => {
+          customerCalls += 1;
+          return {
+            body: {
+              clientes: [{ id: "1", nome: "Cliente A", cpfcnpj: "111" }],
+              next: true,
+            },
+          };
+        },
+        discoverContracts: async () => ({ body: { contratos: [] } }),
+        discoverTitles: async () => ({ body: { titulos: [] } }),
+      }) as never,
+      createSgpCredentialsMock() as never,
+      {
+        async upsertFromExternalSource(
+          _tenantId: string,
+          _memberId: string,
+          input: { externalId?: string },
+        ) {
+          return {
+            operation: "created" as const,
+            customer: { id: `customer-${input.externalId}` },
+          };
+        },
+      } as never,
+      prisma as never,
+      createSyncHistoryMock() as never,
+    );
+
+    await (
+      service as unknown as {
+        processSgpCustomers: (
+          userArg: typeof user,
+          request: { full: boolean },
+          runId: string,
+        ) => Promise<{ processed: number }>;
+      }
+    ).processSgpCustomers(user, { full: true }, "run-id");
+
+    assert.equal(customerCalls, 1);
+    assert.equal(finishedStatus, "COMPLETED");
+  });
+
+  it("marks sync run as failed when credentials are missing", async () => {
+    let finishedStatus: string | undefined;
+    let finishedError: string | undefined;
+    const prisma = createPrismaMock();
+    prisma.integrationSyncRun.update = async (args: {
+      data: { status?: string; errorMessage?: string };
+    }) => {
+      if (args.data.status) finishedStatus = args.data.status;
+      if (args.data.errorMessage) finishedError = args.data.errorMessage;
+      return args.data;
+    };
+
+    const service = new IntegrationsService(
+      createEmptySgpClientMock() as never,
+      {
+        ...createSgpCredentialsMock(),
+        async resolveActiveCredentials() {
+          throw new Error("Nenhuma credencial SGP ativa foi configurada para esta empresa.");
+        },
+      } as never,
+      {} as never,
+      prisma as never,
+      createSyncHistoryMock() as never,
+    );
+
+    await assert.rejects(
+      () =>
+        (
+          service as unknown as {
+            processSgpCustomers: (
+              userArg: typeof user,
+              request: Record<string, unknown>,
+              runId: string,
+            ) => Promise<unknown>;
+          }
+        ).processSgpCustomers(user, { full: true }, "run-id"),
+      /Nenhuma credencial SGP ativa/,
+    );
+
+    assert.equal(finishedStatus, "FAILED");
+    assert.match(finishedError ?? "", /Nenhuma credencial SGP ativa/);
   });
 
   it("recovers stale running sync runs", async () => {

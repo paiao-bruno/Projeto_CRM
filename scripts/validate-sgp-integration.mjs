@@ -99,6 +99,32 @@ async function seedValidationScenario(client) {
   );
   const roleId = roleResult.rows[0].id;
 
+  const permissionCodes = [
+    "dashboard.read",
+    "chat.read",
+    "chat.reply",
+    "chat.transfer",
+    "ai_agents.manage",
+    "crm.manage",
+    "customers.manage",
+  ];
+
+  for (const code of permissionCodes) {
+    const permission = await client.query(
+      `INSERT INTO "Permission" (id, code, description, "createdAt")
+       VALUES (gen_random_uuid(), $1, $1, NOW())
+       ON CONFLICT (code) DO UPDATE SET code = EXCLUDED.code
+       RETURNING id`,
+      [code],
+    );
+    await client.query(
+      `INSERT INTO "RolePermission" ("roleId", "permissionId")
+       VALUES ($1, $2)
+       ON CONFLICT DO NOTHING`,
+      [roleId, permission.rows[0].id],
+    );
+  }
+
   const memberResult = await client.query(
     `INSERT INTO "TenantMember" (id, "tenantId", "userId", "roleId", status, "createdAt", "updatedAt")
      VALUES (gen_random_uuid(), $1, $2, $3, 'ACTIVE', NOW(), NOW())
