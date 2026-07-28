@@ -92,6 +92,7 @@ function startApi() {
       DATABASE_URL,
       AUTO_SEED_DEMO: "false",
       SGP_AUTO_SYNC_ENABLED: "false",
+      RATE_LIMIT_MAX: process.env.RATE_LIMIT_MAX ?? "5000",
       ENCRYPTION_KEY: process.env.ENCRYPTION_KEY ?? "validation-encryption-key-32-chars-min",
       JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET ?? "validation-access-secret-change-me",
     },
@@ -282,7 +283,11 @@ async function main() {
           structure: result.structure,
         });
       } else {
-        steps.fail(endpoint.id, `HTTP ${result.status}`, { endpoint: endpoint.path });
+        const detail =
+          typeof result.body === "string"
+            ? result.body.slice(0, 200)
+            : JSON.stringify(result.body ?? {}).slice(0, 200);
+        steps.fail(endpoint.id, `HTTP ${result.status}: ${detail}`, { endpoint: endpoint.path });
       }
     }
 
@@ -450,6 +455,7 @@ async function main() {
           dataLength: res.body.data?.length ?? 0,
         });
         page += 1;
+        if (page <= totalPages) await wait(150);
       }
       report.pagination[endpoint] = pages;
       steps.pass(`pagination${endpoint}`, { pages: pages.length, total: pages[0]?.total ?? 0 });
