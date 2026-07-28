@@ -1,5 +1,5 @@
 import { PartialType } from "@nestjs/mapped-types";
-import { IsIn, IsOptional, IsString, MinLength } from "class-validator";
+import { IsIn, IsInt, IsOptional, IsString, Max, Min, MinLength } from "class-validator";
 import { CreateSgpCredentialsDto } from "./create-sgp-credentials.dto";
 
 export class UpdateSgpCredentialsDto extends PartialType(CreateSgpCredentialsDto) {
@@ -38,4 +38,10 @@ export class TestSgpCredentialsDto {
   @IsString()
   @MinLength(1)
   token?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1000)
+  @Max(120000)
+  timeoutMs?: number;
 }
