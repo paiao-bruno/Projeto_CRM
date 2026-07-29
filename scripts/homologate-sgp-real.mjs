@@ -9,12 +9,17 @@
  *   BOOTSTRAP_ADMIN_EMAIL ou ADMIN_EMAIL
  *   BOOTSTRAP_ADMIN_PASSWORD ou ADMIN_PASSWORD
  */
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout as wait } from "node:timers/promises";
 import { Client } from "pg";
+import {
+  resolveNodeInvocation,
+  resolveNpmInvocation,
+  runSubprocessSync,
+} from "./lib/cross-platform-spawn.mjs";
 import {
   callSgpDirect,
   createStepRunner,
@@ -85,7 +90,8 @@ async function waitForApi() {
 }
 
 function startApi() {
-  return spawn("node", ["apps/api/dist/main.js"], {
+  const invocation = resolveNodeInvocation(path.join(ROOT, "apps/api/dist/main.js"));
+  return spawn(invocation.command, invocation.args, {
     cwd: ROOT,
     env: {
       ...process.env,
@@ -97,6 +103,7 @@ function startApi() {
       JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET ?? "validation-access-secret-change-me",
     },
     stdio: "ignore",
+    shell: false,
   });
 }
 
@@ -227,7 +234,11 @@ async function main() {
   };
   steps.pass("prerequisites", { configured: true });
 
-  spawnSync("node", ["scripts/audit-sgp-regression.mjs"], { cwd: ROOT, stdio: "pipe" });
+  runSubprocessSync(
+    "regression-audit",
+    resolveNodeInvocation(path.join(ROOT, "scripts/audit-sgp-regression.mjs")),
+    { cwd: ROOT, stdio: "pipe" },
+  );
   try {
     report.regressionAudit = JSON.parse(
       fs.readFileSync(path.join(ROOT, "sgp-regression-audit.json"), "utf8"),
@@ -237,12 +248,20 @@ async function main() {
     steps.partial("regression-audit", "Auditoria Git indisponível");
   }
 
-  spawnSync("npm", ["run", "build", "-w", "apps/api"], { cwd: ROOT, stdio: "inherit" });
-  spawnSync("npm", ["run", "build", "-w", "apps/web"], {
-    cwd: ROOT,
-    env: { ...process.env, NODE_ENV: "production" },
-    stdio: "inherit",
-  });
+  runSubprocessSync(
+    "build-api",
+    resolveNpmInvocation(["run", "build", "-w", "apps/api"], ROOT),
+    { cwd: ROOT, stdio: "inherit" },
+  );
+  runSubprocessSync(
+    "build-web",
+    resolveNpmInvocation(["run", "build", "-w", "apps/web"], ROOT),
+    {
+      cwd: ROOT,
+      env: { ...process.env, NODE_ENV: "production" },
+      stdio: "inherit",
+    },
+  );
 
   const db = new Client({ connectionString: DATABASE_URL });
   await db.connect();
