@@ -14,6 +14,18 @@ import { fileURLToPath } from "node:url";
 import { Client } from "pg";
 import { decryptJsonWithKey, encryptJsonWithKey } from "./lib/encryption.mjs";
 import {
+  assertContainerIdStable,
+  assertNoContainerRestarts,
+  buildDockerHealthcheckArgs,
+  captureDisposableDockerDiagnostics,
+  formatConnectionError,
+  formatDiagnosticsReport,
+  getContainerRuntimeState,
+  runDockerCommand,
+  waitForContainerRunningAndHealthy,
+  waitForTcpSelectOneStability,
+} from "./lib/docker-disposable-readiness.mjs";
+import {
   hashText,
   readBackupFile,
   runReencryptOperation,
@@ -39,8 +51,11 @@ const FAKE_TOKEN_A = "fake-token-alpha-value";
 const FAKE_APP_B = "fake-app-beta";
 const FAKE_TOKEN_B = "fake-token-beta-value";
 
-/** @type {{ backend: string, container?: { name: string, id: string }, embedded?: unknown } | null} */
+/** @type {{ backend: string, container?: { name: string, id: string, restartCount?: number }, embedded?: unknown } | null} */
 let managedDatabase = null;
+
+/** @type {ReturnType<typeof captureDisposableDockerDiagnostics> | null} */
+let lastDockerDiagnostics = null;
 
 const results = {
   isolatedDatabaseUrlMasked: `postgresql://${ISOLATED_USER}:***@127.0.0.1:${ISOLATED_PORT}/${ISOLATED_DB}?schema=public`,
@@ -217,43 +232,39 @@ export async function startEmbeddedPostgresFallback(importModule = importEmbedde
 export function startDockerContainer(containerName = DISPOSABLE_CONTAINER_NAME) {
   checkDisposableContainerAbsent(containerName);
 
-  const start = spawnSync(
-    "docker",
-    [
-      "run",
-      "-d",
-      "--name",
-      containerName,
-      "-e",
-      `POSTGRES_USER=${ISOLATED_USER}`,
-      "-e",
-      `POSTGRES_PASSWORD=${ISOLATED_PASSWORD}`,
-      "-e",
-      `POSTGRES_DB=${ISOLATED_DB}`,
-      "-p",
-      `${ISOLATED_PORT}:5432`,
-      "pgvector/pgvector:pg16",
-    ],
-    { encoding: "utf8" },
-  );
+  const start = runDockerCommand([
+    "run",
+    "-d",
+    "--name",
+    containerName,
+    ...buildDockerHealthcheckArgs(ISOLATED_USER, ISOLATED_DB),
+    "-e",
+    `POSTGRES_USER=${ISOLATED_USER}`,
+    "-e",
+    `POSTGRES_PASSWORD=${ISOLATED_PASSWORD}`,
+    "-e",
+    `POSTGRES_DB=${ISOLATED_DB}`,
+    "-p",
+    `${ISOLATED_PORT}:5432`,
+    "pgvector/pgvector:pg16",
+  ]);
   if (start.status !== 0) {
-    throw new Error(`Docker run falhou: ${start.stderr || start.stdout}`);
+    throw new Error(`[docker-run] falhou: ${start.stderr || start.stdout}`);
   }
 
-  const idResult = spawnSync(
-    "docker",
-    ["inspect", "--format", "{{.Id}}", containerName],
-    { encoding: "utf8" },
-  );
-  if (idResult.status !== 0) {
-    throw new Error(`Não foi possível inspecionar container "${containerName}".`);
+  const state = getContainerRuntimeState(containerName);
+  if (!state.id) {
+    throw new Error(`[docker-run] não foi possível inspecionar container "${containerName}".`);
   }
+
+  console.log(`[reencrypt-live] docker-run: container ${containerName} id=${state.id.slice(0, 12)}`);
 
   return {
     backend: "Docker",
     container: {
       name: containerName,
-      id: idResult.stdout.trim(),
+      id: state.id,
+      restartCount: state.restartCount,
     },
   };
 }
@@ -282,11 +293,7 @@ export async function waitForDockerPostgresReady(
   const intervalMs = deps.intervalMs ?? 1000;
   const runDockerExec =
     deps.runDockerExec ??
-    ((args) =>
-      spawnSync("docker", args, {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-      }));
+    ((args) => runDockerCommand(args));
   const deadline = Date.now() + timeoutMs;
   let lastFailure = null;
 
@@ -321,8 +328,72 @@ export async function waitForDockerPostgresReady(
   }
 
   throw new Error(
-    `pg_isready timeout após ${timeoutMs}ms no container "${containerName}".\n${lastFailure ?? "(sem detalhe adicional)"}`,
+    `[pg_isready] timeout após ${timeoutMs}ms no container "${containerName}".\n${lastFailure ?? "(sem detalhe adicional)"}`,
   );
+}
+
+export async function runDockerReadinessPipeline(
+  containerState,
+  databaseUrl = ISOLATED_DATABASE_URL,
+  deps = {},
+) {
+  const containerName = containerState.name;
+  const expectedId = containerState.id;
+  const baselineRestartCount = containerState.restartCount ?? 0;
+
+  await waitForContainerRunningAndHealthy(containerName, deps);
+  assertContainerIdStable(containerName, expectedId, deps.runDocker ?? runDockerCommand);
+  assertNoContainerRestarts(containerName, baselineRestartCount, deps.runDocker ?? runDockerCommand);
+
+  await waitForDockerPostgresReady(containerName, deps);
+
+  assertContainerIdStable(containerName, expectedId, deps.runDocker ?? runDockerCommand);
+  assertNoContainerRestarts(containerName, baselineRestartCount, deps.runDocker ?? runDockerCommand);
+
+  const runTcpStability =
+    deps.waitForTcpSelectOneStability ??
+    ((fn, tcpDeps) => waitForTcpSelectOneStability(fn, tcpDeps));
+
+  await runTcpStability(
+    async () => {
+      const probe = new Client({ connectionString: databaseUrl });
+      try {
+        await probe.connect();
+        await probe.query("SELECT 1");
+      } finally {
+        await probe.end().catch(() => undefined);
+      }
+    },
+    {
+      ...deps,
+      stage: "tcp-select1-stability",
+    },
+  );
+
+  assertContainerIdStable(containerName, expectedId, deps.runDocker ?? runDockerCommand);
+  assertNoContainerRestarts(containerName, baselineRestartCount, deps.runDocker ?? runDockerCommand);
+
+  return {
+    containerId: expectedId,
+    restartCount: baselineRestartCount,
+  };
+}
+
+export function recordDockerDiagnostics(stage, connectionError, containerName = DISPOSABLE_CONTAINER_NAME) {
+  lastDockerDiagnostics = captureDisposableDockerDiagnostics(
+    containerName,
+    stage,
+    connectionError,
+    {
+      sanitize: sanitizeProcessOutput,
+      runDocker: runDockerCommand,
+    },
+  );
+  return lastDockerDiagnostics;
+}
+
+export function getLastDockerDiagnostics() {
+  return lastDockerDiagnostics;
 }
 
 export function buildDisposableProcessEnv(overrides = {}) {
@@ -442,15 +513,18 @@ export async function startDisposableDatabase(deps = {}) {
   const startEmbedded = deps.startEmbeddedPostgresFallback ?? startEmbeddedPostgresFallback;
   const checkPort = deps.checkPortAvailable ?? checkPortAvailable;
   const waitFor = deps.waitForDisposablePostgres ?? waitForDisposablePostgres;
-  const waitPgReady = deps.waitForDockerPostgresReady ?? waitForDockerPostgresReady;
 
   assertDisposableDatabaseUrl(ISOLATED_DATABASE_URL);
   await checkPort(ISOLATED_PORT, "127.0.0.1");
 
+  const readinessPipeline =
+    deps.runDockerReadinessPipeline ??
+    ((container, url, pipelineDeps) => runDockerReadinessPipeline(container, url, pipelineDeps));
+
   if (checkDocker()) {
     const started = startDocker();
     logDisposableStartup(started.backend);
-    await waitPgReady(started.container.name, deps);
+    await readinessPipeline(started.container, ISOLATED_DATABASE_URL, deps);
     managedDatabase = started;
     results.databaseBackend = "docker-pgvector-pg16";
     return started;
@@ -473,14 +547,18 @@ export async function stopDisposableDatabase(state = managedDatabase, deps = {})
   const verifyCleanupTarget = deps.assertCleanupTarget ?? assertCleanupTarget;
 
   if (state.backend === "Docker" && state.container) {
+    if (lastDockerDiagnostics && !deps.skipDiagnosticsCapture) {
+      console.error(formatDiagnosticsReport(lastDockerDiagnostics));
+    }
     verifyCleanupTarget(state.container);
     const remove = deps.removeDockerContainer ?? ((id) => {
-      spawnSync("docker", ["rm", "-f", id], { stdio: "ignore" });
+      runDockerCommand(["rm", "-f", id], { stdio: "ignore" });
     });
     remove(state.container.id);
     if (managedDatabase === state) {
       managedDatabase = null;
     }
+    lastDockerDiagnostics = null;
     return;
   }
 
@@ -707,7 +785,18 @@ async function main() {
 
   await startDisposableDatabase();
   const client = new Client({ connectionString: ISOLATED_DATABASE_URL });
-  await client.connect();
+  try {
+    await client.connect();
+  } catch (connectError) {
+    if (managedDatabase?.backend === "Docker" && managedDatabase.container) {
+      recordDockerDiagnostics("client.connect", connectError, managedDatabase.container.name);
+      throw new Error(
+        `${formatConnectionError(connectError)}\n${formatDiagnosticsReport(getLastDockerDiagnostics())}`,
+        { cause: connectError },
+      );
+    }
+    throw connectError;
+  }
 
   try {
     await applyMigrations(client);
@@ -984,9 +1073,23 @@ const isDirectExecution =
 
 if (isDirectExecution) {
   main().catch(async (error) => {
-    console.error(error instanceof Error ? error.message : String(error));
+    if (
+      managedDatabase?.backend === "Docker" &&
+      managedDatabase.container &&
+      !lastDockerDiagnostics
+    ) {
+      recordDockerDiagnostics("main", error, managedDatabase.container.name);
+    }
+    if (lastDockerDiagnostics) {
+      console.error(formatDiagnosticsReport(lastDockerDiagnostics));
+    } else {
+      console.error(error instanceof Error ? error.message : String(error));
+      if (error instanceof Error && error.stack) {
+        console.error(error.stack);
+      }
+    }
     try {
-      await stopDisposableDatabase();
+      await stopDisposableDatabase(undefined, { skipDiagnosticsCapture: true });
     } catch {
       // ignore cleanup errors
     }

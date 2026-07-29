@@ -467,7 +467,10 @@ describe("reencrypt-sgp-integration live disposable guards", () => {
     const started = await liveIntegration.startDisposableDatabase({
       checkDockerAvailable: () => true,
       checkPortAvailable: async () => undefined,
-      waitForDockerPostgresReady: async () => undefined,
+      runDockerReadinessPipeline: async () => ({
+        containerId: "sha256:disposable-test-id",
+        restartCount: 0,
+      }),
       startDockerContainer: () => ({
         backend: "Docker",
         container: {
@@ -647,7 +650,7 @@ describe("reencrypt-sgp-integration docker prisma migration", () => {
         }),
       (error) =>
         error instanceof Error &&
-        error.message.includes("pg_isready timeout") &&
+        error.message.includes("[pg_isready] timeout") &&
         error.message.includes("connection refused"),
     );
   });
@@ -670,6 +673,49 @@ describe("reencrypt-sgp-integration docker prisma migration", () => {
         ),
       /stderr detail/,
     );
+  });
+
+  it("runDockerReadinessPipeline runs pg_isready and tcp stability stages", async () => {
+    const stages = [];
+    await liveIntegration.runDockerReadinessPipeline(
+      {
+        name: liveIntegration.DISPOSABLE_CONTAINER_NAME,
+        id: "sha256:stable-id",
+        restartCount: 0,
+      },
+      liveIntegration.ISOLATED_DATABASE_URL,
+      {
+        timeoutMs: 200,
+        intervalMs: 10,
+        logStage: (stage) => stages.push(stage),
+        waitForTcpSelectOneStability: async () => ({ consecutive: 3, lastError: null }),
+        runDockerExec: (args) => {
+          if (args.includes("pg_isready")) {
+            return { status: 0, stdout: "accepting connections\n", stderr: "" };
+          }
+          return { status: 0, stdout: "", stderr: "" };
+        },
+        runDocker: (args) => {
+          if (args.includes("{{.State.Status}}")) {
+            return { status: 0, stdout: "running\n", stderr: "" };
+          }
+          if (args.includes("{{.State.Health.Status}}")) {
+            return { status: 0, stdout: "healthy\n", stderr: "" };
+          }
+          if (args.includes("{{.Id}}")) {
+            return { status: 0, stdout: "sha256:stable-id\n", stderr: "" };
+          }
+          if (args.includes("{{.RestartCount}}")) {
+            return { status: 0, stdout: "0\n", stderr: "" };
+          }
+          if (args.includes("pg_isready")) {
+            return { status: 0, stdout: "accepting connections\n", stderr: "" };
+          }
+          return { status: 0, stdout: "", stderr: "" };
+        },
+      },
+    );
+    assert.ok(stages.some((item) => item.includes("container-ready")));
   });
 });
 
