@@ -719,6 +719,167 @@ describe("reencrypt-sgp-integration docker prisma migration", () => {
   });
 });
 
+describe("reencrypt-sgp-integration live state machine", () => {
+  it("assertLiveEventOrder rejects out-of-order events", () => {
+    assert.throws(
+      () =>
+        liveIntegration.assertLiveEventOrder(
+          ["dry-run", "snapshot-initial"],
+          liveIntegration.REQUIRED_LIVE_EVENT_ORDER,
+        ),
+      /Ordem de eventos inválida/,
+    );
+  });
+
+  it("assertLiveEventOrder accepts the required sequence", () => {
+    assert.doesNotThrow(() =>
+      liveIntegration.assertLiveEventOrder(liveIntegration.REQUIRED_LIVE_EVENT_ORDER),
+    );
+  });
+
+  it("assertDryRunUnchanged fails when snapshot reflects execute rather than dry-run", () => {
+    const beforeIntegration = {
+      id: "11111111-1111-4111-8111-111111111111",
+      encryptedSecrets: "cipher-original",
+      config: { apiUrl: "https://example.test" },
+    };
+    const afterExecuteSnapshot = {
+      ...beforeIntegration,
+      encryptedSecrets: "cipher-after-execute",
+    };
+    const tenantChecksums = {
+      customers: "a",
+      contracts: "b",
+      invoices: "c",
+      syncRuns: "d",
+      syncLogs: "e",
+    };
+    const tenantSnapshot = { checksums: tenantChecksums };
+
+    assert.throws(
+      () =>
+        liveIntegration.assertDryRunUnchanged(
+          beforeIntegration,
+          afterExecuteSnapshot,
+          tenantSnapshot,
+          tenantSnapshot,
+        ),
+      (error) =>
+        error instanceof Error &&
+        error.message.includes("[assert-dry-run-unchanged]") &&
+        error.message.includes("encryptedSecrets") &&
+        error.message.includes("antes de --execute"),
+    );
+  });
+
+  it("runLiveReencryptStateMachine keeps dry-run snapshot before execute", async () => {
+    const eventLog = liveIntegration.createLiveEventLog();
+    const integrationRow = {
+      id: "11111111-1111-4111-8111-111111111111",
+      tenantId: "22222222-2222-4222-8222-222222222222",
+      encryptedSecrets: "cipher-original",
+      config: { apiUrl: "https://example.test" },
+      updatedAt: new Date("2026-06-01T12:00:00.000Z"),
+    };
+    const tenantSnapshot = {
+      checksums: {
+        customers: "c1",
+        contracts: "c2",
+        invoices: "c3",
+        syncRuns: "c4",
+        syncLogs: "c5",
+      },
+    };
+    const calls = [];
+    let integrationState = { ...integrationRow };
+
+    const client = {
+      query: async (sql) => {
+        if (String(sql).includes('"Integration"')) {
+          return { rows: [{ ...integrationState }] };
+        }
+        return { rows: [] };
+      },
+    };
+
+    const proofToken = "proof-token-not-logged";
+    const runCliFn = async (modeArgs, envOverrides, redactValues = []) => {
+      calls.push({ modeArgs, hasProof: Boolean(envOverrides.REENCRYPT_DRY_RUN_PROOF) });
+      if (modeArgs.includes("--dry-run")) {
+        return {
+          stdout: JSON.stringify({
+            mode: "dry-run",
+            dryRunProof: { token: proofToken, proofId: "p1" },
+            backupFile: "/tmp/backup.json",
+          }),
+          stderr: "",
+        };
+      }
+      if (modeArgs.includes("--execute") && modeArgs.includes("--restore")) {
+        integrationState = { ...integrationRow };
+        return { stdout: JSON.stringify({ mode: "restore-execute", ok: true }), stderr: "" };
+      }
+      if (modeArgs.includes("--execute")) {
+        integrationState = {
+          ...integrationRow,
+          encryptedSecrets: "cipher-after-execute",
+        };
+        return {
+          stdout: JSON.stringify({ mode: "execute", ok: true, backupFile: "/tmp/backup.json" }),
+          stderr: "",
+        };
+      }
+      if (modeArgs.includes("--restore")) {
+        return { stdout: JSON.stringify({ mode: "restore-dry-run", ok: true }), stderr: "" };
+      }
+      throw new Error(`unexpected cli args: ${modeArgs.join(" ")}`);
+    };
+
+    const results = { scenarios: {} };
+    const originalExists = fs.existsSync;
+
+    try {
+      fs.existsSync = (target) => target === "/tmp/backup.json" ? true : originalExists(target);
+      await liveIntegration.runLiveReencryptStateMachine({
+        client,
+        seeded: {
+          tenantId: integrationRow.tenantId,
+          integrationId: integrationRow.id,
+          originalEncryptedSecrets: integrationRow.encryptedSecrets,
+        },
+        backupDir: "/tmp",
+        results,
+        eventLog,
+        runCli: runCliFn,
+        readBackupFile: () => ({
+          integration: { encryptedSecrets: integrationRow.encryptedSecrets },
+        }),
+        runRollbackScenario: async ({ integrationState }) => ({
+          rollbackFailed: true,
+          beforeRollback: integrationState,
+          afterRollback: integrationState,
+        }),
+      });
+    } finally {
+      fs.existsSync = originalExists;
+    }
+
+    assert.deepEqual(
+      calls.map((call) => call.modeArgs[0]),
+      ["--dry-run", "--execute", "--restore", "--restore"],
+    );
+    assert.equal(calls[0].hasProof, false);
+    assert.equal(calls[1].hasProof, true);
+    assert.ok(eventLog.events.indexOf("dry-run") < eventLog.events.indexOf("snapshot-after-dry-run"));
+    assert.ok(
+      eventLog.events.indexOf("snapshot-after-dry-run") <
+        eventLog.events.indexOf("assert-dry-run-unchanged"),
+    );
+    assert.ok(eventLog.events.indexOf("assert-dry-run-unchanged") < eventLog.events.indexOf("execute"));
+    assert.doesNotMatch(JSON.stringify(calls), new RegExp(proofToken));
+  });
+});
+
 describe("reencrypt-sgp-integration live dry-run proof propagation", () => {
   const sampleToken = "proof-token-value-not-for-logs";
   const sampleReport = {

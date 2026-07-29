@@ -68,6 +68,7 @@ const results = {
   rollbackVerification: null,
   realDatabaseAccessed: false,
   staticReview: [],
+  eventLog: [],
 };
 
 export function maskUrl(url) {
@@ -484,6 +485,10 @@ export function buildExecuteEnvFromDryRun(baseEnv, proofToken) {
   };
 }
 
+export function parseCliJsonReport(stdout) {
+  return parseDryRunCliReport(stdout);
+}
+
 export async function runReencryptDryRunThenExecute(runCliFn, baseEnv) {
   const dryRun = await runCliFn(["--dry-run"], baseEnv);
   const dryRunReport = parseDryRunCliReport(dryRun.stdout);
@@ -675,34 +680,144 @@ function hashRow(row) {
   return hashText(JSON.stringify(row));
 }
 
-async function fetchIntegrationSnapshot(client, integrationId) {
+export const REQUIRED_LIVE_EVENT_ORDER = [
+  "create-disposable-database",
+  "apply-migrations",
+  "insert-fixture",
+  "snapshot-initial",
+  "dry-run",
+  "snapshot-after-dry-run",
+  "assert-dry-run-unchanged",
+  "extract-proof",
+  "execute",
+  "snapshot-after-execute",
+  "assert-only-encryptedSecrets-changed",
+  "restore-dry-run",
+  "snapshot-after-restore-dry-run",
+  "assert-restore-dry-run-unchanged",
+  "restore-execute",
+  "snapshot-after-restore-execute",
+  "assert-original-restored",
+  "rollback-scenario",
+  "assert-rollback",
+  "cleanup",
+];
+
+export function createLiveEventLog() {
+  /** @type {string[]} */
+  const events = [];
+  return {
+    get events() {
+      return [...events];
+    },
+    step(name) {
+      events.push(name);
+      console.log(`[reencrypt-live] ${name}`);
+    },
+  };
+}
+
+export function assertLiveEventOrder(
+  loggedEvents,
+  expectedOrder = REQUIRED_LIVE_EVENT_ORDER,
+) {
+  if (loggedEvents.length !== expectedOrder.length) {
+    throw new Error(
+      `Ordem de eventos inválida: esperados ${expectedOrder.length}, recebidos ${loggedEvents.length}. ` +
+        `Esperado: [${expectedOrder.join(", ")}]; recebido: [${loggedEvents.join(", ")}]`,
+    );
+  }
+  for (let index = 0; index < expectedOrder.length; index += 1) {
+    if (loggedEvents[index] !== expectedOrder[index]) {
+      throw new Error(
+        `Ordem de eventos inválida no índice ${index}: esperado "${expectedOrder[index]}", ` +
+          `recebido "${loggedEvents[index] ?? "(ausente)"}".`,
+      );
+    }
+  }
+}
+
+export function compareIntegrationRows(before, after) {
+  const changed = [];
+  for (const key of Object.keys(before)) {
+    const b = before[key] instanceof Date ? before[key].toISOString() : before[key];
+    const a = after[key] instanceof Date ? after[key].toISOString() : after[key];
+    const bNorm = b && typeof b === "object" ? JSON.stringify(b) : b;
+    const aNorm = a && typeof a === "object" ? JSON.stringify(a) : a;
+    if (bNorm !== aNorm) {
+      changed.push(key);
+    }
+  }
+  return changed;
+}
+
+export function assertDryRunUnchanged(beforeIntegration, afterDryRunIntegration, beforeTenant, afterDryRunTenant) {
+  const dryRunChanged = compareIntegrationRows(beforeIntegration, afterDryRunIntegration);
+  if (dryRunChanged.length > 0) {
+    throw new Error(
+      `[assert-dry-run-unchanged] Integration alterada após dry-run: ${dryRunChanged.join(", ")}. ` +
+        "O snapshot deve ser coletado imediatamente após dry-run e antes de --execute.",
+    );
+  }
+  assertTenantChecksumsUnchanged(beforeTenant, afterDryRunTenant, "dry-run");
+}
+
+export function assertOnlyEncryptedSecretsChanged(beforeIntegration, afterExecuteIntegration) {
+  const executeChanged = compareIntegrationRows(beforeIntegration, afterExecuteIntegration);
+  if (afterExecuteIntegration.id !== beforeIntegration.id) {
+    throw new Error("[assert-only-encryptedSecrets-changed] Integration.id foi alterado.");
+  }
+  if (executeChanged.length !== 1 || executeChanged[0] !== "encryptedSecrets") {
+    throw new Error(
+      `[assert-only-encryptedSecrets-changed] esperado alterar somente encryptedSecrets; ` +
+        `alterado: ${executeChanged.join(", ") || "(nenhum)"}`,
+    );
+  }
+  return executeChanged;
+}
+
+export function assertTenantChecksumsUnchanged(beforeTenant, afterTenant, stage) {
+  for (const key of Object.keys(beforeTenant.checksums)) {
+    if (beforeTenant.checksums[key] !== afterTenant.checksums[key]) {
+      throw new Error(`[${stage}] checksum ${key} alterado.`);
+    }
+  }
+}
+
+export function assertCiphertextEqual(actual, expected, stage) {
+  if (actual !== expected) {
+    throw new Error(`[${stage}] ciphertext divergente do esperado (comparação byte-a-byte).`);
+  }
+}
+
+export async function fetchIntegrationSnapshot(client, integrationId) {
   const { rows } = await client.query(`SELECT * FROM "Integration" WHERE id = $1`, [
     integrationId,
   ]);
   return rows[0];
 }
 
-async function fetchTenantSnapshot(client, tenantId) {
-  const [customers, contracts, invoices, syncRuns, syncLogs] = await Promise.all([
-    client.query(
-      `SELECT id, "tenantId", name, "deletedAt", "createdAt", "updatedAt" FROM "Customer" WHERE "tenantId" = $1 ORDER BY id`,
-      [tenantId],
-    ),
-    client.query(
-      `SELECT id, "tenantId", "customerId", "externalId", "deletedAt", "createdAt", "updatedAt" FROM "Contract" WHERE "tenantId" = $1 ORDER BY id`,
-      [tenantId],
-    ),
-    client.query(
-      `SELECT id, "tenantId", "customerId", "contractId", "externalId", "deletedAt", "createdAt", "updatedAt" FROM "Invoice" WHERE "tenantId" = $1 ORDER BY id`,
-      [tenantId],
-    ),
-    client.query(`SELECT * FROM "IntegrationSyncRun" WHERE "tenantId" = $1 ORDER BY id`, [
-      tenantId,
-    ]),
-    client.query(`SELECT * FROM "IntegrationSyncLog" WHERE "tenantId" = $1 ORDER BY id`, [
-      tenantId,
-    ]),
-  ]);
+export async function fetchTenantSnapshot(client, tenantId) {
+  const customers = await client.query(
+    `SELECT id, "tenantId", name, "deletedAt", "createdAt", "updatedAt" FROM "Customer" WHERE "tenantId" = $1 ORDER BY id`,
+    [tenantId],
+  );
+  const contracts = await client.query(
+    `SELECT id, "tenantId", "customerId", "externalId", "deletedAt", "createdAt", "updatedAt" FROM "Contract" WHERE "tenantId" = $1 ORDER BY id`,
+    [tenantId],
+  );
+  const invoices = await client.query(
+    `SELECT id, "tenantId", "customerId", "contractId", "externalId", "deletedAt", "createdAt", "updatedAt" FROM "Invoice" WHERE "tenantId" = $1 ORDER BY id`,
+    [tenantId],
+  );
+  const syncRuns = await client.query(
+    `SELECT * FROM "IntegrationSyncRun" WHERE "tenantId" = $1 ORDER BY id`,
+    [tenantId],
+  );
+  const syncLogs = await client.query(
+    `SELECT * FROM "IntegrationSyncLog" WHERE "tenantId" = $1 ORDER BY id`,
+    [tenantId],
+  );
 
   return {
     customers: customers.rows,
@@ -720,18 +835,233 @@ async function fetchTenantSnapshot(client, tenantId) {
   };
 }
 
-function compareIntegrationRows(before, after) {
-  const changed = [];
-  for (const key of Object.keys(before)) {
-    const b = before[key] instanceof Date ? before[key].toISOString() : before[key];
-    const a = after[key] instanceof Date ? after[key].toISOString() : after[key];
-    const bNorm = b && typeof b === "object" ? JSON.stringify(b) : b;
-    const aNorm = a && typeof a === "object" ? JSON.stringify(a) : a;
-    if (bNorm !== aNorm) {
-      changed.push(key);
+export async function runLiveReencryptStateMachine(ctx) {
+  const eventLog = ctx.eventLog ?? createLiveEventLog();
+  const step = (name) => eventLog.step(name);
+  const runCliFn = ctx.runCli;
+  const client = ctx.client;
+  const seeded = ctx.seeded;
+  const backupDir = ctx.backupDir;
+  const resultsRef = ctx.results;
+
+  step("snapshot-initial");
+  const beforeIntegration = await fetchIntegrationSnapshot(client, seeded.integrationId);
+  const beforeTenant = await fetchTenantSnapshot(client, seeded.tenantId);
+  resultsRef.scenarios.initial = {
+    integrationId: seeded.integrationId,
+    tenantId: seeded.tenantId,
+    encryptedSecretsHash: hashText(beforeIntegration.encryptedSecrets),
+    integrationChecksum: hashRow(beforeIntegration),
+    tenantChecksums: beforeTenant.checksums,
+  };
+
+  const dryRunEnv = buildScriptEnv({
+    ENCRYPTION_KEY: ctx.keyB ?? KEY_B,
+    SGP_APP: ctx.fakeAppB ?? FAKE_APP_B,
+    SGP_TOKEN: ctx.fakeTokenB ?? FAKE_TOKEN_B,
+    REENCRYPT_TENANT_ID: seeded.tenantId,
+    REENCRYPT_INTEGRATION_ID: seeded.integrationId,
+    REENCRYPT_CONFIRM_ID: seeded.integrationId,
+    REENCRYPT_BACKUP_DIR: backupDir,
+  });
+
+  step("dry-run");
+  const dryRun = await runCliFn(["--dry-run"], dryRunEnv);
+  const dryRunReport = parseDryRunCliReport(dryRun.stdout);
+
+  step("snapshot-after-dry-run");
+  const afterDryRunIntegration = await fetchIntegrationSnapshot(client, seeded.integrationId);
+  const afterDryRunTenant = await fetchTenantSnapshot(client, seeded.tenantId);
+
+  step("assert-dry-run-unchanged");
+  assertDryRunUnchanged(beforeIntegration, afterDryRunIntegration, beforeTenant, afterDryRunTenant);
+  resultsRef.scenarios.dryRun = {
+    exitCode: 0,
+    report: redactDryRunReportForOutput(dryRunReport),
+    proofPropagated: false,
+    verification: {
+      integrationUnchanged: true,
+      tenantChecksumsUnchanged: true,
+    },
+  };
+
+  step("extract-proof");
+  const proofToken = extractDryRunProofToken(dryRunReport);
+  const executeEnv = buildExecuteEnvFromDryRun(dryRunEnv, proofToken);
+  resultsRef.scenarios.dryRun.proofPropagated = true;
+
+  step("execute");
+  const executeRun = await runCliFn(["--execute"], executeEnv, [proofToken]);
+  const executeReport = parseCliJsonReport(executeRun.stdout);
+
+  step("snapshot-after-execute");
+  const afterExecuteIntegration = await fetchIntegrationSnapshot(client, seeded.integrationId);
+  const afterExecuteTenant = await fetchTenantSnapshot(client, seeded.tenantId);
+
+  step("assert-only-encryptedSecrets-changed");
+  const executeChanged = assertOnlyEncryptedSecretsChanged(beforeIntegration, afterExecuteIntegration);
+  assertTenantChecksumsUnchanged(beforeTenant, afterExecuteTenant, "assert-only-encryptedSecrets-changed");
+  resultsRef.scenarios.execute = { exitCode: 0, report: executeReport };
+  resultsRef.columnsChangedOnExecute = executeChanged;
+  resultsRef.updatedAtBehavior = {
+    before: beforeIntegration.updatedAt?.toISOString?.() ?? beforeIntegration.updatedAt,
+    after: afterExecuteIntegration.updatedAt?.toISOString?.() ?? afterExecuteIntegration.updatedAt,
+    changed: executeChanged.includes("updatedAt"),
+  };
+
+  const backupFile = executeReport.backupFile;
+  const readBackup = ctx.readBackupFile ?? readBackupFile;
+  const pathExists = ctx.pathExists ?? fs.existsSync.bind(fs);
+  if (!backupFile || !pathExists(backupFile)) {
+    throw new Error("Arquivo de backup não foi criado.");
+  }
+  const backup = readBackup(backupFile);
+  resultsRef.backupVerification = {
+    path: backupFile,
+    hasOriginalCiphertext: backup.integration.encryptedSecrets === seeded.originalEncryptedSecrets,
+    hashMatches:
+      hashText(backup.integration.encryptedSecrets) === hashText(seeded.originalEncryptedSecrets),
+    consoleLeakedCiphertext: executeRun.stdout.includes(seeded.originalEncryptedSecrets),
+  };
+  if (!resultsRef.backupVerification.hasOriginalCiphertext) {
+    throw new Error("Backup não contém ciphertext original.");
+  }
+  if (resultsRef.backupVerification.consoleLeakedCiphertext) {
+    throw new Error("Ciphertext vazou no stdout.");
+  }
+
+  const restoreDryEnv = buildScriptEnv({
+    ENCRYPTION_KEY: ctx.keyA ?? KEY_A,
+    REENCRYPT_TENANT_ID: seeded.tenantId,
+    REENCRYPT_INTEGRATION_ID: seeded.integrationId,
+    REENCRYPT_CONFIRM_ID: seeded.integrationId,
+  });
+
+  step("restore-dry-run");
+  const restoreDry = await runCliFn(["--restore", `--backup-file=${backupFile}`], restoreDryEnv);
+  resultsRef.scenarios.restoreDryRun = {
+    exitCode: 0,
+    report: parseCliJsonReport(restoreDry.stdout),
+  };
+
+  step("snapshot-after-restore-dry-run");
+  const afterRestoreDryIntegration = await fetchIntegrationSnapshot(client, seeded.integrationId);
+
+  step("assert-restore-dry-run-unchanged");
+  assertCiphertextEqual(
+    afterRestoreDryIntegration.encryptedSecrets,
+    afterExecuteIntegration.encryptedSecrets,
+    "assert-restore-dry-run-unchanged",
+  );
+
+  step("restore-execute");
+  const restoreExec = await runCliFn(
+    ["--restore", `--backup-file=${backupFile}`, "--execute"],
+    restoreDryEnv,
+  );
+  resultsRef.scenarios.restoreExecute = {
+    exitCode: 0,
+    report: parseCliJsonReport(restoreExec.stdout),
+  };
+
+  step("snapshot-after-restore-execute");
+  const afterRestoreIntegration = await fetchIntegrationSnapshot(client, seeded.integrationId);
+
+  step("assert-original-restored");
+  assertCiphertextEqual(
+    afterRestoreIntegration.encryptedSecrets,
+    seeded.originalEncryptedSecrets,
+    "assert-original-restored",
+  );
+  resultsRef.scenarios.restoreExecute.originalCiphertextRestored = true;
+
+  step("rollback-scenario");
+  const rollbackClient = ctx.rollbackClient ?? new Client({ connectionString: ISOLATED_DATABASE_URL });
+  let ownsRollbackClient = !ctx.rollbackClient;
+  let rollbackFailed = false;
+  let beforeRollback;
+  let afterRollback;
+
+  if (ctx.runRollbackScenario) {
+    ({ rollbackFailed, beforeRollback, afterRollback } = await ctx.runRollbackScenario({
+      seeded,
+      backupDir,
+      integrationState: afterRestoreIntegration,
+    }));
+  } else {
+    if (ownsRollbackClient) {
+      await rollbackClient.connect();
+    }
+    beforeRollback = await fetchIntegrationSnapshot(rollbackClient, seeded.integrationId);
+    try {
+      await runReencryptOperation(rollbackClient, {
+        config: {
+          databaseUrl: ISOLATED_DATABASE_URL,
+          encryptionKey: ctx.keyB ?? KEY_B,
+          sgpApp: ctx.fakeAppB ?? FAKE_APP_B,
+          sgpToken: "another-fake-token-value",
+          tenantId: seeded.tenantId,
+          integrationId: seeded.integrationId,
+          confirmId: seeded.integrationId,
+          allowProduction: false,
+          backupDir,
+          nodeEnv: "test",
+        },
+        mode: "reencrypt",
+        write: true,
+        rootDir: ROOT,
+        injectFailureAfterUpdate: true,
+      });
+    } catch (error) {
+      rollbackFailed = error instanceof Error && error.message.includes("Falha simulada");
+    }
+    afterRollback = await fetchIntegrationSnapshot(rollbackClient, seeded.integrationId);
+    if (ownsRollbackClient) {
+      await rollbackClient.end();
     }
   }
-  return changed;
+
+  step("assert-rollback");
+  resultsRef.rollbackVerification = {
+    failureInjected: rollbackFailed,
+    ciphertextUnchanged: afterRollback.encryptedSecrets === beforeRollback.encryptedSecrets,
+    integrationChecksumUnchanged: hashRow(beforeRollback) === hashRow(afterRollback),
+  };
+  if (!rollbackFailed || !resultsRef.rollbackVerification.ciphertextUnchanged) {
+    throw new Error("[assert-rollback] rollback simulado não manteve o estado original.");
+  }
+
+  resultsRef.scenarios.beforeAfter = {
+    before: {
+      integration: {
+        id: beforeIntegration.id,
+        encryptedSecretsHash: hashText(beforeIntegration.encryptedSecrets),
+        updatedAt: resultsRef.updatedAtBehavior.before,
+      },
+      tenantChecksums: beforeTenant.checksums,
+    },
+    afterExecute: {
+      integration: {
+        id: afterExecuteIntegration.id,
+        encryptedSecretsHash: hashText(afterExecuteIntegration.encryptedSecrets),
+        updatedAt: resultsRef.updatedAtBehavior.after,
+      },
+      columnsChanged: executeChanged,
+      tenantChecksums: afterExecuteTenant.checksums,
+    },
+    afterRestore: {
+      encryptedSecretsHash: hashText(afterRestoreIntegration.encryptedSecrets),
+      matchesOriginal: afterRestoreIntegration.encryptedSecrets === seeded.originalEncryptedSecrets,
+    },
+  };
+
+  return {
+    eventLog,
+    beforeIntegration,
+    afterExecuteIntegration,
+    executeReport,
+    executeRun,
+  };
 }
 
 async function seedDisposableData(client) {
@@ -861,89 +1191,23 @@ async function main() {
     throw connectError;
   }
 
+  const eventLog = createLiveEventLog();
+  eventLog.step("create-disposable-database");
+
   try {
+    eventLog.step("apply-migrations");
     await applyMigrations(client);
+    eventLog.step("insert-fixture");
     const seeded = await seedDisposableData(client);
 
-    const beforeIntegration = await fetchIntegrationSnapshot(client, seeded.integrationId);
-    const beforeTenant = await fetchTenantSnapshot(client, seeded.tenantId);
-
-    results.scenarios.initial = {
-      integrationId: seeded.integrationId,
-      tenantId: seeded.tenantId,
-      encryptedSecretsHash: hashText(beforeIntegration.encryptedSecrets),
-      integrationChecksum: hashRow(beforeIntegration),
-      tenantChecksums: beforeTenant.checksums,
-    };
-
-    const dryRunEnv = buildScriptEnv({
-      ENCRYPTION_KEY: KEY_B,
-      SGP_APP: FAKE_APP_B,
-      SGP_TOKEN: FAKE_TOKEN_B,
-      REENCRYPT_TENANT_ID: seeded.tenantId,
-      REENCRYPT_INTEGRATION_ID: seeded.integrationId,
-      REENCRYPT_CONFIRM_ID: seeded.integrationId,
-      REENCRYPT_BACKUP_DIR: backupDir,
-    });
-    const { dryRun, execute: executeRun, dryRunReport } = await runReencryptDryRunThenExecute(
+    const { afterExecuteIntegration, executeRun } = await runLiveReencryptStateMachine({
+      client,
+      seeded,
+      backupDir,
+      results,
+      eventLog,
       runCli,
-      dryRunEnv,
-    );
-    results.scenarios.dryRun = {
-      exitCode: 0,
-      report: redactDryRunReportForOutput(dryRunReport),
-      proofPropagated: true,
-    };
-
-    const afterDryRunIntegration = await fetchIntegrationSnapshot(client, seeded.integrationId);
-    const afterDryRunTenant = await fetchTenantSnapshot(client, seeded.tenantId);
-    const dryRunChanged = compareIntegrationRows(beforeIntegration, afterDryRunIntegration);
-
-    results.scenarios.dryRun.verification = {
-      integrationColumnsChanged: dryRunChanged,
-      integrationUnchanged: dryRunChanged.length === 0,
-      tenantChecksumsUnchanged:
-        beforeTenant.checksums.customers === afterDryRunTenant.checksums.customers &&
-        beforeTenant.checksums.contracts === afterDryRunTenant.checksums.contracts &&
-        beforeTenant.checksums.invoices === afterDryRunTenant.checksums.invoices &&
-        beforeTenant.checksums.syncRuns === afterDryRunTenant.checksums.syncRuns &&
-        beforeTenant.checksums.syncLogs === afterDryRunTenant.checksums.syncLogs,
-    };
-
-    if (dryRunChanged.length > 0) {
-      throw new Error(`dry-run alterou colunas: ${dryRunChanged.join(", ")}`);
-    }
-
-    const executeReport = JSON.parse(executeRun.stdout);
-    results.scenarios.execute = { exitCode: 0, report: executeReport };
-
-    const afterExecuteIntegration = await fetchIntegrationSnapshot(client, seeded.integrationId);
-    const afterExecuteTenant = await fetchTenantSnapshot(client, seeded.tenantId);
-    const executeChanged = compareIntegrationRows(beforeIntegration, afterExecuteIntegration);
-
-    results.columnsChangedOnExecute = executeChanged;
-    results.updatedAtBehavior = {
-      before: beforeIntegration.updatedAt?.toISOString?.() ?? beforeIntegration.updatedAt,
-      after: afterExecuteIntegration.updatedAt?.toISOString?.() ?? afterExecuteIntegration.updatedAt,
-      changed: executeChanged.includes("updatedAt"),
-    };
-
-    if (afterExecuteIntegration.id !== seeded.integrationId) {
-      throw new Error("Integration.id foi alterado.");
-    }
-    if (
-      executeChanged.length !== 1 ||
-      executeChanged[0] !== "encryptedSecrets"
-    ) {
-      throw new Error(
-        `Esperado alterar somente encryptedSecrets; alterado: ${executeChanged.join(", ")}`,
-      );
-    }
-    for (const key of Object.keys(beforeTenant.checksums)) {
-      if (beforeTenant.checksums[key] !== afterExecuteTenant.checksums[key]) {
-        throw new Error(`Checksum ${key} alterado após execute.`);
-      }
-    }
+    });
 
     const require = createRequire(import.meta.url);
     const { EncryptionService } = require(
@@ -960,125 +1224,9 @@ async function main() {
     }
     results.scenarios.execute.encryptionServiceCompatible = true;
 
-    const backupFile = executeReport.backupFile;
-    if (!backupFile || !fs.existsSync(backupFile)) {
-      throw new Error("Arquivo de backup não foi criado.");
-    }
-    const backup = readBackupFile(backupFile);
-    results.backupVerification = {
-      path: backupFile,
-      hasOriginalCiphertext:
-        backup.integration.encryptedSecrets === seeded.originalEncryptedSecrets,
-      hashMatches: hashText(backup.integration.encryptedSecrets) === hashText(seeded.originalEncryptedSecrets),
-      consoleLeakedCiphertext: executeRun.stdout.includes(seeded.originalEncryptedSecrets),
-    };
-    if (!results.backupVerification.hasOriginalCiphertext) {
-      throw new Error("Backup não contém ciphertext original.");
-    }
-    if (results.backupVerification.consoleLeakedCiphertext) {
-      throw new Error("Ciphertext vazou no stdout.");
-    }
-
-    const restoreDryEnv = buildScriptEnv({
-      ENCRYPTION_KEY: KEY_A,
-      REENCRYPT_TENANT_ID: seeded.tenantId,
-      REENCRYPT_INTEGRATION_ID: seeded.integrationId,
-      REENCRYPT_CONFIRM_ID: seeded.integrationId,
-    });
-    const restoreDry = await runCli(
-      ["--restore", `--backup-file=${backupFile}`],
-      restoreDryEnv,
-    );
-    results.scenarios.restoreDryRun = {
-      exitCode: 0,
-      report: JSON.parse(restoreDry.stdout),
-    };
-
-    const midRestoreIntegration = await fetchIntegrationSnapshot(client, seeded.integrationId);
-    if (midRestoreIntegration.encryptedSecrets !== afterExecuteIntegration.encryptedSecrets) {
-      throw new Error("restore dry-run alterou ciphertext.");
-    }
-
-    const restoreExec = await runCli(
-      ["--restore", `--backup-file=${backupFile}`, "--execute"],
-      restoreDryEnv,
-    );
-    results.scenarios.restoreExecute = {
-      exitCode: 0,
-      report: JSON.parse(restoreExec.stdout),
-    };
-
-    const afterRestoreIntegration = await fetchIntegrationSnapshot(client, seeded.integrationId);
-    if (afterRestoreIntegration.encryptedSecrets !== seeded.originalEncryptedSecrets) {
-      throw new Error("Restauração não retornou ciphertext original.");
-    }
-    results.scenarios.restoreExecute.originalCiphertextRestored = true;
-
-    const rollbackClient = new Client({ connectionString: ISOLATED_DATABASE_URL });
-    await rollbackClient.connect();
-    const beforeRollback = await fetchIntegrationSnapshot(rollbackClient, seeded.integrationId);
-    let rollbackFailed = false;
-    try {
-      await runReencryptOperation(rollbackClient, {
-        config: {
-          databaseUrl: ISOLATED_DATABASE_URL,
-          encryptionKey: KEY_B,
-          sgpApp: FAKE_APP_B,
-          sgpToken: "another-fake-token-value",
-          tenantId: seeded.tenantId,
-          integrationId: seeded.integrationId,
-          confirmId: seeded.integrationId,
-          allowProduction: false,
-          backupDir,
-          nodeEnv: "test",
-        },
-        mode: "reencrypt",
-        write: true,
-        rootDir: ROOT,
-        injectFailureAfterUpdate: true,
-      });
-    } catch (error) {
-      rollbackFailed = error instanceof Error && error.message.includes("Falha simulada");
-    }
-    const afterRollback = await fetchIntegrationSnapshot(rollbackClient, seeded.integrationId);
-    await rollbackClient.end();
-
-    results.rollbackVerification = {
-      failureInjected: rollbackFailed,
-      ciphertextUnchanged:
-        afterRollback.encryptedSecrets === beforeRollback.encryptedSecrets,
-      integrationChecksumUnchanged:
-        hashRow(beforeRollback) === hashRow(afterRollback),
-    };
-    if (!rollbackFailed || !results.rollbackVerification.ciphertextUnchanged) {
-      throw new Error("Rollback simulado não manteve o estado original.");
-    }
-
-    results.scenarios.beforeAfter = {
-      before: {
-        integration: {
-          id: beforeIntegration.id,
-          encryptedSecretsHash: hashText(beforeIntegration.encryptedSecrets),
-          updatedAt: results.updatedAtBehavior.before,
-          config: beforeIntegration.config,
-        },
-        tenantChecksums: beforeTenant.checksums,
-      },
-      afterExecute: {
-        integration: {
-          id: afterExecuteIntegration.id,
-          encryptedSecretsHash: hashText(afterExecuteIntegration.encryptedSecrets),
-          updatedAt: results.updatedAtBehavior.after,
-        },
-        columnsChanged: executeChanged,
-        tenantChecksums: afterExecuteTenant.checksums,
-      },
-      afterRestore: {
-        encryptedSecretsHash: hashText(afterRestoreIntegration.encryptedSecrets),
-        matchesOriginal:
-          afterRestoreIntegration.encryptedSecrets === seeded.originalEncryptedSecrets,
-      },
-    };
+    eventLog.step("cleanup");
+    results.eventLog = eventLog.events;
+    assertLiveEventOrder(eventLog.events);
 
     results.staticReview = [
       {
@@ -1129,19 +1277,23 @@ async function main() {
       JSON.stringify(
         {
           ...results,
-          scenarios: {
-            ...results.scenarios,
-            dryRun: results.scenarios.dryRun,
-            execute: results.scenarios.execute,
-          },
+          eventLog: results.eventLog,
         },
         null,
         2,
       ).replace(/"token"\s*:\s*"[^"]+"/g, '"token":"[REDACTED]"'),
     );
   } finally {
+    if (
+      managedDatabase?.backend === "Docker" &&
+      managedDatabase.container &&
+      !lastDockerDiagnostics &&
+      !results.eventLog?.includes("cleanup")
+    ) {
+      recordDockerDiagnostics("pre-cleanup", new Error("fluxo interrompido"), managedDatabase.container.name);
+    }
     await client.end();
-    await stopDisposableDatabase();
+    await stopDisposableDatabase(undefined, { skipDiagnosticsCapture: Boolean(lastDockerDiagnostics) });
     fs.rmSync(backupDir, { recursive: true, force: true });
   }
 }
