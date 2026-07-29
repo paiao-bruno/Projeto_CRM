@@ -445,7 +445,7 @@ describe("reencrypt-sgp-integration live disposable guards", () => {
     const started = await liveIntegration.startDisposableDatabase({
       checkDockerAvailable: () => true,
       checkPortAvailable: async () => undefined,
-      waitForDisposablePostgres: async () => undefined,
+      waitForDockerPostgresReady: async () => undefined,
       startDockerContainer: () => ({
         backend: "Docker",
         container: {
@@ -522,5 +522,131 @@ describe("reencrypt-sgp-integration live disposable guards", () => {
     );
 
     assert.equal(liveIntegration.DISPOSABLE_CONTAINER_NAME, "isp-crm-reencrypt-test");
+  });
+});
+
+describe("reencrypt-sgp-integration docker prisma migration", () => {
+  it("buildDisposableProcessEnv removes inherited DATABASE_URL and keeps disposable URL only", () => {
+    const env = liveIntegration.buildDisposableProcessEnv({
+      DATABASE_URL: "postgresql://crm:crm@localhost:5432/isp_crm?schema=public",
+      SHADOW_DATABASE_URL: "postgresql://crm:crm@localhost:5432/isp_crm_shadow?schema=public",
+    });
+    assert.equal(env.DATABASE_URL, liveIntegration.ISOLATED_DATABASE_URL);
+    assert.equal(env.SHADOW_DATABASE_URL, undefined);
+    assert.doesNotMatch(env.DATABASE_URL, /isp_crm/);
+    assert.doesNotMatch(env.DATABASE_URL, /:5432/);
+  });
+
+  it("formatSubprocessFailure captures stderr on non-zero exit", () => {
+    const message = liveIntegration.formatSubprocessFailure(
+      "prisma migrate deploy",
+      {
+        command: process.execPath,
+        args: ["prisma", "migrate", "deploy"],
+        cwd: "/tmp/project",
+      },
+      {
+        status: 1,
+        signal: null,
+        error: undefined,
+        stdout: "",
+        stderr: "Migration failed: extension vector",
+      },
+    );
+    assert.match(message, /stderr: Migration failed/);
+    assert.match(message, /exitCode: 1/);
+    assert.match(message, /reencrypt_test:\*\*\*@127\.0\.0\.1:55999/);
+    assert.doesNotMatch(message, /reencrypt_test:reencrypt_test/);
+  });
+
+  it("formatSubprocessFailure captures stdout", () => {
+    const message = liveIntegration.formatSubprocessFailure(
+      "prisma migrate deploy",
+      { command: "node", args: [], cwd: "/tmp/project" },
+      {
+        status: 1,
+        stdout: "Applying migration 20260708160000_init",
+        stderr: "",
+      },
+    );
+    assert.match(message, /stdout: Applying migration/);
+  });
+
+  it("formatSubprocessFailure captures spawn error when command cannot start", () => {
+    const message = liveIntegration.formatSubprocessFailure(
+      "prisma migrate deploy",
+      { command: "npx", args: ["prisma"], cwd: "/tmp/project" },
+      {
+        status: null,
+        signal: null,
+        error: new Error("spawn npx ENOENT"),
+        stdout: undefined,
+        stderr: undefined,
+      },
+    );
+    assert.match(message, /error\.message: spawn npx ENOENT/);
+    assert.match(message, /stderr: \(vazio\)/);
+    assert.match(message, /stdout: \(vazio\)/);
+    assert.doesNotMatch(message, /undefined/);
+  });
+
+  it("runPrismaMigrateDeploy throws sanitized diagnostics instead of undefined", () => {
+    assert.throws(
+      () =>
+        liveIntegration.runPrismaMigrateDeploy({
+          runSubprocess: () => ({
+            status: null,
+            signal: null,
+            error: new Error("spawn npx ENOENT"),
+            stdout: undefined,
+            stderr: undefined,
+          }),
+        }),
+      (error) =>
+        error instanceof Error &&
+        error.message.includes("prisma migrate deploy") &&
+        error.message.includes("spawn npx ENOENT") &&
+        !error.message.includes("undefined"),
+    );
+  });
+
+  it("waitForDockerPostgresReady times out with sanitized diagnostics", async () => {
+    await assert.rejects(
+      () =>
+        liveIntegration.waitForDockerPostgresReady("isp-crm-reencrypt-test", {
+          timeoutMs: 50,
+          intervalMs: 10,
+          runDockerExec: () => ({
+            status: 2,
+            signal: null,
+            stdout: "",
+            stderr: "connection refused",
+          }),
+        }),
+      (error) =>
+        error instanceof Error &&
+        error.message.includes("pg_isready timeout") &&
+        error.message.includes("connection refused"),
+    );
+  });
+
+  it("applyDockerPrismaMigrations propagates prisma failure without fallback", async () => {
+    await assert.rejects(
+      () =>
+        liveIntegration.applyDockerPrismaMigrations(
+          {
+            query: async () => ({ rows: [] }),
+          },
+          {
+            runSubprocess: () => ({
+              status: 1,
+              signal: null,
+              stdout: "stdout detail",
+              stderr: "stderr detail",
+            }),
+          },
+        ),
+      /stderr detail/,
+    );
   });
 });
