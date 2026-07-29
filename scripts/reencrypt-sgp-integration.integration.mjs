@@ -5,13 +5,13 @@
  */
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
+import net from "node:net";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "pg";
-import EmbeddedPostgres from "embedded-postgres";
 import { decryptJsonWithKey, encryptJsonWithKey } from "./lib/encryption.mjs";
 import {
   hashText,
@@ -20,17 +20,14 @@ import {
 } from "./lib/reencrypt-sgp-integration.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const CONTAINER_NAME = "isp-crm-reencrypt-disposable";
-const ISOLATED_PORT = 55999;
-const ISOLATED_DB = "reencrypt_disposable_test";
-const ISOLATED_USER = "reencrypt_test";
-const ISOLATED_PASSWORD = "reencrypt_test";
-const ISOLATED_DATABASE_URL = `postgresql://${ISOLATED_USER}:${ISOLATED_PASSWORD}@127.0.0.1:${ISOLATED_PORT}/${ISOLATED_DB}?schema=public`;
+export const DISPOSABLE_CONTAINER_NAME = "isp-crm-reencrypt-test";
+export const ISOLATED_PORT = 55999;
+export const ISOLATED_DB = "reencrypt_disposable_test";
+export const ISOLATED_USER = "reencrypt_test";
+export const ISOLATED_PASSWORD = "reencrypt_test";
+export const ISOLATED_DATABASE_URL = `postgresql://${ISOLATED_USER}:${ISOLATED_PASSWORD}@127.0.0.1:${ISOLATED_PORT}/${ISOLATED_DB}?schema=public`;
 const SCHEMA_FIXTURE = path.join(ROOT, "scripts/fixtures/reencrypt-disposable-schema.sql");
 const EMBEDDED_DATA_DIR = path.join(os.tmpdir(), "isp-crm-reencrypt-embedded-pg");
-
-let embeddedInstance = null;
-let usingEmbeddedPostgres = false;
 
 const KEY_A = "disposable-encryption-key-A-32chars!";
 const KEY_B = "disposable-encryption-key-B-32chars!";
@@ -38,6 +35,9 @@ const FAKE_APP_A = "fake-app-alpha";
 const FAKE_TOKEN_A = "fake-token-alpha-value";
 const FAKE_APP_B = "fake-app-beta";
 const FAKE_TOKEN_B = "fake-token-beta-value";
+
+/** @type {{ backend: string, container?: { name: string, id: string }, embedded?: unknown } | null} */
+let managedDatabase = null;
 
 const results = {
   isolatedDatabaseUrlMasked: `postgresql://${ISOLATED_USER}:***@127.0.0.1:${ISOLATED_PORT}/${ISOLATED_DB}?schema=public`,
@@ -51,33 +51,279 @@ const results = {
   staticReview: [],
 };
 
-function maskUrl(url) {
+export function maskUrl(url) {
   return url.replace(/:\/\/([^:@]+):([^@]+)@/, "://$1:***@");
 }
 
-function assertNeverRealDatabase(url) {
+export function assertDisposableDatabaseUrl(url) {
   const forbidden = [
     "isp_crm?schema=public",
     "localhost:5432/isp_crm",
     "localhost:51214",
+    ":5432/",
+    ":5432?",
   ];
   for (const marker of forbidden) {
     if (url.includes(marker)) {
       throw new Error(`Abortado: URL proibida detectada (${marker}).`);
     }
   }
+  if (url.includes("/isp_crm") || url.includes("database=isp_crm")) {
+    throw new Error("Abortado: URL descartável não pode usar banco isp_crm.");
+  }
   if (!url.includes(ISOLATED_DB) || !url.includes(String(ISOLATED_PORT))) {
     throw new Error("Abortado: URL não é o banco descartável isolado.");
   }
 }
 
-function assertHostDatabaseUrlUnused() {
-  const hostUrl = process.env.DATABASE_URL ?? "";
+export function assertHostDatabaseUrlIgnored(hostUrl) {
   if (hostUrl && !hostUrl.includes(ISOLATED_DB)) {
     results.realDatabaseAccessed = false;
     console.log(
       `[guard] DATABASE_URL do host presente (${maskUrl(hostUrl)}) — não será usada.`,
     );
+  }
+}
+
+export function checkDockerAvailable() {
+  const proc = spawnSync("docker", ["info"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  return proc.status === 0;
+}
+
+export function checkDisposableContainerAbsent(containerName = DISPOSABLE_CONTAINER_NAME) {
+  const proc = spawnSync(
+    "docker",
+    ["container", "inspect", containerName],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+  if (proc.status === 0) {
+    throw new Error(
+      `Abortado: container descartável "${containerName}" já existe. Remova-o manualmente ou aguarde outra execução terminar.`,
+    );
+  }
+}
+
+export function checkPortAvailable(port = ISOLATED_PORT, host = "127.0.0.1") {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", (error) => {
+      if (error.code === "EADDRINUSE") {
+        reject(
+          new Error(
+            `Abortado: porta ${port} em ${host} já está ocupada. Libere a porta antes do teste live.`,
+          ),
+        );
+        return;
+      }
+      reject(error);
+    });
+    server.once("listening", () => {
+      server.close((closeError) => {
+        if (closeError) {
+          reject(closeError);
+          return;
+        }
+        resolve();
+      });
+    });
+    server.listen(port, host);
+  });
+}
+
+export function assertCleanupTarget(containerState) {
+  if (!containerState?.id || !containerState?.name) {
+    throw new Error("Cleanup abortado: nenhum container gerenciado registrado.");
+  }
+  if (containerState.name !== DISPOSABLE_CONTAINER_NAME) {
+    throw new Error(
+      `Cleanup abortado: nome inesperado "${containerState.name}" (esperado "${DISPOSABLE_CONTAINER_NAME}").`,
+    );
+  }
+  const inspect = spawnSync(
+    "docker",
+    ["inspect", "--format", "{{.Name}}", containerState.id],
+    { encoding: "utf8" },
+  );
+  if (inspect.status !== 0) {
+    throw new Error("Cleanup abortado: container gerenciado não encontrado.");
+  }
+  const inspectedName = inspect.stdout.trim().replace(/^\//, "");
+  if (inspectedName !== DISPOSABLE_CONTAINER_NAME) {
+    throw new Error(
+      `Cleanup abortado: ID não corresponde a "${DISPOSABLE_CONTAINER_NAME}".`,
+    );
+  }
+}
+
+export function logDisposableStartup(backend) {
+  console.log(`[reencrypt-live] backend: ${backend}`);
+  console.log("[reencrypt-live] host: 127.0.0.1");
+  console.log(`[reencrypt-live] port: ${ISOLATED_PORT}`);
+  console.log(`[reencrypt-live] database: ${ISOLATED_DB}`);
+}
+
+export async function importEmbeddedPostgresModule() {
+  return import("embedded-postgres");
+}
+
+export async function startEmbeddedPostgresFallback(importModule = importEmbeddedPostgresModule) {
+  let EmbeddedPostgres;
+  try {
+    ({ default: EmbeddedPostgres } = await importModule());
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Docker indisponível e pacote embedded-postgres não instalado (${detail}). ` +
+        "Instale Docker Desktop ou adicione embedded-postgres como dependência de desenvolvimento.",
+    );
+  }
+
+  fs.rmSync(EMBEDDED_DATA_DIR, { recursive: true, force: true });
+  const embeddedInstance = new EmbeddedPostgres({
+    databaseDir: EMBEDDED_DATA_DIR,
+    port: ISOLATED_PORT,
+    user: ISOLATED_USER,
+    password: ISOLATED_PASSWORD,
+    database: ISOLATED_DB,
+  });
+  await embeddedInstance.initialise();
+  await embeddedInstance.start();
+
+  const bootstrapUrl = `postgresql://${ISOLATED_USER}:${ISOLATED_PASSWORD}@127.0.0.1:${ISOLATED_PORT}/template1`;
+  const bootstrap = new Client({ connectionString: bootstrapUrl });
+  await bootstrap.connect();
+  try {
+    await bootstrap.query(`CREATE DATABASE "${ISOLATED_DB}"`);
+  } catch (createError) {
+    if (!String(createError).includes("already exists")) {
+      throw createError;
+    }
+  } finally {
+    await bootstrap.end();
+  }
+
+  return {
+    backend: "embedded-postgres",
+    embedded: embeddedInstance,
+  };
+}
+
+export function startDockerContainer(containerName = DISPOSABLE_CONTAINER_NAME) {
+  checkDisposableContainerAbsent(containerName);
+
+  const start = spawnSync(
+    "docker",
+    [
+      "run",
+      "-d",
+      "--name",
+      containerName,
+      "-e",
+      `POSTGRES_USER=${ISOLATED_USER}`,
+      "-e",
+      `POSTGRES_PASSWORD=${ISOLATED_PASSWORD}`,
+      "-e",
+      `POSTGRES_DB=${ISOLATED_DB}`,
+      "-p",
+      `${ISOLATED_PORT}:5432`,
+      "pgvector/pgvector:pg16",
+    ],
+    { encoding: "utf8" },
+  );
+  if (start.status !== 0) {
+    throw new Error(`Docker run falhou: ${start.stderr || start.stdout}`);
+  }
+
+  const idResult = spawnSync(
+    "docker",
+    ["inspect", "--format", "{{.Id}}", containerName],
+    { encoding: "utf8" },
+  );
+  if (idResult.status !== 0) {
+    throw new Error(`Não foi possível inspecionar container "${containerName}".`);
+  }
+
+  return {
+    backend: "Docker",
+    container: {
+      name: containerName,
+      id: idResult.stdout.trim(),
+    },
+  };
+}
+
+export async function waitForDisposablePostgres(databaseUrl = ISOLATED_DATABASE_URL) {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const probe = new Client({ connectionString: databaseUrl });
+    try {
+      await probe.connect();
+      await probe.query("SELECT 1");
+      await probe.end();
+      return;
+    } catch {
+      await probe.end().catch(() => undefined);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+  throw new Error("PostgreSQL descartável não ficou pronto a tempo.");
+}
+
+export async function startDisposableDatabase(deps = {}) {
+  const checkDocker = deps.checkDockerAvailable ?? checkDockerAvailable;
+  const startDocker = deps.startDockerContainer ?? startDockerContainer;
+  const startEmbedded = deps.startEmbeddedPostgresFallback ?? startEmbeddedPostgresFallback;
+  const checkPort = deps.checkPortAvailable ?? checkPortAvailable;
+  const waitFor = deps.waitForDisposablePostgres ?? waitForDisposablePostgres;
+
+  assertDisposableDatabaseUrl(ISOLATED_DATABASE_URL);
+  await checkPort(ISOLATED_PORT, "127.0.0.1");
+
+  if (checkDocker()) {
+    const started = startDocker();
+    logDisposableStartup(started.backend);
+    await waitFor();
+    managedDatabase = started;
+    results.databaseBackend = "docker-pgvector-pg16";
+    return started;
+  }
+
+  const started = await startEmbedded(deps.importEmbeddedPostgresModule);
+  logDisposableStartup(started.backend);
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  await waitFor();
+  managedDatabase = started;
+  results.databaseBackend = "embedded-postgres";
+  return started;
+}
+
+export async function stopDisposableDatabase(state = managedDatabase, deps = {}) {
+  if (!state) {
+    return;
+  }
+
+  const verifyCleanupTarget = deps.assertCleanupTarget ?? assertCleanupTarget;
+
+  if (state.backend === "Docker" && state.container) {
+    verifyCleanupTarget(state.container);
+    const remove = deps.removeDockerContainer ?? ((id) => {
+      spawnSync("docker", ["rm", "-f", id], { stdio: "ignore" });
+    });
+    remove(state.container.id);
+    if (managedDatabase === state) {
+      managedDatabase = null;
+    }
+    return;
+  }
+
+  if (state.backend === "embedded-postgres" && state.embedded) {
+    await state.embedded.stop();
+    fs.rmSync(EMBEDDED_DATA_DIR, { recursive: true, force: true });
+    if (managedDatabase === state) {
+      managedDatabase = null;
+    }
   }
 }
 
@@ -88,6 +334,8 @@ function runCommand(label, command, args, env = {}) {
     NODE_ENV: "test",
     ...env,
   };
+  delete resolvedEnv.DATABASE_URL;
+  resolvedEnv.DATABASE_URL = ISOLATED_DATABASE_URL;
 
   const proc = spawnSync(command, args, {
     cwd: ROOT,
@@ -105,92 +353,6 @@ function runCommand(label, command, args, env = {}) {
     stdout: proc.stdout,
     stderr: proc.stderr,
   };
-}
-
-async function startDisposablePostgres() {
-  const dockerAvailable =
-    spawnSync("docker", ["--version"], { encoding: "utf8" }).status === 0;
-
-  if (dockerAvailable) {
-    spawnSync("docker", ["rm", "-f", CONTAINER_NAME], { stdio: "ignore" });
-    const start = spawnSync(
-      "docker",
-      [
-        "run",
-        "-d",
-        "--name",
-        CONTAINER_NAME,
-        "-e",
-        `POSTGRES_USER=${ISOLATED_USER}`,
-        "-e",
-        `POSTGRES_PASSWORD=${ISOLATED_PASSWORD}`,
-        "-e",
-        `POSTGRES_DB=${ISOLATED_DB}`,
-        "-p",
-        `${ISOLATED_PORT}:5432`,
-        "pgvector/pgvector:pg16",
-      ],
-      { encoding: "utf8" },
-    );
-    if (start.status !== 0) {
-      throw new Error(`Docker run falhou: ${start.stderr}`);
-    }
-    results.databaseBackend = "docker-pgvector-pg16";
-  } else {
-    fs.rmSync(EMBEDDED_DATA_DIR, { recursive: true, force: true });
-    embeddedInstance = new EmbeddedPostgres({
-      databaseDir: EMBEDDED_DATA_DIR,
-      port: ISOLATED_PORT,
-      user: ISOLATED_USER,
-      password: ISOLATED_PASSWORD,
-      database: ISOLATED_DB,
-    });
-    await embeddedInstance.initialise();
-    await embeddedInstance.start();
-    usingEmbeddedPostgres = true;
-    results.databaseBackend = "embedded-postgres-18";
-  }
-
-  if (usingEmbeddedPostgres) {
-    const bootstrapUrl = `postgresql://${ISOLATED_USER}:${ISOLATED_PASSWORD}@127.0.0.1:${ISOLATED_PORT}/template1`;
-    const bootstrap = new Client({ connectionString: bootstrapUrl });
-    await bootstrap.connect();
-    try {
-      await bootstrap.query(`CREATE DATABASE "${ISOLATED_DB}"`);
-    } catch (createError) {
-      if (!String(createError).includes("already exists")) {
-        throw createError;
-      }
-    } finally {
-      await bootstrap.end();
-    }
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    const probe = new Client({ connectionString: ISOLATED_DATABASE_URL });
-    try {
-      await probe.connect();
-      await probe.query("SELECT 1");
-      await probe.end();
-      return;
-    } catch {
-      await probe.end().catch(() => undefined);
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-    }
-  }
-  throw new Error("PostgreSQL descartável não ficou pronto a tempo.");
-}
-
-async function stopDisposablePostgres() {
-  if (usingEmbeddedPostgres && embeddedInstance) {
-    await embeddedInstance.stop();
-    embeddedInstance = null;
-    fs.rmSync(EMBEDDED_DATA_DIR, { recursive: true, force: true });
-    usingEmbeddedPostgres = false;
-    return;
-  }
-  spawnSync("docker", ["rm", "-f", CONTAINER_NAME], { stdio: "ignore" });
 }
 
 async function applyMigrations(client) {
@@ -391,12 +553,14 @@ async function runCli(modeArgs, envOverrides) {
 }
 
 async function main() {
-  assertNeverRealDatabase(ISOLATED_DATABASE_URL);
-  assertHostDatabaseUrlUnused();
+  const inheritedDatabaseUrl = process.env.DATABASE_URL ?? "";
+  assertDisposableDatabaseUrl(ISOLATED_DATABASE_URL);
+  assertHostDatabaseUrlIgnored(inheritedDatabaseUrl);
+  delete process.env.DATABASE_URL;
 
   const backupDir = fs.mkdtempSync(path.join(os.tmpdir(), "isp-crm-reencrypt-live-"));
 
-  await startDisposablePostgres();
+  await startDisposableDatabase();
   const client = new Client({ connectionString: ISOLATED_DATABASE_URL });
   await client.connect();
 
@@ -415,7 +579,6 @@ async function main() {
       tenantChecksums: beforeTenant.checksums,
     };
 
-    // --- dry-run reencrypt ---
     const dryRunEnv = buildScriptEnv({
       ENCRYPTION_KEY: KEY_B,
       SGP_APP: FAKE_APP_B,
@@ -450,7 +613,6 @@ async function main() {
       throw new Error(`dry-run alterou colunas: ${dryRunChanged.join(", ")}`);
     }
 
-    // --- execute reencrypt ---
     const executeRun = await runCli(["--execute"], dryRunEnv);
     const executeReport = JSON.parse(executeRun.stdout);
     results.scenarios.execute = { exitCode: 0, report: executeReport };
@@ -498,7 +660,6 @@ async function main() {
     }
     results.scenarios.execute.encryptionServiceCompatible = true;
 
-    // --- backup verification ---
     const backupFile = executeReport.backupFile;
     if (!backupFile || !fs.existsSync(backupFile)) {
       throw new Error("Arquivo de backup não foi criado.");
@@ -518,7 +679,6 @@ async function main() {
       throw new Error("Ciphertext vazou no stdout.");
     }
 
-    // --- restore dry-run ---
     const restoreDryEnv = buildScriptEnv({
       ENCRYPTION_KEY: KEY_A,
       REENCRYPT_TENANT_ID: seeded.tenantId,
@@ -539,7 +699,6 @@ async function main() {
       throw new Error("restore dry-run alterou ciphertext.");
     }
 
-    // --- restore execute ---
     const restoreExec = await runCli(
       ["--restore", `--backup-file=${backupFile}`, "--execute"],
       restoreDryEnv,
@@ -555,7 +714,6 @@ async function main() {
     }
     results.scenarios.restoreExecute.originalCiphertextRestored = true;
 
-    // --- simulated rollback failure ---
     const rollbackClient = new Client({ connectionString: ISOLATED_DATABASE_URL });
     await rollbackClient.connect();
     const beforeRollback = await fetchIntegrationSnapshot(rollbackClient, seeded.integrationId);
@@ -622,7 +780,6 @@ async function main() {
       },
     };
 
-    // --- static review (code inspection) ---
     results.staticReview = [
       {
         topic: "SQL interpolation",
@@ -671,17 +828,23 @@ async function main() {
     console.log(JSON.stringify(results, null, 2));
   } finally {
     await client.end();
-    await stopDisposablePostgres();
+    await stopDisposableDatabase();
     fs.rmSync(backupDir, { recursive: true, force: true });
   }
 }
 
-main().catch(async (error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  try {
-    await stopDisposablePostgres();
-  } catch {
-    // ignore cleanup errors
-  }
-  process.exit(1);
-});
+const isDirectExecution =
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+
+if (isDirectExecution) {
+  main().catch(async (error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    try {
+      await stopDisposableDatabase();
+    } catch {
+      // ignore cleanup errors
+    }
+    process.exit(1);
+  });
+}

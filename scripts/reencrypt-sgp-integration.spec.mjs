@@ -26,6 +26,7 @@ import {
   validateReencryptEnv,
   writeBackupFile,
 } from "./lib/reencrypt-sgp-integration.mjs";
+import * as liveIntegration from "./reencrypt-sgp-integration.integration.mjs";
 
 const TEST_KEY = "test-encryption-key-with-32-characters-min";
 const OTHER_KEY = "other-encryption-key-with-32-characters-m";
@@ -401,5 +402,125 @@ describe("reencrypt-sgp-integration database guard", () => {
     } finally {
       process.env.DATABASE_URL = previous;
     }
+  });
+});
+
+describe("reencrypt-sgp-integration live disposable guards", () => {
+  it("accepts only the fixed disposable database URL", () => {
+    assert.doesNotThrow(() =>
+      liveIntegration.assertDisposableDatabaseUrl(liveIntegration.ISOLATED_DATABASE_URL),
+    );
+  });
+
+  it("rejects port 5432 in disposable URL", () => {
+    assert.throws(
+      () =>
+        liveIntegration.assertDisposableDatabaseUrl(
+          "postgresql://reencrypt_test:reencrypt_test@127.0.0.1:5432/reencrypt_disposable_test?schema=public",
+        ),
+      /5432/,
+    );
+  });
+
+  it("rejects isp_crm database in disposable URL", () => {
+    assert.throws(
+      () =>
+        liveIntegration.assertDisposableDatabaseUrl(
+          "postgresql://reencrypt_test:reencrypt_test@127.0.0.1:55999/isp_crm?schema=public",
+        ),
+      /isp_crm/,
+    );
+  });
+
+  it("logs inherited DATABASE_URL without using it", () => {
+    assert.doesNotThrow(() =>
+      liveIntegration.assertHostDatabaseUrlIgnored(
+        "postgresql://crm:crm@localhost:5432/isp_crm?schema=public",
+      ),
+    );
+  });
+
+  it("does not import embedded-postgres when Docker is available", async () => {
+    let embeddedImportCalled = false;
+    const started = await liveIntegration.startDisposableDatabase({
+      checkDockerAvailable: () => true,
+      checkPortAvailable: async () => undefined,
+      waitForDisposablePostgres: async () => undefined,
+      startDockerContainer: () => ({
+        backend: "Docker",
+        container: {
+          name: liveIntegration.DISPOSABLE_CONTAINER_NAME,
+          id: "sha256:disposable-test-id",
+        },
+      }),
+      startEmbeddedPostgresFallback: async () => {
+        embeddedImportCalled = true;
+        throw new Error("embedded-postgres não deveria ser carregado");
+      },
+      importEmbeddedPostgresModule: async () => {
+        embeddedImportCalled = true;
+        throw new Error("embedded-postgres não deveria ser importado");
+      },
+    });
+
+    assert.equal(started.backend, "Docker");
+    assert.equal(embeddedImportCalled, false);
+    await liveIntegration.stopDisposableDatabase(started, {
+      assertCleanupTarget: () => undefined,
+      removeDockerContainer: () => undefined,
+    });
+  });
+
+  it("imports embedded-postgres only after Docker is unavailable", async () => {
+    let embeddedImportCalled = false;
+    const started = await liveIntegration.startDisposableDatabase({
+      checkDockerAvailable: () => false,
+      checkPortAvailable: async () => undefined,
+      waitForDisposablePostgres: async () => undefined,
+      startDockerContainer: () => {
+        throw new Error("Docker não deveria ser iniciado");
+      },
+      startEmbeddedPostgresFallback: async (importModule) => {
+        await importModule();
+        embeddedImportCalled = true;
+        return {
+          backend: "embedded-postgres",
+          embedded: {
+            async stop() {},
+          },
+        };
+      },
+      importEmbeddedPostgresModule: async () => {
+        return {
+          default: class MockEmbeddedPostgres {
+            async initialise() {}
+            async start() {}
+            async stop() {}
+          },
+        };
+      },
+    });
+
+    assert.equal(started.backend, "embedded-postgres");
+    assert.equal(embeddedImportCalled, true);
+    await liveIntegration.stopDisposableDatabase(started);
+  });
+
+  it("cleanup rejects containers other than the disposable test container", () => {
+    assert.throws(
+      () =>
+        liveIntegration.assertCleanupTarget({
+          name: "isp-crm-postgres",
+          id: "sha256:other-container",
+        }),
+      /Cleanup abortado/,
+    );
+
+    assert.throws(
+      () => liveIntegration.assertCleanupTarget(null),
+      /Cleanup abortado/,
+    );
+
+    assert.equal(liveIntegration.DISPOSABLE_CONTAINER_NAME, "isp-crm-reencrypt-test");
   });
 });
