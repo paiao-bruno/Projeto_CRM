@@ -22,6 +22,7 @@ import {
   formatDiagnosticsReport,
   getContainerRuntimeState,
   runDockerCommand,
+  runTcpSelectOneProbe,
   waitForContainerRunningAndHealthy,
   waitForTcpSelectOneStability,
 } from "./lib/docker-disposable-readiness.mjs";
@@ -356,13 +357,7 @@ export async function runDockerReadinessPipeline(
 
   await runTcpStability(
     async () => {
-      const probe = new Client({ connectionString: databaseUrl });
-      try {
-        await probe.connect();
-        await probe.query("SELECT 1");
-      } finally {
-        await probe.end().catch(() => undefined);
-      }
+      await runTcpSelectOneProbe(databaseUrl, Client);
     },
     {
       ...deps,
@@ -429,14 +424,81 @@ export function resolvePrismaMigrateDeployInvocation(rootDir = ROOT) {
   };
 }
 
-export function sanitizeProcessOutput(text) {
+export function sanitizeProcessOutput(text, redactValues = []) {
   if (text === undefined || text === null || text === "") {
     return "(vazio)";
   }
-  return maskUrl(String(text).replaceAll(ISOLATED_PASSWORD, "***"));
+  let output = String(text).replaceAll(ISOLATED_PASSWORD, "***");
+  for (const value of redactValues) {
+    if (typeof value === "string" && value.length > 0) {
+      output = output.replaceAll(value, "[REDACTED]");
+    }
+  }
+  return maskUrl(output);
 }
 
-export function formatSubprocessFailure(stage, invocation, proc) {
+export function parseDryRunCliReport(stdout) {
+  const trimmed = String(stdout ?? "").trim();
+  if (!trimmed) {
+    throw new Error("Saída vazia do subprocesso dry-run.");
+  }
+  let report;
+  try {
+    report = JSON.parse(trimmed);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Saída dry-run não é JSON válido: ${detail}`);
+  }
+  if (!report || typeof report !== "object") {
+    throw new Error("Relatório dry-run inválido: esperado objeto JSON.");
+  }
+  return report;
+}
+
+export function extractDryRunProofToken(report) {
+  const token = report?.dryRunProof?.token;
+  if (typeof token !== "string" || token.trim() === "") {
+    throw new Error("dryRunProof.token ausente ou inválido no relatório dry-run.");
+  }
+  return token.trim();
+}
+
+export function redactDryRunReportForOutput(report) {
+  if (!report?.dryRunProof?.token) {
+    return report;
+  }
+  return {
+    ...report,
+    dryRunProof: {
+      ...report.dryRunProof,
+      token: "[REDACTED]",
+    },
+  };
+}
+
+export function buildExecuteEnvFromDryRun(baseEnv, proofToken) {
+  const token = extractDryRunProofToken({ dryRunProof: { token: proofToken } });
+  return {
+    ...baseEnv,
+    REENCRYPT_DRY_RUN_PROOF: token,
+  };
+}
+
+export async function runReencryptDryRunThenExecute(runCliFn, baseEnv) {
+  const dryRun = await runCliFn(["--dry-run"], baseEnv);
+  const dryRunReport = parseDryRunCliReport(dryRun.stdout);
+  const proofToken = extractDryRunProofToken(dryRunReport);
+  const executeEnv = buildExecuteEnvFromDryRun(baseEnv, proofToken);
+  const execute = await runCliFn(["--execute"], executeEnv, [proofToken]);
+  return {
+    dryRun,
+    execute,
+    dryRunReport,
+    proofToken,
+  };
+}
+
+export function formatSubprocessFailure(stage, invocation, proc, redactValues = []) {
   return [
     `[${stage}] subprocesso falhou`,
     `comando: ${invocation.command} ${(invocation.args ?? []).join(" ")}`,
@@ -445,8 +507,8 @@ export function formatSubprocessFailure(stage, invocation, proc) {
     `exitCode: ${proc.status ?? "null"}`,
     `signal: ${proc.signal ?? "null"}`,
     `error.message: ${proc.error?.message ?? "(nenhum)"}`,
-    `stdout: ${sanitizeProcessOutput(proc.stdout)}`,
-    `stderr: ${sanitizeProcessOutput(proc.stderr)}`,
+    `stdout: ${sanitizeProcessOutput(proc.stdout, redactValues)}`,
+    `stderr: ${sanitizeProcessOutput(proc.stderr, redactValues)}`,
   ].join("\n");
 }
 
@@ -571,7 +633,7 @@ export async function stopDisposableDatabase(state = managedDatabase, deps = {})
   }
 }
 
-function runCommand(label, command, args, env = {}) {
+function runCommand(label, command, args, env = {}, redactValues = []) {
   const proc = spawnSync(command, args, {
     cwd: ROOT,
     env: buildDisposableProcessEnv(env),
@@ -581,7 +643,7 @@ function runCommand(label, command, args, env = {}) {
 
   if (proc.error || proc.status !== 0) {
     throw new Error(
-      formatSubprocessFailure(label, { command, args, cwd: ROOT }, proc),
+      formatSubprocessFailure(label, { command, args, cwd: ROOT }, proc, redactValues),
     );
   }
 
@@ -766,12 +828,13 @@ function buildScriptEnv(overrides = {}) {
   };
 }
 
-async function runCli(modeArgs, envOverrides) {
+async function runCli(modeArgs, envOverrides, redactValues = []) {
   return runCommand(
     `cli ${modeArgs.join(" ")}`,
     "node",
     ["scripts/reencrypt-sgp-integration.mjs", ...modeArgs],
     envOverrides,
+    redactValues,
   );
 }
 
@@ -822,10 +885,14 @@ async function main() {
       REENCRYPT_CONFIRM_ID: seeded.integrationId,
       REENCRYPT_BACKUP_DIR: backupDir,
     });
-    const dryRun = await runCli(["--dry-run"], dryRunEnv);
+    const { dryRun, execute: executeRun, dryRunReport } = await runReencryptDryRunThenExecute(
+      runCli,
+      dryRunEnv,
+    );
     results.scenarios.dryRun = {
       exitCode: 0,
-      report: JSON.parse(dryRun.stdout),
+      report: redactDryRunReportForOutput(dryRunReport),
+      proofPropagated: true,
     };
 
     const afterDryRunIntegration = await fetchIntegrationSnapshot(client, seeded.integrationId);
@@ -847,7 +914,6 @@ async function main() {
       throw new Error(`dry-run alterou colunas: ${dryRunChanged.join(", ")}`);
     }
 
-    const executeRun = await runCli(["--execute"], dryRunEnv);
     const executeReport = JSON.parse(executeRun.stdout);
     results.scenarios.execute = { exitCode: 0, report: executeReport };
 
@@ -1059,7 +1125,20 @@ async function main() {
       },
     ];
 
-    console.log(JSON.stringify(results, null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          ...results,
+          scenarios: {
+            ...results.scenarios,
+            dryRun: results.scenarios.dryRun,
+            execute: results.scenarios.execute,
+          },
+        },
+        null,
+        2,
+      ).replace(/"token"\s*:\s*"[^"]+"/g, '"token":"[REDACTED]"'),
+    );
   } finally {
     await client.end();
     await stopDisposableDatabase();

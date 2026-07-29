@@ -719,6 +719,93 @@ describe("reencrypt-sgp-integration docker prisma migration", () => {
   });
 });
 
+describe("reencrypt-sgp-integration live dry-run proof propagation", () => {
+  const sampleToken = "proof-token-value-not-for-logs";
+  const sampleReport = {
+    mode: "dry-run",
+    dryRunProof: {
+      token: sampleToken,
+      proofId: "proof-123",
+      expiresAt: "2026-07-29T20:00:00.000Z",
+    },
+  };
+
+  it("extractDryRunProofToken requires non-empty string token", () => {
+    assert.equal(liveIntegration.extractDryRunProofToken(sampleReport), sampleToken);
+    assert.throws(
+      () => liveIntegration.extractDryRunProofToken({ dryRunProof: {} }),
+      /dryRunProof\.token ausente/,
+    );
+  });
+
+  it("runReencryptDryRunThenExecute runs dry-run before execute and propagates token via env", async () => {
+    const calls = [];
+    const runCliFn = async (modeArgs, envOverrides, redactValues = []) => {
+      calls.push({ modeArgs, env: { ...envOverrides }, redactValues });
+      if (modeArgs.includes("--dry-run")) {
+        return { stdout: JSON.stringify(sampleReport), stderr: "" };
+      }
+      if (modeArgs.includes("--execute")) {
+        assert.equal(envOverrides.REENCRYPT_DRY_RUN_PROOF, sampleToken);
+        return { stdout: JSON.stringify({ mode: "execute", ok: true }), stderr: "" };
+      }
+      throw new Error(`modo inesperado: ${modeArgs.join(" ")}`);
+    };
+
+    const baseEnv = {
+      DATABASE_URL: liveIntegration.ISOLATED_DATABASE_URL,
+      REENCRYPT_TENANT_ID: "22222222-2222-4222-8222-222222222222",
+    };
+    const result = await liveIntegration.runReencryptDryRunThenExecute(runCliFn, baseEnv);
+
+    assert.equal(calls.length, 2);
+    assert.deepEqual(calls[0].modeArgs, ["--dry-run"]);
+    assert.equal(calls[0].env.REENCRYPT_DRY_RUN_PROOF, undefined);
+    assert.deepEqual(calls[1].modeArgs, ["--execute"]);
+    assert.equal(calls[1].env.REENCRYPT_DRY_RUN_PROOF, sampleToken);
+    assert.equal(result.proofToken, sampleToken);
+  });
+
+  it("runReencryptDryRunThenExecute does not call execute when dry-run fails", async () => {
+    let executeCalled = false;
+    const runCliFn = async (modeArgs) => {
+      if (modeArgs.includes("--dry-run")) {
+        throw new Error("dry-run subprocess failed");
+      }
+      executeCalled = true;
+      return { stdout: "{}", stderr: "" };
+    };
+
+    await assert.rejects(
+      () => liveIntegration.runReencryptDryRunThenExecute(runCliFn, {}),
+      /dry-run subprocess failed/,
+    );
+    assert.equal(executeCalled, false);
+  });
+
+  it("sanitizeProcessOutput redacts dry-run proof token from diagnostics", () => {
+    const sanitized = liveIntegration.sanitizeProcessOutput(
+      `stdout contém token ${sampleToken} no meio`,
+      [sampleToken],
+    );
+    assert.doesNotMatch(sanitized, new RegExp(sampleToken));
+    assert.match(sanitized, /\[REDACTED\]/);
+  });
+
+  it("redactDryRunReportForOutput removes token from serializable report", () => {
+    const redacted = liveIntegration.redactDryRunReportForOutput(sampleReport);
+    assert.equal(redacted.dryRunProof.token, "[REDACTED]");
+    assert.equal(redacted.dryRunProof.proofId, "proof-123");
+  });
+
+  it("buildExecuteEnvFromDryRun rejects missing proof token", () => {
+    assert.throws(
+      () => liveIntegration.buildExecuteEnvFromDryRun({}, ""),
+      /dryRunProof\.token ausente/,
+    );
+  });
+});
+
 describe("reencrypt-sgp-integration preflight and execute guards", () => {
   const baseConfig = () => ({
     databaseUrl:

@@ -162,6 +162,13 @@ export function formatDiagnosticsReport(diagnostics) {
   ].join("\n");
 }
 
+export async function runTcpSelectOneProbe(databaseUrl, ClientClass) {
+  const probe = new ClientClass({ connectionString: databaseUrl });
+  await probe.connect();
+  await probe.query("SELECT 1");
+  await probe.end();
+}
+
 export async function waitForTcpSelectOneStability(
   connectAndQuery,
   options = {},
@@ -183,12 +190,13 @@ export async function waitForTcpSelectOneStability(
       if (consecutive >= consecutiveRequired) {
         return { consecutive, lastError: null };
       }
-      await new Promise((resolve) => setTimeout(resolve, intervalMs));
     } catch (error) {
       consecutive = 0;
       lastError = error;
       logStage(`falha (${formatConnectionError(error)}), reiniciando contagem`);
-      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      if (intervalMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      }
     }
   }
 
