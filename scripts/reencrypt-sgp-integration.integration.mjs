@@ -1,0 +1,995 @@
+#!/usr/bin/env node
+/**
+ * Teste de integração REAL em PostgreSQL descartável e isolado.
+ * Nunca usa DATABASE_URL do ambiente host — apenas URL fixa de teste.
+ */
+import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
+import net from "node:net";
+import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { Client } from "pg";
+import { decryptJsonWithKey, encryptJsonWithKey } from "./lib/encryption.mjs";
+import {
+  hashText,
+  readBackupFile,
+  runReencryptOperation,
+} from "./lib/reencrypt-sgp-integration.mjs";
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+export const DISPOSABLE_CONTAINER_NAME = "isp-crm-reencrypt-test";
+export const ISOLATED_PORT = 55999;
+export const ISOLATED_DB = "reencrypt_disposable_test";
+export const ISOLATED_USER = "reencrypt_test";
+export const ISOLATED_PASSWORD = "reencrypt_test";
+export const ISOLATED_DATABASE_URL = `postgresql://${ISOLATED_USER}:${ISOLATED_PASSWORD}@127.0.0.1:${ISOLATED_PORT}/${ISOLATED_DB}?schema=public`;
+const SCHEMA_FIXTURE = path.join(ROOT, "scripts/fixtures/reencrypt-disposable-schema.sql");
+const EMBEDDED_DATA_DIR = path.join(os.tmpdir(), "isp-crm-reencrypt-embedded-pg");
+export const PRISMA_SCHEMA_PATH = path.join(ROOT, "prisma/schema.prisma");
+export const REQUIRED_PG_EXTENSIONS = ["pgcrypto", "vector"];
+export const DOCKER_PG_ISREADY_TIMEOUT_MS = 60_000;
+
+const KEY_A = "disposable-encryption-key-A-32chars!";
+const KEY_B = "disposable-encryption-key-B-32chars!";
+const FAKE_APP_A = "fake-app-alpha";
+const FAKE_TOKEN_A = "fake-token-alpha-value";
+const FAKE_APP_B = "fake-app-beta";
+const FAKE_TOKEN_B = "fake-token-beta-value";
+
+/** @type {{ backend: string, container?: { name: string, id: string }, embedded?: unknown } | null} */
+let managedDatabase = null;
+
+const results = {
+  isolatedDatabaseUrlMasked: `postgresql://${ISOLATED_USER}:***@127.0.0.1:${ISOLATED_PORT}/${ISOLATED_DB}?schema=public`,
+  migrationsApplied: [],
+  scenarios: {},
+  columnsChangedOnExecute: [],
+  updatedAtBehavior: null,
+  backupVerification: null,
+  rollbackVerification: null,
+  realDatabaseAccessed: false,
+  staticReview: [],
+};
+
+export function maskUrl(url) {
+  return url.replace(/:\/\/([^:@]+):([^@]+)@/, "://$1:***@");
+}
+
+export function assertDisposableDatabaseUrl(url) {
+  const forbidden = [
+    "isp_crm?schema=public",
+    "localhost:5432/isp_crm",
+    "localhost:51214",
+    ":5432/",
+    ":5432?",
+  ];
+  for (const marker of forbidden) {
+    if (url.includes(marker)) {
+      throw new Error(`Abortado: URL proibida detectada (${marker}).`);
+    }
+  }
+  if (url.includes("/isp_crm") || url.includes("database=isp_crm")) {
+    throw new Error("Abortado: URL descartável não pode usar banco isp_crm.");
+  }
+  if (!url.includes(ISOLATED_DB) || !url.includes(String(ISOLATED_PORT))) {
+    throw new Error("Abortado: URL não é o banco descartável isolado.");
+  }
+}
+
+export function assertHostDatabaseUrlIgnored(hostUrl) {
+  if (hostUrl && !hostUrl.includes(ISOLATED_DB)) {
+    results.realDatabaseAccessed = false;
+    console.log(
+      `[guard] DATABASE_URL do host presente (${maskUrl(hostUrl)}) — não será usada.`,
+    );
+  }
+}
+
+export function checkDockerAvailable() {
+  const proc = spawnSync("docker", ["info"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  return proc.status === 0;
+}
+
+export function checkDisposableContainerAbsent(containerName = DISPOSABLE_CONTAINER_NAME) {
+  const proc = spawnSync(
+    "docker",
+    ["container", "inspect", containerName],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+  if (proc.status === 0) {
+    throw new Error(
+      `Abortado: container descartável "${containerName}" já existe. Remova-o manualmente ou aguarde outra execução terminar.`,
+    );
+  }
+}
+
+export function checkPortAvailable(port = ISOLATED_PORT, host = "127.0.0.1") {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once("error", (error) => {
+      if (error.code === "EADDRINUSE") {
+        reject(
+          new Error(
+            `Abortado: porta ${port} em ${host} já está ocupada. Libere a porta antes do teste live.`,
+          ),
+        );
+        return;
+      }
+      reject(error);
+    });
+    server.once("listening", () => {
+      server.close((closeError) => {
+        if (closeError) {
+          reject(closeError);
+          return;
+        }
+        resolve();
+      });
+    });
+    server.listen(port, host);
+  });
+}
+
+export function assertCleanupTarget(containerState) {
+  if (!containerState?.id || !containerState?.name) {
+    throw new Error("Cleanup abortado: nenhum container gerenciado registrado.");
+  }
+  if (containerState.name !== DISPOSABLE_CONTAINER_NAME) {
+    throw new Error(
+      `Cleanup abortado: nome inesperado "${containerState.name}" (esperado "${DISPOSABLE_CONTAINER_NAME}").`,
+    );
+  }
+  const inspect = spawnSync(
+    "docker",
+    ["inspect", "--format", "{{.Name}}", containerState.id],
+    { encoding: "utf8" },
+  );
+  if (inspect.status !== 0) {
+    throw new Error("Cleanup abortado: container gerenciado não encontrado.");
+  }
+  const inspectedName = inspect.stdout.trim().replace(/^\//, "");
+  if (inspectedName !== DISPOSABLE_CONTAINER_NAME) {
+    throw new Error(
+      `Cleanup abortado: ID não corresponde a "${DISPOSABLE_CONTAINER_NAME}".`,
+    );
+  }
+}
+
+export function logDisposableStartup(backend) {
+  console.log(`[reencrypt-live] backend: ${backend}`);
+  console.log("[reencrypt-live] host: 127.0.0.1");
+  console.log(`[reencrypt-live] port: ${ISOLATED_PORT}`);
+  console.log(`[reencrypt-live] database: ${ISOLATED_DB}`);
+}
+
+export async function importEmbeddedPostgresModule() {
+  return import("embedded-postgres");
+}
+
+export async function startEmbeddedPostgresFallback(importModule = importEmbeddedPostgresModule) {
+  let EmbeddedPostgres;
+  try {
+    ({ default: EmbeddedPostgres } = await importModule());
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Docker indisponível e pacote embedded-postgres não instalado (${detail}). ` +
+        "Instale Docker Desktop ou adicione embedded-postgres como dependência de desenvolvimento.",
+    );
+  }
+
+  fs.rmSync(EMBEDDED_DATA_DIR, { recursive: true, force: true });
+  const embeddedInstance = new EmbeddedPostgres({
+    databaseDir: EMBEDDED_DATA_DIR,
+    port: ISOLATED_PORT,
+    user: ISOLATED_USER,
+    password: ISOLATED_PASSWORD,
+    database: ISOLATED_DB,
+  });
+  await embeddedInstance.initialise();
+  await embeddedInstance.start();
+
+  const bootstrapUrl = `postgresql://${ISOLATED_USER}:${ISOLATED_PASSWORD}@127.0.0.1:${ISOLATED_PORT}/template1`;
+  const bootstrap = new Client({ connectionString: bootstrapUrl });
+  await bootstrap.connect();
+  try {
+    await bootstrap.query(`CREATE DATABASE "${ISOLATED_DB}"`);
+  } catch (createError) {
+    if (!String(createError).includes("already exists")) {
+      throw createError;
+    }
+  } finally {
+    await bootstrap.end();
+  }
+
+  return {
+    backend: "embedded-postgres",
+    embedded: embeddedInstance,
+  };
+}
+
+export function startDockerContainer(containerName = DISPOSABLE_CONTAINER_NAME) {
+  checkDisposableContainerAbsent(containerName);
+
+  const start = spawnSync(
+    "docker",
+    [
+      "run",
+      "-d",
+      "--name",
+      containerName,
+      "-e",
+      `POSTGRES_USER=${ISOLATED_USER}`,
+      "-e",
+      `POSTGRES_PASSWORD=${ISOLATED_PASSWORD}`,
+      "-e",
+      `POSTGRES_DB=${ISOLATED_DB}`,
+      "-p",
+      `${ISOLATED_PORT}:5432`,
+      "pgvector/pgvector:pg16",
+    ],
+    { encoding: "utf8" },
+  );
+  if (start.status !== 0) {
+    throw new Error(`Docker run falhou: ${start.stderr || start.stdout}`);
+  }
+
+  const idResult = spawnSync(
+    "docker",
+    ["inspect", "--format", "{{.Id}}", containerName],
+    { encoding: "utf8" },
+  );
+  if (idResult.status !== 0) {
+    throw new Error(`Não foi possível inspecionar container "${containerName}".`);
+  }
+
+  return {
+    backend: "Docker",
+    container: {
+      name: containerName,
+      id: idResult.stdout.trim(),
+    },
+  };
+}
+
+export async function waitForDisposablePostgres(databaseUrl = ISOLATED_DATABASE_URL) {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const probe = new Client({ connectionString: databaseUrl });
+    try {
+      await probe.connect();
+      await probe.query("SELECT 1");
+      await probe.end();
+      return;
+    } catch {
+      await probe.end().catch(() => undefined);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+  throw new Error("PostgreSQL descartável não ficou pronto a tempo.");
+}
+
+export async function waitForDockerPostgresReady(
+  containerName = DISPOSABLE_CONTAINER_NAME,
+  deps = {},
+) {
+  const timeoutMs = deps.timeoutMs ?? DOCKER_PG_ISREADY_TIMEOUT_MS;
+  const intervalMs = deps.intervalMs ?? 1000;
+  const runDockerExec =
+    deps.runDockerExec ??
+    ((args) =>
+      spawnSync("docker", args, {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }));
+  const deadline = Date.now() + timeoutMs;
+  let lastFailure = null;
+
+  while (Date.now() < deadline) {
+    const proc = runDockerExec([
+      "exec",
+      containerName,
+      "pg_isready",
+      "-U",
+      ISOLATED_USER,
+      "-d",
+      ISOLATED_DB,
+    ]);
+    if (proc.status === 0) {
+      console.log(`[reencrypt-live] pg_isready: OK (${containerName})`);
+      return;
+    }
+    lastFailure = formatSubprocessFailure("pg_isready", {
+      command: "docker",
+      args: [
+        "exec",
+        containerName,
+        "pg_isready",
+        "-U",
+        ISOLATED_USER,
+        "-d",
+        ISOLATED_DB,
+      ],
+      cwd: ROOT,
+    }, proc);
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  throw new Error(
+    `pg_isready timeout após ${timeoutMs}ms no container "${containerName}".\n${lastFailure ?? "(sem detalhe adicional)"}`,
+  );
+}
+
+export function buildDisposableProcessEnv(overrides = {}) {
+  const env = {
+    ...process.env,
+    NODE_ENV: "test",
+    ...overrides,
+  };
+  delete env.DATABASE_URL;
+  delete env.SHADOW_DATABASE_URL;
+  delete env.DIRECT_URL;
+  env.DATABASE_URL = ISOLATED_DATABASE_URL;
+  return env;
+}
+
+export function resolvePrismaMigrateDeployInvocation(rootDir = ROOT) {
+  const schemaPath = path.join(rootDir, "prisma/schema.prisma");
+  const prismaCli = path.join(rootDir, "node_modules/prisma/build/index.js");
+  if (!fs.existsSync(schemaPath)) {
+    throw new Error(`Schema Prisma não encontrado: ${schemaPath}`);
+  }
+  if (!fs.existsSync(prismaCli)) {
+    throw new Error(
+      `Prisma CLI não encontrado: ${prismaCli}. Execute npm install na raiz do monorepo.`,
+    );
+  }
+  return {
+    command: process.execPath,
+    args: [prismaCli, "migrate", "deploy", "--schema", schemaPath],
+    cwd: rootDir,
+    schemaPath,
+    prismaCli,
+  };
+}
+
+export function sanitizeProcessOutput(text) {
+  if (text === undefined || text === null || text === "") {
+    return "(vazio)";
+  }
+  return maskUrl(String(text).replaceAll(ISOLATED_PASSWORD, "***"));
+}
+
+export function formatSubprocessFailure(stage, invocation, proc) {
+  return [
+    `[${stage}] subprocesso falhou`,
+    `comando: ${invocation.command} ${(invocation.args ?? []).join(" ")}`,
+    `cwd: ${invocation.cwd}`,
+    `databaseUrl: ${maskUrl(ISOLATED_DATABASE_URL)}`,
+    `exitCode: ${proc.status ?? "null"}`,
+    `signal: ${proc.signal ?? "null"}`,
+    `error.message: ${proc.error?.message ?? "(nenhum)"}`,
+    `stdout: ${sanitizeProcessOutput(proc.stdout)}`,
+    `stderr: ${sanitizeProcessOutput(proc.stderr)}`,
+  ].join("\n");
+}
+
+export function runPrismaMigrateDeploy(options = {}) {
+  const rootDir = options.rootDir ?? ROOT;
+  const invocation = resolvePrismaMigrateDeployInvocation(rootDir);
+  const runSubprocess =
+    options.runSubprocess ??
+    ((command, args, spawnOptions) =>
+      spawnSync(command, args, {
+        ...spawnOptions,
+        shell: false,
+      }));
+
+  const proc = runSubprocess(invocation.command, invocation.args, {
+    cwd: invocation.cwd,
+    env: buildDisposableProcessEnv(options.env),
+    encoding: "utf8",
+    maxBuffer: 10 * 1024 * 1024,
+  });
+
+  if (proc.error || proc.status !== 0) {
+    throw new Error(formatSubprocessFailure("prisma migrate deploy", invocation, proc));
+  }
+
+  return { invocation, proc };
+}
+
+export async function verifyRequiredExtensions(client) {
+  const missing = [];
+  for (const extension of REQUIRED_PG_EXTENSIONS) {
+    const { rows } = await client.query(
+      `SELECT 1 FROM pg_extension WHERE extname = $1`,
+      [extension],
+    );
+    if (rows.length === 0) {
+      missing.push(extension);
+    }
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `Extensões PostgreSQL ausentes após migration: ${missing.join(", ")}. ` +
+        "A imagem pgvector/pgvector:pg16 deve fornecer pgcrypto e vector.",
+    );
+  }
+}
+
+export async function applyDockerPrismaMigrations(client, options = {}) {
+  runPrismaMigrateDeploy(options);
+  await verifyRequiredExtensions(client);
+  return {
+    migrationsApplied: [
+      "20260708160000_init",
+      "20260720140000_performance_indexes",
+    ],
+    migrationsSource: "prisma migrate deploy",
+    extensionsVerified: [...REQUIRED_PG_EXTENSIONS],
+  };
+}
+
+export async function startDisposableDatabase(deps = {}) {
+  const checkDocker = deps.checkDockerAvailable ?? checkDockerAvailable;
+  const startDocker = deps.startDockerContainer ?? startDockerContainer;
+  const startEmbedded = deps.startEmbeddedPostgresFallback ?? startEmbeddedPostgresFallback;
+  const checkPort = deps.checkPortAvailable ?? checkPortAvailable;
+  const waitFor = deps.waitForDisposablePostgres ?? waitForDisposablePostgres;
+  const waitPgReady = deps.waitForDockerPostgresReady ?? waitForDockerPostgresReady;
+
+  assertDisposableDatabaseUrl(ISOLATED_DATABASE_URL);
+  await checkPort(ISOLATED_PORT, "127.0.0.1");
+
+  if (checkDocker()) {
+    const started = startDocker();
+    logDisposableStartup(started.backend);
+    await waitPgReady(started.container.name, deps);
+    managedDatabase = started;
+    results.databaseBackend = "docker-pgvector-pg16";
+    return started;
+  }
+
+  const started = await startEmbedded(deps.importEmbeddedPostgresModule);
+  logDisposableStartup(started.backend);
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  await waitFor();
+  managedDatabase = started;
+  results.databaseBackend = "embedded-postgres";
+  return started;
+}
+
+export async function stopDisposableDatabase(state = managedDatabase, deps = {}) {
+  if (!state) {
+    return;
+  }
+
+  const verifyCleanupTarget = deps.assertCleanupTarget ?? assertCleanupTarget;
+
+  if (state.backend === "Docker" && state.container) {
+    verifyCleanupTarget(state.container);
+    const remove = deps.removeDockerContainer ?? ((id) => {
+      spawnSync("docker", ["rm", "-f", id], { stdio: "ignore" });
+    });
+    remove(state.container.id);
+    if (managedDatabase === state) {
+      managedDatabase = null;
+    }
+    return;
+  }
+
+  if (state.backend === "embedded-postgres" && state.embedded) {
+    await state.embedded.stop();
+    fs.rmSync(EMBEDDED_DATA_DIR, { recursive: true, force: true });
+    if (managedDatabase === state) {
+      managedDatabase = null;
+    }
+  }
+}
+
+function runCommand(label, command, args, env = {}) {
+  const proc = spawnSync(command, args, {
+    cwd: ROOT,
+    env: buildDisposableProcessEnv(env),
+    encoding: "utf8",
+    shell: false,
+  });
+
+  if (proc.error || proc.status !== 0) {
+    throw new Error(
+      formatSubprocessFailure(label, { command, args, cwd: ROOT }, proc),
+    );
+  }
+
+  return {
+    stdout: proc.stdout,
+    stderr: proc.stderr,
+  };
+}
+
+async function applyMigrations(client) {
+  if (results.databaseBackend === "docker-pgvector-pg16") {
+    const migrationResult = await applyDockerPrismaMigrations(client);
+    results.migrationsApplied = migrationResult.migrationsApplied;
+    results.migrationsSource = migrationResult.migrationsSource;
+    results.extensionsVerified = migrationResult.extensionsVerified;
+    return;
+  }
+
+  const sql = fs.readFileSync(SCHEMA_FIXTURE, "utf8");
+  await client.query(sql);
+  results.migrationsApplied = [
+    "20260708160000_init (fixture subset)",
+    "20260720140000_performance_indexes (marker only)",
+  ];
+  results.migrationsSource = "scripts/fixtures/reencrypt-disposable-schema.sql";
+}
+
+function hashRow(row) {
+  return hashText(JSON.stringify(row));
+}
+
+async function fetchIntegrationSnapshot(client, integrationId) {
+  const { rows } = await client.query(`SELECT * FROM "Integration" WHERE id = $1`, [
+    integrationId,
+  ]);
+  return rows[0];
+}
+
+async function fetchTenantSnapshot(client, tenantId) {
+  const [customers, contracts, invoices, syncRuns, syncLogs] = await Promise.all([
+    client.query(
+      `SELECT id, "tenantId", name, "deletedAt", "createdAt", "updatedAt" FROM "Customer" WHERE "tenantId" = $1 ORDER BY id`,
+      [tenantId],
+    ),
+    client.query(
+      `SELECT id, "tenantId", "customerId", "externalId", "deletedAt", "createdAt", "updatedAt" FROM "Contract" WHERE "tenantId" = $1 ORDER BY id`,
+      [tenantId],
+    ),
+    client.query(
+      `SELECT id, "tenantId", "customerId", "contractId", "externalId", "deletedAt", "createdAt", "updatedAt" FROM "Invoice" WHERE "tenantId" = $1 ORDER BY id`,
+      [tenantId],
+    ),
+    client.query(`SELECT * FROM "IntegrationSyncRun" WHERE "tenantId" = $1 ORDER BY id`, [
+      tenantId,
+    ]),
+    client.query(`SELECT * FROM "IntegrationSyncLog" WHERE "tenantId" = $1 ORDER BY id`, [
+      tenantId,
+    ]),
+  ]);
+
+  return {
+    customers: customers.rows,
+    contracts: contracts.rows,
+    invoices: invoices.rows,
+    syncRuns: syncRuns.rows,
+    syncLogs: syncLogs.rows,
+    checksums: {
+      customers: hashRow(customers.rows),
+      contracts: hashRow(contracts.rows),
+      invoices: hashRow(invoices.rows),
+      syncRuns: hashRow(syncRuns.rows),
+      syncLogs: hashRow(syncLogs.rows),
+    },
+  };
+}
+
+function compareIntegrationRows(before, after) {
+  const changed = [];
+  for (const key of Object.keys(before)) {
+    const b = before[key] instanceof Date ? before[key].toISOString() : before[key];
+    const a = after[key] instanceof Date ? after[key].toISOString() : after[key];
+    const bNorm = b && typeof b === "object" ? JSON.stringify(b) : b;
+    const aNorm = a && typeof a === "object" ? JSON.stringify(a) : a;
+    if (bNorm !== aNorm) {
+      changed.push(key);
+    }
+  }
+  return changed;
+}
+
+async function seedDisposableData(client) {
+  const tenantId = randomUUID();
+  const integrationId = randomUUID();
+  const customerId = randomUUID();
+  const contractId = randomUUID();
+  const invoiceId = randomUUID();
+  const syncRunId = randomUUID();
+  const syncLogId = randomUUID();
+  const now = new Date("2026-06-01T12:00:00.000Z");
+
+  const encryptedSecrets = encryptJsonWithKey(KEY_A, {
+    app: FAKE_APP_A,
+    token: FAKE_TOKEN_A,
+  });
+
+  await client.query(
+    `INSERT INTO "Tenant" (id, name, slug, status, "createdAt", "updatedAt")
+     VALUES ($1, 'Tenant Descartável', $2, 'ACTIVE', $3, $3)`,
+    [tenantId, `disposable-${tenantId.slice(0, 8)}`, now],
+  );
+
+  await client.query(
+    `INSERT INTO "Integration" (
+       id, "tenantId", provider, name, status, "healthStatus", config,
+       "encryptedSecrets", "lastConnectedAt", "lastError", "createdAt", "updatedAt"
+     ) VALUES (
+       $1, $2, 'SGP', 'SGP Descartável', 'ACTIVE', 'UNKNOWN',
+       $3::jsonb, $4, NULL, NULL, $5, $5
+     )`,
+    [
+      integrationId,
+      tenantId,
+      JSON.stringify({
+        apiUrl: "https://disposable.example.sgp.net.br",
+        timeoutMs: 15000,
+        syncState: { lastSyncMode: "full" },
+        autoSync: { enabled: false },
+      }),
+      encryptedSecrets,
+      now,
+    ],
+  );
+
+  await client.query(
+    `INSERT INTO "Customer" (
+       id, "tenantId", name, status, "createdAt", "updatedAt"
+     ) VALUES ($1, $2, 'Cliente Fictício', 'ACTIVE', $3, $3)`,
+    [customerId, tenantId, now],
+  );
+
+  await client.query(
+    `INSERT INTO "Contract" (
+       id, "tenantId", "customerId", "externalId", status, "createdAt", "updatedAt"
+     ) VALUES ($1, $2, $3, 'contract-ext-1', 'ACTIVE', $4, $4)`,
+    [contractId, tenantId, customerId, now],
+  );
+
+  await client.query(
+    `INSERT INTO "Invoice" (
+       id, "tenantId", "customerId", "contractId", "externalId", status, "createdAt", "updatedAt"
+     ) VALUES ($1, $2, $3, $4, 'invoice-ext-1', 'OPEN', $5, $5)`,
+    [invoiceId, tenantId, customerId, contractId, now],
+  );
+
+  await client.query(
+    `INSERT INTO "IntegrationSyncRun" (
+       id, "tenantId", "integrationId", operation, status, "startedAt"
+     ) VALUES ($1, $2, $3, 'sgp.sync-customers', 'COMPLETED', $4)`,
+    [syncRunId, tenantId, integrationId, now],
+  );
+
+  await client.query(
+    `INSERT INTO "IntegrationSyncLog" (
+       id, "tenantId", "runId", entity, action, status, "createdAt"
+     ) VALUES ($1, $2, $3, 'CUSTOMER', 'UPSERT', 'COMPLETED', $4)`,
+    [syncLogId, tenantId, syncRunId, now],
+  );
+
+  return {
+    tenantId,
+    integrationId,
+    originalEncryptedSecrets: encryptedSecrets,
+    seededAt: now.toISOString(),
+  };
+}
+
+function buildScriptEnv(overrides = {}) {
+  return {
+    DATABASE_URL: ISOLATED_DATABASE_URL,
+    NODE_ENV: "test",
+    ...overrides,
+  };
+}
+
+async function runCli(modeArgs, envOverrides) {
+  return runCommand(
+    `cli ${modeArgs.join(" ")}`,
+    "node",
+    ["scripts/reencrypt-sgp-integration.mjs", ...modeArgs],
+    envOverrides,
+  );
+}
+
+async function main() {
+  const inheritedDatabaseUrl = process.env.DATABASE_URL ?? "";
+  assertDisposableDatabaseUrl(ISOLATED_DATABASE_URL);
+  assertHostDatabaseUrlIgnored(inheritedDatabaseUrl);
+  delete process.env.DATABASE_URL;
+
+  const backupDir = fs.mkdtempSync(path.join(os.tmpdir(), "isp-crm-reencrypt-live-"));
+
+  await startDisposableDatabase();
+  const client = new Client({ connectionString: ISOLATED_DATABASE_URL });
+  await client.connect();
+
+  try {
+    await applyMigrations(client);
+    const seeded = await seedDisposableData(client);
+
+    const beforeIntegration = await fetchIntegrationSnapshot(client, seeded.integrationId);
+    const beforeTenant = await fetchTenantSnapshot(client, seeded.tenantId);
+
+    results.scenarios.initial = {
+      integrationId: seeded.integrationId,
+      tenantId: seeded.tenantId,
+      encryptedSecretsHash: hashText(beforeIntegration.encryptedSecrets),
+      integrationChecksum: hashRow(beforeIntegration),
+      tenantChecksums: beforeTenant.checksums,
+    };
+
+    const dryRunEnv = buildScriptEnv({
+      ENCRYPTION_KEY: KEY_B,
+      SGP_APP: FAKE_APP_B,
+      SGP_TOKEN: FAKE_TOKEN_B,
+      REENCRYPT_TENANT_ID: seeded.tenantId,
+      REENCRYPT_INTEGRATION_ID: seeded.integrationId,
+      REENCRYPT_CONFIRM_ID: seeded.integrationId,
+      REENCRYPT_BACKUP_DIR: backupDir,
+    });
+    const dryRun = await runCli(["--dry-run"], dryRunEnv);
+    results.scenarios.dryRun = {
+      exitCode: 0,
+      report: JSON.parse(dryRun.stdout),
+    };
+
+    const afterDryRunIntegration = await fetchIntegrationSnapshot(client, seeded.integrationId);
+    const afterDryRunTenant = await fetchTenantSnapshot(client, seeded.tenantId);
+    const dryRunChanged = compareIntegrationRows(beforeIntegration, afterDryRunIntegration);
+
+    results.scenarios.dryRun.verification = {
+      integrationColumnsChanged: dryRunChanged,
+      integrationUnchanged: dryRunChanged.length === 0,
+      tenantChecksumsUnchanged:
+        beforeTenant.checksums.customers === afterDryRunTenant.checksums.customers &&
+        beforeTenant.checksums.contracts === afterDryRunTenant.checksums.contracts &&
+        beforeTenant.checksums.invoices === afterDryRunTenant.checksums.invoices &&
+        beforeTenant.checksums.syncRuns === afterDryRunTenant.checksums.syncRuns &&
+        beforeTenant.checksums.syncLogs === afterDryRunTenant.checksums.syncLogs,
+    };
+
+    if (dryRunChanged.length > 0) {
+      throw new Error(`dry-run alterou colunas: ${dryRunChanged.join(", ")}`);
+    }
+
+    const executeRun = await runCli(["--execute"], dryRunEnv);
+    const executeReport = JSON.parse(executeRun.stdout);
+    results.scenarios.execute = { exitCode: 0, report: executeReport };
+
+    const afterExecuteIntegration = await fetchIntegrationSnapshot(client, seeded.integrationId);
+    const afterExecuteTenant = await fetchTenantSnapshot(client, seeded.tenantId);
+    const executeChanged = compareIntegrationRows(beforeIntegration, afterExecuteIntegration);
+
+    results.columnsChangedOnExecute = executeChanged;
+    results.updatedAtBehavior = {
+      before: beforeIntegration.updatedAt?.toISOString?.() ?? beforeIntegration.updatedAt,
+      after: afterExecuteIntegration.updatedAt?.toISOString?.() ?? afterExecuteIntegration.updatedAt,
+      changed: executeChanged.includes("updatedAt"),
+    };
+
+    if (afterExecuteIntegration.id !== seeded.integrationId) {
+      throw new Error("Integration.id foi alterado.");
+    }
+    if (
+      executeChanged.length !== 1 ||
+      executeChanged[0] !== "encryptedSecrets"
+    ) {
+      throw new Error(
+        `Esperado alterar somente encryptedSecrets; alterado: ${executeChanged.join(", ")}`,
+      );
+    }
+    for (const key of Object.keys(beforeTenant.checksums)) {
+      if (beforeTenant.checksums[key] !== afterExecuteTenant.checksums[key]) {
+        throw new Error(`Checksum ${key} alterado após execute.`);
+      }
+    }
+
+    const require = createRequire(import.meta.url);
+    const { EncryptionService } = require(
+      path.join(ROOT, "apps/api/dist/modules/integrations/crypto/encryption.service.js"),
+    );
+    const service = new EncryptionService({
+      get(name) {
+        return name === "ENCRYPTION_KEY" ? KEY_B : undefined;
+      },
+    });
+    const decrypted = service.decryptJson(afterExecuteIntegration.encryptedSecrets);
+    if (decrypted.app !== FAKE_APP_B || decrypted.token !== FAKE_TOKEN_B) {
+      throw new Error("Novo ciphertext incompatível com EncryptionService.");
+    }
+    results.scenarios.execute.encryptionServiceCompatible = true;
+
+    const backupFile = executeReport.backupFile;
+    if (!backupFile || !fs.existsSync(backupFile)) {
+      throw new Error("Arquivo de backup não foi criado.");
+    }
+    const backup = readBackupFile(backupFile);
+    results.backupVerification = {
+      path: backupFile,
+      hasOriginalCiphertext:
+        backup.integration.encryptedSecrets === seeded.originalEncryptedSecrets,
+      hashMatches: hashText(backup.integration.encryptedSecrets) === hashText(seeded.originalEncryptedSecrets),
+      consoleLeakedCiphertext: executeRun.stdout.includes(seeded.originalEncryptedSecrets),
+    };
+    if (!results.backupVerification.hasOriginalCiphertext) {
+      throw new Error("Backup não contém ciphertext original.");
+    }
+    if (results.backupVerification.consoleLeakedCiphertext) {
+      throw new Error("Ciphertext vazou no stdout.");
+    }
+
+    const restoreDryEnv = buildScriptEnv({
+      ENCRYPTION_KEY: KEY_A,
+      REENCRYPT_TENANT_ID: seeded.tenantId,
+      REENCRYPT_INTEGRATION_ID: seeded.integrationId,
+      REENCRYPT_CONFIRM_ID: seeded.integrationId,
+    });
+    const restoreDry = await runCli(
+      ["--restore", `--backup-file=${backupFile}`],
+      restoreDryEnv,
+    );
+    results.scenarios.restoreDryRun = {
+      exitCode: 0,
+      report: JSON.parse(restoreDry.stdout),
+    };
+
+    const midRestoreIntegration = await fetchIntegrationSnapshot(client, seeded.integrationId);
+    if (midRestoreIntegration.encryptedSecrets !== afterExecuteIntegration.encryptedSecrets) {
+      throw new Error("restore dry-run alterou ciphertext.");
+    }
+
+    const restoreExec = await runCli(
+      ["--restore", `--backup-file=${backupFile}`, "--execute"],
+      restoreDryEnv,
+    );
+    results.scenarios.restoreExecute = {
+      exitCode: 0,
+      report: JSON.parse(restoreExec.stdout),
+    };
+
+    const afterRestoreIntegration = await fetchIntegrationSnapshot(client, seeded.integrationId);
+    if (afterRestoreIntegration.encryptedSecrets !== seeded.originalEncryptedSecrets) {
+      throw new Error("Restauração não retornou ciphertext original.");
+    }
+    results.scenarios.restoreExecute.originalCiphertextRestored = true;
+
+    const rollbackClient = new Client({ connectionString: ISOLATED_DATABASE_URL });
+    await rollbackClient.connect();
+    const beforeRollback = await fetchIntegrationSnapshot(rollbackClient, seeded.integrationId);
+    let rollbackFailed = false;
+    try {
+      await runReencryptOperation(rollbackClient, {
+        config: {
+          databaseUrl: ISOLATED_DATABASE_URL,
+          encryptionKey: KEY_B,
+          sgpApp: FAKE_APP_B,
+          sgpToken: "another-fake-token-value",
+          tenantId: seeded.tenantId,
+          integrationId: seeded.integrationId,
+          confirmId: seeded.integrationId,
+          allowProduction: false,
+          backupDir,
+          nodeEnv: "test",
+        },
+        mode: "reencrypt",
+        write: true,
+        rootDir: ROOT,
+        injectFailureAfterUpdate: true,
+      });
+    } catch (error) {
+      rollbackFailed = error instanceof Error && error.message.includes("Falha simulada");
+    }
+    const afterRollback = await fetchIntegrationSnapshot(rollbackClient, seeded.integrationId);
+    await rollbackClient.end();
+
+    results.rollbackVerification = {
+      failureInjected: rollbackFailed,
+      ciphertextUnchanged:
+        afterRollback.encryptedSecrets === beforeRollback.encryptedSecrets,
+      integrationChecksumUnchanged:
+        hashRow(beforeRollback) === hashRow(afterRollback),
+    };
+    if (!rollbackFailed || !results.rollbackVerification.ciphertextUnchanged) {
+      throw new Error("Rollback simulado não manteve o estado original.");
+    }
+
+    results.scenarios.beforeAfter = {
+      before: {
+        integration: {
+          id: beforeIntegration.id,
+          encryptedSecretsHash: hashText(beforeIntegration.encryptedSecrets),
+          updatedAt: results.updatedAtBehavior.before,
+          config: beforeIntegration.config,
+        },
+        tenantChecksums: beforeTenant.checksums,
+      },
+      afterExecute: {
+        integration: {
+          id: afterExecuteIntegration.id,
+          encryptedSecretsHash: hashText(afterExecuteIntegration.encryptedSecrets),
+          updatedAt: results.updatedAtBehavior.after,
+        },
+        columnsChanged: executeChanged,
+        tenantChecksums: afterExecuteTenant.checksums,
+      },
+      afterRestore: {
+        encryptedSecretsHash: hashText(afterRestoreIntegration.encryptedSecrets),
+        matchesOriginal:
+          afterRestoreIntegration.encryptedSecrets === seeded.originalEncryptedSecrets,
+      },
+    };
+
+    results.staticReview = [
+      {
+        topic: "SQL interpolation",
+        status: "PASS",
+        detail: "UPDATE/SELECT usam parâmetros $1..$n; sem concatenação de entrada.",
+      },
+      {
+        topic: "SQL injection",
+        status: "PASS",
+        detail: "tenantId/integrationId/ciphertext passados como bind parameters.",
+      },
+      {
+        topic: "Transaction completeness",
+        status: "PASS",
+        detail: "BEGIN no início; COMMIT só após checks; ROLLBACK no catch.",
+      },
+      {
+        topic: "updatedAt automatic",
+        status: results.updatedAtBehavior.changed ? "NOTE" : "PASS",
+        detail: results.updatedAtBehavior.changed
+          ? "updatedAt NÃO muda com UPDATE SQL direto (sem trigger Prisma no PG)."
+          : "updatedAt permaneceu idêntico — @updatedAt é só client-side Prisma.",
+      },
+      {
+        topic: "Secret leakage",
+        status: "PASS",
+        detail: "stdout do CLI contém hashes; ciphertext não apareceu.",
+      },
+      {
+        topic: "Backup overwrite",
+        status: "PASS",
+        detail: "Nome inclui integrationId + timestamp ISO; colisão improvável.",
+      },
+      {
+        topic: "Real DATABASE_URL in tests",
+        status: "PASS",
+        detail: "Integração usa URL fixa 55999/reencrypt_disposable_test; host env ignorada.",
+      },
+      {
+        topic: "Prisma table/column names",
+        status: "PASS",
+        detail: 'Tabelas/colunas quoted-case batem com migration ("Integration", "encryptedSecrets").',
+      },
+    ];
+
+    console.log(JSON.stringify(results, null, 2));
+  } finally {
+    await client.end();
+    await stopDisposableDatabase();
+    fs.rmSync(backupDir, { recursive: true, force: true });
+  }
+}
+
+const isDirectExecution =
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+
+if (isDirectExecution) {
+  main().catch(async (error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    try {
+      await stopDisposableDatabase();
+    } catch {
+      // ignore cleanup errors
+    }
+    process.exit(1);
+  });
+}

@@ -1,0 +1,59 @@
+{
+  "name": "isp-crm-saas",
+  "version": "1.0.0",
+  "description": "CRM SaaS multitenant para provedores de internet",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "node scripts/ensure-db.mjs && npm run prisma:generate && npm run db:migrate:deploy && node scripts/dev.mjs",
+    "dev:no-db": "node scripts/dev.mjs",
+    "build": "npm run build -w apps/api && npm run build -w apps/web",
+    "test": "npm run test -w apps/api && npm run test -w apps/web",
+    "audit": "npm audit --workspaces",
+    "typecheck": "npm run typecheck -w apps/api && npm run typecheck -w apps/web",
+    "lint": "npm run typecheck",
+    "db:migrate": "prisma migrate dev --schema prisma/schema.prisma",
+    "db:migrate:deploy": "prisma migrate deploy --schema prisma/schema.prisma",
+    "db:migrate:status": "prisma migrate status --schema prisma/schema.prisma",
+    "db:migrate:reset": "prisma migrate reset --schema prisma/schema.prisma --force",
+    "prisma:generate": "prisma generate --schema prisma/schema.prisma",
+    "prisma:validate": "prisma validate --schema prisma/schema.prisma",
+    "prisma:validate:migrations": "node scripts/validate-prisma.mjs",
+    "prisma:format": "prisma format --schema prisma/schema.prisma",
+    "homologate:sgp": "node scripts/homologate-sgp-real.mjs",
+    "investigate:sgp": "node scripts/investigate-sgp-sync.mjs",
+    "audit:sgp-regression": "node scripts/audit-sgp-regression.mjs",
+    "bootstrap:production": "node scripts/bootstrap-production.mjs",
+    "test:bootstrap": "node --test scripts/bootstrap-production.spec.mjs",
+    "reencrypt:sgp-integration": "node scripts/reencrypt-sgp-integration.mjs",
+    "test:reencrypt-sgp-integration": "npm run build -w apps/api && node --test scripts/reencrypt-sgp-integration.spec.mjs",
+    "test:reencrypt-sgp-integration:live": "npm run build -w apps/api && node scripts/reencrypt-sgp-integration.integration.mjs",
+    "load-test": "node scripts/load-test.mjs",
+    "db:test-migrate-deploy": "node scripts/test-migrate-deploy.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/paiao-bruno/Projeto_CRM.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "UNLICENSED",
+  "bugs": {
+    "url": "https://github.com/paiao-bruno/Projeto_CRM/issues"
+  },
+  "homepage": "https://github.com/paiao-bruno/Projeto_CRM#readme",
+  "devDependencies": {
+    "prisma": "^7.8.0"
+  },
+  "dependencies": {
+    "@prisma/client": "^7.8.0"
+  },
+  "private": true,
+  "type": "module",
+  "overrides": {
+    "@nestjs/platform-express": {
+      "multer": "2.2.0"
+    }
+  }
+}
