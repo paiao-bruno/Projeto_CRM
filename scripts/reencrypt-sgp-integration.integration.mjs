@@ -28,6 +28,9 @@ export const ISOLATED_PASSWORD = "reencrypt_test";
 export const ISOLATED_DATABASE_URL = `postgresql://${ISOLATED_USER}:${ISOLATED_PASSWORD}@127.0.0.1:${ISOLATED_PORT}/${ISOLATED_DB}?schema=public`;
 const SCHEMA_FIXTURE = path.join(ROOT, "scripts/fixtures/reencrypt-disposable-schema.sql");
 const EMBEDDED_DATA_DIR = path.join(os.tmpdir(), "isp-crm-reencrypt-embedded-pg");
+export const PRISMA_SCHEMA_PATH = path.join(ROOT, "prisma/schema.prisma");
+export const REQUIRED_PG_EXTENSIONS = ["pgcrypto", "vector"];
+export const DOCKER_PG_ISREADY_TIMEOUT_MS = 60_000;
 
 const KEY_A = "disposable-encryption-key-A-32chars!";
 const KEY_B = "disposable-encryption-key-B-32chars!";
@@ -271,12 +274,175 @@ export async function waitForDisposablePostgres(databaseUrl = ISOLATED_DATABASE_
   throw new Error("PostgreSQL descartável não ficou pronto a tempo.");
 }
 
+export async function waitForDockerPostgresReady(
+  containerName = DISPOSABLE_CONTAINER_NAME,
+  deps = {},
+) {
+  const timeoutMs = deps.timeoutMs ?? DOCKER_PG_ISREADY_TIMEOUT_MS;
+  const intervalMs = deps.intervalMs ?? 1000;
+  const runDockerExec =
+    deps.runDockerExec ??
+    ((args) =>
+      spawnSync("docker", args, {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }));
+  const deadline = Date.now() + timeoutMs;
+  let lastFailure = null;
+
+  while (Date.now() < deadline) {
+    const proc = runDockerExec([
+      "exec",
+      containerName,
+      "pg_isready",
+      "-U",
+      ISOLATED_USER,
+      "-d",
+      ISOLATED_DB,
+    ]);
+    if (proc.status === 0) {
+      console.log(`[reencrypt-live] pg_isready: OK (${containerName})`);
+      return;
+    }
+    lastFailure = formatSubprocessFailure("pg_isready", {
+      command: "docker",
+      args: [
+        "exec",
+        containerName,
+        "pg_isready",
+        "-U",
+        ISOLATED_USER,
+        "-d",
+        ISOLATED_DB,
+      ],
+      cwd: ROOT,
+    }, proc);
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+
+  throw new Error(
+    `pg_isready timeout após ${timeoutMs}ms no container "${containerName}".\n${lastFailure ?? "(sem detalhe adicional)"}`,
+  );
+}
+
+export function buildDisposableProcessEnv(overrides = {}) {
+  const env = {
+    ...process.env,
+    NODE_ENV: "test",
+    ...overrides,
+  };
+  delete env.DATABASE_URL;
+  delete env.SHADOW_DATABASE_URL;
+  delete env.DIRECT_URL;
+  env.DATABASE_URL = ISOLATED_DATABASE_URL;
+  return env;
+}
+
+export function resolvePrismaMigrateDeployInvocation(rootDir = ROOT) {
+  const schemaPath = path.join(rootDir, "prisma/schema.prisma");
+  const prismaCli = path.join(rootDir, "node_modules/prisma/build/index.js");
+  if (!fs.existsSync(schemaPath)) {
+    throw new Error(`Schema Prisma não encontrado: ${schemaPath}`);
+  }
+  if (!fs.existsSync(prismaCli)) {
+    throw new Error(
+      `Prisma CLI não encontrado: ${prismaCli}. Execute npm install na raiz do monorepo.`,
+    );
+  }
+  return {
+    command: process.execPath,
+    args: [prismaCli, "migrate", "deploy", "--schema", schemaPath],
+    cwd: rootDir,
+    schemaPath,
+    prismaCli,
+  };
+}
+
+export function sanitizeProcessOutput(text) {
+  if (text === undefined || text === null || text === "") {
+    return "(vazio)";
+  }
+  return maskUrl(String(text).replaceAll(ISOLATED_PASSWORD, "***"));
+}
+
+export function formatSubprocessFailure(stage, invocation, proc) {
+  return [
+    `[${stage}] subprocesso falhou`,
+    `comando: ${invocation.command} ${(invocation.args ?? []).join(" ")}`,
+    `cwd: ${invocation.cwd}`,
+    `databaseUrl: ${maskUrl(ISOLATED_DATABASE_URL)}`,
+    `exitCode: ${proc.status ?? "null"}`,
+    `signal: ${proc.signal ?? "null"}`,
+    `error.message: ${proc.error?.message ?? "(nenhum)"}`,
+    `stdout: ${sanitizeProcessOutput(proc.stdout)}`,
+    `stderr: ${sanitizeProcessOutput(proc.stderr)}`,
+  ].join("\n");
+}
+
+export function runPrismaMigrateDeploy(options = {}) {
+  const rootDir = options.rootDir ?? ROOT;
+  const invocation = resolvePrismaMigrateDeployInvocation(rootDir);
+  const runSubprocess =
+    options.runSubprocess ??
+    ((command, args, spawnOptions) =>
+      spawnSync(command, args, {
+        ...spawnOptions,
+        shell: false,
+      }));
+
+  const proc = runSubprocess(invocation.command, invocation.args, {
+    cwd: invocation.cwd,
+    env: buildDisposableProcessEnv(options.env),
+    encoding: "utf8",
+    maxBuffer: 10 * 1024 * 1024,
+  });
+
+  if (proc.error || proc.status !== 0) {
+    throw new Error(formatSubprocessFailure("prisma migrate deploy", invocation, proc));
+  }
+
+  return { invocation, proc };
+}
+
+export async function verifyRequiredExtensions(client) {
+  const missing = [];
+  for (const extension of REQUIRED_PG_EXTENSIONS) {
+    const { rows } = await client.query(
+      `SELECT 1 FROM pg_extension WHERE extname = $1`,
+      [extension],
+    );
+    if (rows.length === 0) {
+      missing.push(extension);
+    }
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `Extensões PostgreSQL ausentes após migration: ${missing.join(", ")}. ` +
+        "A imagem pgvector/pgvector:pg16 deve fornecer pgcrypto e vector.",
+    );
+  }
+}
+
+export async function applyDockerPrismaMigrations(client, options = {}) {
+  runPrismaMigrateDeploy(options);
+  await verifyRequiredExtensions(client);
+  return {
+    migrationsApplied: [
+      "20260708160000_init",
+      "20260720140000_performance_indexes",
+    ],
+    migrationsSource: "prisma migrate deploy",
+    extensionsVerified: [...REQUIRED_PG_EXTENSIONS],
+  };
+}
+
 export async function startDisposableDatabase(deps = {}) {
   const checkDocker = deps.checkDockerAvailable ?? checkDockerAvailable;
   const startDocker = deps.startDockerContainer ?? startDockerContainer;
   const startEmbedded = deps.startEmbeddedPostgresFallback ?? startEmbeddedPostgresFallback;
   const checkPort = deps.checkPortAvailable ?? checkPortAvailable;
   const waitFor = deps.waitForDisposablePostgres ?? waitForDisposablePostgres;
+  const waitPgReady = deps.waitForDockerPostgresReady ?? waitForDockerPostgresReady;
 
   assertDisposableDatabaseUrl(ISOLATED_DATABASE_URL);
   await checkPort(ISOLATED_PORT, "127.0.0.1");
@@ -284,7 +450,7 @@ export async function startDisposableDatabase(deps = {}) {
   if (checkDocker()) {
     const started = startDocker();
     logDisposableStartup(started.backend);
-    await waitFor();
+    await waitPgReady(started.container.name, deps);
     managedDatabase = started;
     results.databaseBackend = "docker-pgvector-pg16";
     return started;
@@ -328,24 +494,16 @@ export async function stopDisposableDatabase(state = managedDatabase, deps = {})
 }
 
 function runCommand(label, command, args, env = {}) {
-  const resolvedEnv = {
-    ...process.env,
-    DATABASE_URL: ISOLATED_DATABASE_URL,
-    NODE_ENV: "test",
-    ...env,
-  };
-  delete resolvedEnv.DATABASE_URL;
-  resolvedEnv.DATABASE_URL = ISOLATED_DATABASE_URL;
-
   const proc = spawnSync(command, args, {
     cwd: ROOT,
-    env: resolvedEnv,
+    env: buildDisposableProcessEnv(env),
     encoding: "utf8",
+    shell: false,
   });
 
-  if (proc.status !== 0) {
+  if (proc.error || proc.status !== 0) {
     throw new Error(
-      `${label} falhou (exit ${proc.status})\nstdout: ${proc.stdout}\nstderr: ${proc.stderr}`,
+      formatSubprocessFailure(label, { command, args, cwd: ROOT }, proc),
     );
   }
 
@@ -357,23 +515,10 @@ function runCommand(label, command, args, env = {}) {
 
 async function applyMigrations(client) {
   if (results.databaseBackend === "docker-pgvector-pg16") {
-    const proc = spawnSync(
-      "npx",
-      ["prisma", "migrate", "deploy", "--schema", "prisma/schema.prisma"],
-      {
-        cwd: ROOT,
-        env: { ...process.env, DATABASE_URL: ISOLATED_DATABASE_URL },
-        encoding: "utf8",
-      },
-    );
-    if (proc.status !== 0) {
-      throw new Error(`migrate deploy falhou: ${proc.stderr}`);
-    }
-    results.migrationsApplied = [
-      "20260708160000_init",
-      "20260720140000_performance_indexes",
-    ];
-    results.migrationsSource = "prisma migrate deploy";
+    const migrationResult = await applyDockerPrismaMigrations(client);
+    results.migrationsApplied = migrationResult.migrationsApplied;
+    results.migrationsSource = migrationResult.migrationsSource;
+    results.extensionsVerified = migrationResult.extensionsVerified;
     return;
   }
 
