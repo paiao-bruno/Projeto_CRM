@@ -21,8 +21,14 @@ import {
   runSubprocessSync,
 } from "./lib/cross-platform-spawn.mjs";
 import {
-  callSgpDirect,
+  callSgpDirectWithRetry,
+  classifyDirectSgpProbeResult,
   createStepRunner,
+  DEFAULT_SGP_DIRECT_ENDPOINTS,
+  findExistingCredential,
+  fetchPaginatedWithRetry,
+  normalizeSgpApiUrl,
+  redactSgpRequestUrl,
   resolveHomologationCredentials,
   sanitizeText,
   summarizeSgpBody,
@@ -41,11 +47,11 @@ const SGP = resolveHomologationCredentials(process.env);
 const ADMIN_EMAIL = SGP.adminEmail;
 const ADMIN_PASSWORD = SGP.adminPassword;
 
-const SGP_ENDPOINTS = [
-  { id: "sgp-customers", entity: "customers", path: "/api/ura/clientes/" },
-  { id: "sgp-contracts", entity: "contracts", path: "/api/contrato/list/" },
-  { id: "sgp-invoices", entity: "invoices", path: "/api/ura/titulos/" },
-];
+const SGP_ENDPOINTS = DEFAULT_SGP_DIRECT_ENDPOINTS.map((endpoint) => ({
+  ...endpoint,
+  path: process.env[endpoint.envVar ?? ""]?.trim() || endpoint.path,
+  method: process.env[endpoint.methodEnvVar ?? ""]?.trim()?.toUpperCase() || endpoint.method,
+}));
 
 const report = {
   startedAt: new Date().toISOString(),
@@ -287,26 +293,62 @@ async function main() {
     passLegacy("login", `${loginMs}ms`);
 
     for (const endpoint of SGP_ENDPOINTS) {
-      const result = await callSgpDirect(SGP, endpoint.path, { limit: 50, offset: 0 });
+      const result = await callSgpDirectWithRetry(SGP, endpoint.path, { limit: 50, offset: 0 }, {
+        method: endpoint.method,
+        maxAttempts: 5,
+        baseDelayMs: 1000,
+        sleep: wait,
+      });
+      const classification = classifyDirectSgpProbeResult(endpoint, result);
       report.sgpDirect[endpoint.id] = {
         endpoint: endpoint.path,
+        method: endpoint.method,
+        requestUrl: redactSgpRequestUrl(result.requestUrl),
         ok: result.ok,
         status: result.status,
         durationMs: result.durationMs,
         structure: result.structure,
+        classification: classification.classification,
+        directProbeOnly: endpoint.directProbeOnly ?? false,
+        blocksProduction: classification.blocksProduction,
+        attempts: result.attempts ?? 1,
+        note: classification.note ?? null,
       };
 
       if (result.ok) {
         steps.pass(endpoint.id, {
           endpoint: endpoint.path,
+          method: endpoint.method,
+          requestUrl: redactSgpRequestUrl(result.requestUrl),
           structure: result.structure,
+        });
+      } else if (classification.classification === "direct-probe-method-not-allowed") {
+        steps.partial(endpoint.id, `HTTP ${result.status} na sonda direta (${endpoint.method} ${endpoint.path}) — não bloqueia sync CRM`, {
+          endpoint: endpoint.path,
+          method: endpoint.method,
+          requestUrl: redactSgpRequestUrl(result.requestUrl),
+          note: classification.note,
+        });
+      } else if (result.status === 429 && result.rateLimitExhausted) {
+        steps.fail(endpoint.id, result.rateLimitDiagnostic ?? `HTTP 429 esgotou tentativas`, {
+          endpoint: endpoint.path,
+          method: endpoint.method,
+        });
+      } else if (endpoint.directProbeOnly) {
+        steps.partial(endpoint.id, `HTTP ${result.status} na sonda direta (${endpoint.method} ${endpoint.path})`, {
+          endpoint: endpoint.path,
+          method: endpoint.method,
         });
       } else {
         const detail =
           typeof result.body === "string"
             ? result.body.slice(0, 200)
             : JSON.stringify(result.body ?? {}).slice(0, 200);
-        steps.fail(endpoint.id, `HTTP ${result.status}: ${detail}`, { endpoint: endpoint.path });
+        steps.fail(endpoint.id, `HTTP ${result.status}: ${detail}`, {
+          endpoint: endpoint.path,
+          method: endpoint.method,
+          requestUrl: redactSgpRequestUrl(result.requestUrl),
+        });
       }
     }
 
@@ -331,11 +373,15 @@ async function main() {
 
     let credentialId;
     const existing = await apiGet(token, "/integrations/sgp/credentials");
-    const match = existing.body?.find?.((item) => item.apiUrl === SGP.apiUrl);
+    const match = findExistingCredential(existing.body, SGP.apiUrl);
     if (match) {
       credentialId = match.id;
       await apiPost(token, `/integrations/sgp/credentials/${credentialId}/test`, {});
-      steps.pass("sgp-credentials-existing", { credentialId });
+      steps.pass("sgp-credentials-existing", {
+        credentialId,
+        apiUrl: normalizeSgpApiUrl(match.apiUrl),
+        reused: true,
+      });
     } else {
       const created = await apiPost(token, "/integrations/sgp/credentials", {
         name: "SGP Homologação",
@@ -460,22 +506,24 @@ async function main() {
     }
 
     for (const endpoint of ["/customers", "/contracts", "/invoices"]) {
-      const pages = [];
-      let page = 1;
-      let totalPages = 1;
-      while (page <= totalPages) {
-        const res = await apiGet(token, `${endpoint}?page=${page}&limit=50`);
-        if (!res.ok) steps.fail(`pagination${endpoint}`, `HTTP ${res.status}`);
-        totalPages = res.body.totalPages ?? 1;
-        pages.push({
-          page,
-          durationMs: res.durationMs,
-          total: res.body.total,
-          dataLength: res.body.data?.length ?? 0,
-        });
-        page += 1;
-        if (page <= totalPages) await wait(150);
-      }
+      const pages = await fetchPaginatedWithRetry(
+        async (page) => {
+          const res = await apiGet(token, `${endpoint}?page=${page}&limit=50`);
+          return {
+            ok: res.ok,
+            status: res.status,
+            body: res.body,
+            durationMs: res.durationMs,
+            retryAfter: null,
+          };
+        },
+        {
+          maxAttempts: 5,
+          baseDelayMs: 1000,
+          pageDelayMs: 150,
+          sleep: wait,
+        },
+      );
       report.pagination[endpoint] = pages;
       steps.pass(`pagination${endpoint}`, { pages: pages.length, total: pages[0]?.total ?? 0 });
     }
@@ -551,6 +599,9 @@ async function main() {
     partial: report.steps.filter((step) => step.status === "PARTIAL").length,
     skipped: report.steps.filter((step) => step.status === "SKIPPED").length,
     readyForProduction: failedSteps === 0,
+    directProbeFailures: report.steps.filter(
+      (step) => step.status === "FAIL" && String(step.id).startsWith("sgp-"),
+    ).length,
   };
   report.conclusion = {
     approved: failedSteps === 0,
@@ -558,6 +609,10 @@ async function main() {
       failedSteps === 0
         ? "Homologação aprovada."
         : `${failedSteps} etapa(s) reprovada(s). Consulte homologation-report.json.`,
+    note:
+      report.summary.partial > 0
+        ? "Etapas PARTIAL (ex.: HTTP 405 na sonda direta de contratos) não bloqueiam sync CRM se o fluxo interno estiver validado."
+        : null,
   };
 
   fs.writeFileSync(path.join(ROOT, "homologation-report.json"), JSON.stringify(report, null, 2));
