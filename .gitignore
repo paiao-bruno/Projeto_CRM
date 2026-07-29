@@ -23,3 +23,7 @@ homologation-report.json
 sgp-investigation-report.json
 sgp-regression-audit.json
 load-test-report.json
+
+# Backups sensíveis de integração SGP (sempre fora do repo por padrão)
+../isp-crm-integration-backups/
+integration-backups/
