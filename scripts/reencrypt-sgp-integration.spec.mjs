@@ -16,17 +16,28 @@ import {
   assertIntegrationColumnsUnchanged,
   buildBackupSnapshot,
   buildNextEncryptedSecrets,
+  collectReencryptValidationErrors,
   collectTenantIntegrity,
+  createDryRunProof,
+  decodeDryRunProofToken,
+  encodeDryRunProofToken,
+  formatValidationFailure,
   hashText,
   locateIntegrationForUpdate,
   readBackupFile,
   readReencryptEnv,
+  runPreflight,
   runReencryptOperation,
   sanitizeIntegrationView,
+  sanitizePgConnectError,
   validateReencryptEnv,
+  verifyDryRunProofForExecute,
   writeBackupFile,
 } from "./lib/reencrypt-sgp-integration.mjs";
 import * as liveIntegration from "./reencrypt-sgp-integration.integration.mjs";
+
+const PREFLIGHT_BACKUP_DIR = path.join(os.tmpdir(), "isp-crm-preflight-test");
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const TEST_KEY = "test-encryption-key-with-32-characters-min";
 const OTHER_KEY = "other-encryption-key-with-32-characters-m";
@@ -87,6 +98,17 @@ function createMockClient(state) {
       }
       if (normalized.includes('FROM "Integration" WHERE "tenantId" = $1 ORDER BY id')) {
         return { rows: state.integrations.map((item) => ({ id: item.id })) };
+      }
+      if (
+        normalized.includes('FROM "Integration"') &&
+        normalized.includes('"encryptedSecrets"') &&
+        !normalized.includes("FOR UPDATE")
+      ) {
+        const match = state.integrations.find(
+          (item) =>
+            item.tenantId === params[0] && item.id === params[1] && item.provider === "SGP",
+        );
+        return { rows: match ? [{ encryptedSecrets: match.encryptedSecrets }] : [] };
       }
       if (
         normalized.includes('FROM "Integration"') &&
@@ -648,5 +670,178 @@ describe("reencrypt-sgp-integration docker prisma migration", () => {
         ),
       /stderr detail/,
     );
+  });
+});
+
+describe("reencrypt-sgp-integration preflight and execute guards", () => {
+  const baseConfig = () => ({
+    databaseUrl:
+      "postgresql://reencrypt_test:reencrypt_test@127.0.0.1:55999/reencrypt_disposable_test?schema=public",
+    encryptionKey: TEST_KEY,
+    sgpApp: "siac",
+    sgpToken: "fake-token-value",
+    tenantId: "22222222-2222-4222-8222-222222222222",
+    integrationId: "11111111-1111-4111-8111-111111111111",
+    confirmId: "11111111-1111-4111-8111-111111111111",
+    allowProduction: false,
+    skipDryRunProof: false,
+    dryRunProof: "",
+    backupDir: PREFLIGHT_BACKUP_DIR,
+    nodeEnv: "test",
+  });
+
+  it("preflight succeeds without connecting to the database", () => {
+    const report = runPreflight(baseConfig(), { preflight: true, restore: false }, ROOT);
+    assert.equal(report.connectsToDatabase, false);
+    assert.equal(report.readsIntegration, false);
+    assert.equal(report.writesBackup, false);
+    assert.equal(report.runsTransaction, false);
+    assert.equal(report.ok, true);
+    assert.equal(report.checks.databaseUrlPresent, true);
+    assert.match(report.masked.databaseUrl, /reencrypt_test:\*\*\*@127\.0\.0\.1:55999/);
+    assert.doesNotMatch(JSON.stringify(report), /fake-token-value/);
+  });
+
+  it("lists missing variables without exposing values", () => {
+    const validation = collectReencryptValidationErrors(
+      { ...baseConfig(), databaseUrl: "", encryptionKey: "", sgpApp: "", sgpToken: "" },
+      { mode: "reencrypt", args: {} },
+    );
+    assert.equal(validation.ok, false);
+    const message = formatValidationFailure(validation);
+    assert.match(message, /DATABASE_URL/);
+    assert.match(message, /ENCRYPTION_KEY/);
+    assert.match(message, /SGP_APP/);
+    assert.match(message, /SGP_TOKEN/);
+    assert.doesNotMatch(message, /fake-token/);
+  });
+
+  it("rejects invalid UUIDs before connection", () => {
+    const validation = collectReencryptValidationErrors(
+      {
+        ...baseConfig(),
+        tenantId: "not-a-uuid",
+        integrationId: "also-invalid",
+        confirmId: "also-invalid",
+      },
+      { mode: "reencrypt", args: {} },
+    );
+    assert.match(formatValidationFailure(validation), /REENCRYPT_TENANT_ID deve ser UUID válido/);
+  });
+
+  it("rejects incompatible flags in preflight", () => {
+    const report = runPreflight(baseConfig(), { preflight: true, write: true }, ROOT);
+    assert.equal(report.ok, false);
+    assert.match(report.errors.join(" "), /--preflight não pode ser combinado com --execute/);
+  });
+
+  it("sanitizes pg SASL password error", () => {
+    const message = sanitizePgConnectError(new Error("SASL: client password must be a string"));
+    assert.match(message, /senha ausente ou inválida/);
+    assert.doesNotMatch(message, /SASL:/);
+  });
+
+  it("dry-run proof encodes and verifies without secrets", async () => {
+    const integration = createMockIntegration({
+      encryptedSecrets: encryptJsonWithKey(TEST_KEY, { app: "siac", token: "old-token-value" }),
+    });
+    const client = createMockClient({
+      integrations: [integration],
+      customers: ["c1"],
+      contracts: [],
+      invoices: [],
+      syncRuns: [],
+      syncLogs: [],
+    });
+    const integrity = await collectTenantIntegrity(client, integration.tenantId);
+    const proof = createDryRunProof({
+      integrationId: integration.id,
+      tenantId: integration.tenantId,
+      integrityChecksums: integrity.checksums,
+      encryptedSecretsHash: hashText(integration.encryptedSecrets),
+    });
+    const token = encodeDryRunProofToken(proof);
+    assert.doesNotMatch(token, /old-token-value/);
+
+    await verifyDryRunProofForExecute(client, {
+      ...baseConfig(),
+      tenantId: integration.tenantId,
+      integrationId: integration.id,
+      confirmId: integration.id,
+    }, token);
+  });
+
+  it("invalidates proof when checksum changes after dry-run", async () => {
+    const integration = createMockIntegration();
+    const clientBefore = createMockClient({
+      integrations: [integration],
+      customers: ["c1"],
+      contracts: [],
+      invoices: [],
+      syncRuns: [],
+      syncLogs: [],
+    });
+    const integrityBefore = await collectTenantIntegrity(clientBefore, integration.tenantId);
+    const proof = createDryRunProof({
+      integrationId: integration.id,
+      tenantId: integration.tenantId,
+      integrityChecksums: integrityBefore.checksums,
+      encryptedSecretsHash: hashText(integration.encryptedSecrets),
+    });
+    const token = encodeDryRunProofToken(proof);
+
+    const clientAfter = createMockClient({
+      integrations: [integration],
+      customers: ["c1", "c2"],
+      contracts: [],
+      invoices: [],
+      syncRuns: [],
+      syncLogs: [],
+    });
+
+    await assert.rejects(
+      () =>
+        verifyDryRunProofForExecute(clientAfter, {
+          ...baseConfig(),
+          tenantId: integration.tenantId,
+          integrationId: integration.id,
+          confirmId: integration.id,
+        }, token),
+      /banco alterado desde o dry-run/,
+    );
+  });
+
+  it("dry-run attaches proof token to report", async () => {
+    const integration = createMockIntegration();
+    const state = {
+      integrations: [integration],
+      customers: ["c1"],
+      contracts: [],
+      invoices: [],
+      syncRuns: [],
+      syncLogs: [],
+      transaction: null,
+    };
+    const client = createMockClient(state);
+
+    const report = await runReencryptOperation(client, {
+      config: {
+        ...baseConfig(),
+        databaseUrl: TEST_DATABASE_URL,
+        tenantId: integration.tenantId,
+        integrationId: integration.id,
+        confirmId: integration.id,
+      },
+      mode: "reencrypt",
+      write: false,
+      rootDir: ROOT,
+      args: {},
+    });
+
+    assert.ok(report.dryRunProof?.token);
+    assert.ok(report.dryRunProof?.proofId);
+    assert.doesNotMatch(JSON.stringify(report), /old-token-value/);
+    const decoded = decodeDryRunProofToken(report.dryRunProof.token);
+    assert.equal(decoded.integrationId, integration.id);
   });
 });

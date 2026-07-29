@@ -51,6 +51,102 @@ Este documento descreve a rotina **offline** para corrigir `Integration.encrypte
 |----------|-----------|
 | `REENCRYPT_BACKUP_DIR` | Diretório de backup (padrão: `../isp-crm-integration-backups` fora do repo) |
 | `REENCRYPT_ALLOW_PRODUCTION` | Deve ser `I_UNDERSTAND_THE_RISK` se `NODE_ENV=production` |
+| `REENCRYPT_DRY_RUN_PROOF` | Token retornado pelo dry-run; **obrigatório** antes de `--execute` |
+| `REENCRYPT_SKIP_DRY_RUN_PROOF` | `I_ACCEPT_THE_RISK` — bypass emergencial do comprovante |
+
+## Sequência operacional PowerShell (sem segredos inline)
+
+Use variáveis de sessão ou `Read-Host -AsSecureString`. **Não** cole senhas/tokens diretamente no histórico.
+
+### Etapa 0 — Variáveis (exemplo sem valores reais)
+
+```powershell
+Set-Location "C:\Users\User\Desktop\CRM\Projeto_CRM_Git"
+
+# Senhas/tokens: preferir Read-Host -AsSecureString e converter conforme sua política interna
+$env:DATABASE_URL = Read-Host "DATABASE_URL (postgresql://...)" -AsSecureString
+# ... converta SecureString para texto apenas na sessão atual, se necessário
+
+$env:REENCRYPT_TENANT_ID = Read-Host "UUID do tenant"
+$env:REENCRYPT_INTEGRATION_ID = Read-Host "UUID da integração SGP"
+$env:REENCRYPT_CONFIRM_ID = $env:REENCRYPT_INTEGRATION_ID
+```
+
+### Etapa 1 — Preflight (sem banco)
+
+Valida env, UUIDs, flags, Node ≥ 20, diretório de backup gravável. **Não conecta** ao PostgreSQL.
+
+```powershell
+node scripts/reencrypt-sgp-integration.mjs --preflight
+```
+
+Saída: apenas booleanos e URLs mascaradas (`usuario:***@host:porta/banco`).
+
+### Etapa 2 — Descoberta somente leitura (SQL manual)
+
+```sql
+SELECT id, "tenantId", name, provider, status, config->>'apiUrl' AS api_url
+FROM "Integration"
+WHERE provider = 'SGP'
+ORDER BY "createdAt";
+```
+
+### Etapa 3 — Dry-run
+
+```powershell
+node scripts/reencrypt-sgp-integration.mjs --dry-run
+```
+
+Copie `dryRunProof.token` do JSON de saída. Validade: **15 minutos**.
+
+### Etapa 4 — Revisão obrigatória
+
+Confira no relatório dry-run:
+
+- `integration.name`, `apiUrl`, hashes
+- `integrity.before` = `integrity.after`
+- `encryptedSecrets.willChange: true` (se esperado)
+
+### Etapa 5 — Execute (com comprovante)
+
+```powershell
+$env:REENCRYPT_DRY_RUN_PROOF = "<cole dryRunProof.token do dry-run>"
+node scripts/reencrypt-sgp-integration.mjs --execute
+```
+
+Se o banco mudou após o dry-run, o comprovante é **invalidado**.
+
+### Etapa 6 — Validação API
+
+Reinicie a API e teste `GET /api/integrations/sgp/credentials` (deve retornar **200**).
+
+### Etapa 7 — Homologação (opcional, ambiente real)
+
+Somente após credenciais OK:
+
+```powershell
+npm run homologate:sgp
+```
+
+Consulte `docs/HOMOLOGATION-AUDIT.md` antes de executar.
+
+## Modo preflight
+
+```powershell
+node scripts/reencrypt-sgp-integration.mjs --preflight
+```
+
+Não conecta ao banco, não lê `Integration`, não cria backup, não executa transação.
+
+## Comprovante dry-run → execute
+
+| Campo | Descrição |
+|-------|-----------|
+| `dryRunProof.token` | Token base64url opaco (sem segredos) |
+| `dryRunProof.proofId` | Hash SHA-256 do fingerprint |
+| `dryRunProof.expiresAt` | Validade ISO (15 min) |
+
+O `--execute` em modo reencrypt exige `REENCRYPT_DRY_RUN_PROOF` igual ao token do dry-run imediatamente anterior, salvo bypass explícito `REENCRYPT_SKIP_DRY_RUN_PROOF=I_ACCEPT_THE_RISK`.
 
 ## Segredos nunca via CLI
 
@@ -103,6 +199,7 @@ node scripts/reencrypt-sgp-integration.mjs --dry-run
 5. Aborta e faz ROLLBACK se qualquer dado importado ou coluna protegida mudar
 
 ```powershell
+$env:REENCRYPT_DRY_RUN_PROOF = "<token do dry-run>"
 node scripts/reencrypt-sgp-integration.mjs --execute
 ```
 
@@ -160,7 +257,12 @@ Teste de integração real em PostgreSQL descartável (porta `55999`, banco `ree
 npm run test:reencrypt-sgp-integration:live
 ```
 
-Esse teste usa `embedded-postgres` (ou Docker `pgvector/pgvector:pg16` quando disponível) e **nunca** conecta ao banco de desenvolvimento/produção.
+Esse teste usa Docker (`pgvector/pgvector:pg16`, container `isp-crm-reencrypt-test`) quando `docker info` responde; caso contrário, fallback `embedded-postgres` importado dinamicamente. **Nunca** conecta ao banco de desenvolvimento/produção.
+
+## Auditorias relacionadas
+
+- `docs/WINDOWS-COMPATIBILITY-AUDIT.md` — subprocessos e riscos Windows
+- `docs/HOMOLOGATION-AUDIT.md` — homologação SGP estática
 
 ## Rollback operacional
 

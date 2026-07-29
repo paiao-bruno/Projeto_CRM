@@ -7,6 +7,11 @@ import {
   validateDecryptedSecrets,
 } from "./encryption.mjs";
 
+export const MIN_NODE_MAJOR = 20;
+export const DRY_RUN_PROOF_TTL_MS = 15 * 60 * 1000;
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 const FORBIDDEN_UPDATE_COLUMNS = new Set([
   "id",
   "tenantId",
@@ -31,40 +36,377 @@ export function readReencryptEnv(env = process.env) {
     integrationId: env.REENCRYPT_INTEGRATION_ID?.trim() ?? "",
     confirmId: env.REENCRYPT_CONFIRM_ID?.trim() ?? "",
     allowProduction: env.REENCRYPT_ALLOW_PRODUCTION === "I_UNDERSTAND_THE_RISK",
+    skipDryRunProof: env.REENCRYPT_SKIP_DRY_RUN_PROOF === "I_ACCEPT_THE_RISK",
+    dryRunProof: env.REENCRYPT_DRY_RUN_PROOF?.trim() ?? "",
     backupDir: env.REENCRYPT_BACKUP_DIR?.trim() ?? "",
     nodeEnv: env.NODE_ENV ?? "",
   };
 }
 
-export function validateReencryptEnv(config, { mode }) {
+export function isValidUuid(value) {
+  return typeof value === "string" && UUID_RE.test(value);
+}
+
+export function maskDatabaseUrl(databaseUrl) {
+  if (!databaseUrl) return null;
+  return databaseUrl.replace(/:\/\/([^:@/]+):([^@/]+)@/, "://$1:***@");
+}
+
+export function parseDatabaseUrl(databaseUrl) {
+  if (!databaseUrl || typeof databaseUrl !== "string") {
+    return null;
+  }
+  try {
+    const parsed = new URL(databaseUrl);
+    return {
+      protocol: parsed.protocol,
+      hostname: parsed.hostname,
+      port: parsed.port,
+      database: parsed.pathname.replace(/^\//, "").split("?")[0] || "",
+      username: decodeURIComponent(parsed.username || ""),
+      password: decodeURIComponent(parsed.password || ""),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function analyzeDatabaseUrl(databaseUrl) {
+  const parsed = parseDatabaseUrl(databaseUrl);
+  if (!parsed) {
+    return {
+      present: Boolean(databaseUrl),
+      protocolOk: false,
+      passwordIsString: false,
+      hostnamePresent: false,
+      databasePresent: false,
+    };
+  }
+  return {
+    present: true,
+    protocolOk: parsed.protocol === "postgresql:" || parsed.protocol === "postgres:",
+    passwordIsString: typeof parsed.password === "string",
+    hostnamePresent: Boolean(parsed.hostname),
+    databasePresent: Boolean(parsed.database),
+    maskedUrl: maskDatabaseUrl(databaseUrl),
+  };
+}
+
+export function assertDatabaseUrlReadyForPg(databaseUrl) {
+  const analysis = analyzeDatabaseUrl(databaseUrl);
+  const problems = [];
+  if (!analysis.present) problems.push("DATABASE_URL");
+  if (!analysis.protocolOk) problems.push("DATABASE_URL(protocolo inválido)");
+  if (!analysis.hostnamePresent) problems.push("DATABASE_URL(host ausente)");
+  if (!analysis.databasePresent) problems.push("DATABASE_URL(banco ausente)");
+  if (!analysis.passwordIsString) problems.push("DATABASE_URL(senha inválida)");
+  if (problems.length > 0) {
+    throw new Error(
+      `Variáveis obrigatórias ausentes ou inválidas: ${problems.join(", ")}`,
+    );
+  }
+}
+
+export function sanitizePgConnectError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("client password must be a string")) {
+    return "DATABASE_URL inválida: senha ausente ou inválida para autenticação SASL.";
+  }
+  if (message.includes("password authentication failed")) {
+    return "Falha de autenticação PostgreSQL (credenciais rejeitadas).";
+  }
+  return message.replace(
+    /:\/\/([^:@/]+):([^@/]+)@/g,
+    "://$1:***@",
+  );
+}
+
+export function isNodeVersionSupported(version = process.versions.node) {
+  const major = Number.parseInt(String(version).split(".")[0] ?? "0", 10);
+  return Number.isFinite(major) && major >= MIN_NODE_MAJOR;
+}
+
+export function validateFlagCombination(args) {
+  const errors = [];
+  if (args.preflight && args.write) {
+    errors.push("--preflight não pode ser combinado com --execute.");
+  }
+  if (args.preflight && args.restore) {
+    errors.push("--preflight com --restore exige apenas validação estática.");
+  }
+  if (args.restore && args.write && !args.backupFile) {
+    errors.push("--restore --execute exige --backup-file.");
+  }
+  if (args.execute && args.dryRunExplicit && !args.write) {
+    errors.push("Combinação inválida de flags --dry-run e --execute.");
+  }
+  return errors;
+}
+
+export function collectReencryptValidationErrors(config, { mode, args = {} }) {
   const missing = [];
+  const errors = [];
+
   if (!config.databaseUrl) missing.push("DATABASE_URL");
+
+  const db = analyzeDatabaseUrl(config.databaseUrl);
+  if (config.databaseUrl && !db.protocolOk) {
+    errors.push("DATABASE_URL deve usar protocolo postgresql:// ou postgres://.");
+  }
+  if (config.databaseUrl && db.present && !db.passwordIsString) {
+    errors.push("DATABASE_URL deve conter senha do tipo string (mesmo que vazia).");
+  }
+
   if (!config.tenantId) missing.push("REENCRYPT_TENANT_ID");
+  else if (!isValidUuid(config.tenantId)) errors.push("REENCRYPT_TENANT_ID deve ser UUID válido.");
+
   if (!config.integrationId) missing.push("REENCRYPT_INTEGRATION_ID");
+  else if (!isValidUuid(config.integrationId)) {
+    errors.push("REENCRYPT_INTEGRATION_ID deve ser UUID válido.");
+  }
+
   if (!config.confirmId) missing.push("REENCRYPT_CONFIRM_ID");
+  else if (!isValidUuid(config.confirmId)) errors.push("REENCRYPT_CONFIRM_ID deve ser UUID válido.");
+
+  if (config.integrationId && config.confirmId && config.integrationId !== config.confirmId) {
+    errors.push("REENCRYPT_CONFIRM_ID deve ser idêntico a REENCRYPT_INTEGRATION_ID.");
+  }
 
   if (mode === "reencrypt") {
     if (!config.encryptionKey) missing.push("ENCRYPTION_KEY");
+    else if (config.encryptionKey.length < 32) {
+      errors.push("ENCRYPTION_KEY deve ter ao menos 32 caracteres.");
+    }
     if (!config.sgpApp) missing.push("SGP_APP");
     if (!config.sgpToken) missing.push("SGP_TOKEN");
   }
 
   if (mode === "restore") {
     if (!config.encryptionKey) missing.push("ENCRYPTION_KEY");
-  }
-
-  if (missing.length > 0) {
-    throw new Error(`Variáveis obrigatórias ausentes: ${missing.join(", ")}`);
-  }
-
-  if (config.integrationId !== config.confirmId) {
-    throw new Error("REENCRYPT_CONFIRM_ID deve ser idêntico a REENCRYPT_INTEGRATION_ID.");
+    else if (config.encryptionKey.length < 32) {
+      errors.push("ENCRYPTION_KEY deve ter ao menos 32 caracteres.");
+    }
   }
 
   if (config.nodeEnv === "production" && !config.allowProduction) {
-    throw new Error(
-      "Abortado: NODE_ENV=production. Defina REENCRYPT_ALLOW_PRODUCTION=I_UNDERSTAND_THE_RISK para continuar.",
+    errors.push(
+      "NODE_ENV=production bloqueado. Defina REENCRYPT_ALLOW_PRODUCTION=I_UNDERSTAND_THE_RISK.",
     );
+  }
+
+  errors.push(...validateFlagCombination(args));
+
+  return {
+    missing,
+    errors,
+    ok: missing.length === 0 && errors.length === 0,
+  };
+}
+
+export function resolveBackupDirectory(config, rootDir) {
+  return config.backupDir
+    ? path.resolve(config.backupDir)
+    : path.resolve(rootDir, "..", "isp-crm-integration-backups");
+}
+
+export function checkBackupDirectoryWritable(config, rootDir) {
+  const directory = resolveBackupDirectory(config, rootDir);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const probe = path.join(directory, `.write-test-${randomUUID()}`);
+  fs.writeFileSync(probe, "ok", { mode: 0o600 });
+  fs.unlinkSync(probe);
+  return { directory, writable: true };
+}
+
+export function runPreflight(config, args, rootDir) {
+  const mode = args.restore ? "restore" : "reencrypt";
+  const validation = collectReencryptValidationErrors(config, { mode, args });
+  const db = analyzeDatabaseUrl(config.databaseUrl);
+  let backup = { writable: false, directory: resolveBackupDirectory(config, rootDir) };
+
+  try {
+    backup = checkBackupDirectoryWritable(config, rootDir);
+  } catch (error) {
+    validation.errors.push(
+      `Diretório de backup não gravável: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  const checks = {
+    nodeVersionOk: isNodeVersionSupported(),
+    databaseUrlPresent: db.present,
+    databaseUrlProtocolOk: db.protocolOk,
+    databasePasswordIsString: db.passwordIsString,
+    encryptionKeyPresent: Boolean(config.encryptionKey),
+    encryptionKeyLengthOk: config.encryptionKey.length >= 32,
+    sgpAppPresent: Boolean(config.sgpApp),
+    sgpTokenPresent: Boolean(config.sgpToken),
+    tenantIdUuidOk: isValidUuid(config.tenantId),
+    integrationIdUuidOk: isValidUuid(config.integrationId),
+    confirmIdMatchesIntegrationId:
+      Boolean(config.integrationId) &&
+      config.integrationId === config.confirmId,
+    flagsCompatible: validateFlagCombination(args).length === 0,
+    productionBlockedUnlessConfirmed:
+      config.nodeEnv !== "production" || config.allowProduction,
+    backupDirectoryWritable: backup.writable,
+  };
+
+  const ok =
+    validation.ok &&
+    checks.nodeVersionOk &&
+    checks.backupDirectoryWritable &&
+    (mode === "restore" || (checks.sgpAppPresent && checks.sgpTokenPresent));
+
+  return {
+    mode: "preflight",
+    ok,
+    operationMode: mode,
+    nodeVersion: process.version,
+    checks,
+    missing: validation.missing,
+    errors: validation.errors,
+    masked: {
+      databaseUrl: db.maskedUrl ?? null,
+      backupDirectory: backup.directory,
+    },
+    connectsToDatabase: false,
+    readsIntegration: false,
+    writesBackup: false,
+    runsTransaction: false,
+  };
+}
+
+export function createDryRunProof({
+  integrationId,
+  tenantId,
+  integrityChecksums,
+  encryptedSecretsHash,
+  issuedAt = Date.now(),
+}) {
+  const expiresAt = issuedAt + DRY_RUN_PROOF_TTL_MS;
+  const proofId = hashText(
+    [
+      integrationId,
+      tenantId,
+      JSON.stringify(integrityChecksums),
+      encryptedSecretsHash ?? "null",
+      String(issuedAt),
+    ].join("|"),
+  );
+  return {
+    proofId,
+    issuedAt,
+    expiresAt,
+    integrationId,
+    tenantId,
+  };
+}
+
+export function encodeDryRunProofToken(proof) {
+  return Buffer.from(
+    JSON.stringify({
+      v: 1,
+      proofId: proof.proofId,
+      issuedAt: proof.issuedAt,
+      expiresAt: proof.expiresAt,
+      integrationId: proof.integrationId,
+      tenantId: proof.tenantId,
+    }),
+  ).toString("base64url");
+}
+
+export function decodeDryRunProofToken(token) {
+  if (!token || typeof token !== "string") {
+    throw new Error("REENCRYPT_DRY_RUN_PROOF ausente ou inválido.");
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.from(token, "base64url").toString("utf8"));
+  } catch {
+    throw new Error("REENCRYPT_DRY_RUN_PROOF inválido: token corrompido.");
+  }
+  if (
+    parsed?.v !== 1 ||
+    !parsed.proofId ||
+    !parsed.integrationId ||
+    !parsed.tenantId ||
+    !parsed.issuedAt ||
+    !parsed.expiresAt
+  ) {
+    throw new Error("REENCRYPT_DRY_RUN_PROOF inválido: estrutura incompleta.");
+  }
+  return parsed;
+}
+
+export async function fetchIntegrationFingerprint(client, tenantId, integrationId) {
+  const integrity = await collectTenantIntegrity(client, tenantId);
+  const result = await client.query(
+    `SELECT "encryptedSecrets"
+     FROM "Integration"
+     WHERE "tenantId" = $1 AND id = $2 AND provider = 'SGP'`,
+    [tenantId, integrationId],
+  );
+  if (result.rows.length !== 1) {
+    throw new Error("Integração SGP não encontrada para verificação do comprovante.");
+  }
+  const encryptedSecrets = result.rows[0].encryptedSecrets;
+  return {
+    integrityChecksums: integrity.checksums,
+    encryptedSecretsHash: encryptedSecrets ? hashText(encryptedSecrets) : null,
+  };
+}
+
+export async function verifyDryRunProofForExecute(client, config, token) {
+  const decoded = decodeDryRunProofToken(token);
+  if (decoded.integrationId !== config.integrationId || decoded.tenantId !== config.tenantId) {
+    throw new Error("Comprovante de dry-run não corresponde aos IDs informados.");
+  }
+  if (Date.now() > decoded.expiresAt) {
+    throw new Error("Comprovante de dry-run expirado. Execute dry-run novamente.");
+  }
+
+  const fingerprint = await fetchIntegrationFingerprint(
+    client,
+    config.tenantId,
+    config.integrationId,
+  );
+  const expected = createDryRunProof({
+    integrationId: decoded.integrationId,
+    tenantId: decoded.tenantId,
+    integrityChecksums: fingerprint.integrityChecksums,
+    encryptedSecretsHash: fingerprint.encryptedSecretsHash,
+    issuedAt: decoded.issuedAt,
+  });
+
+  if (expected.proofId !== decoded.proofId) {
+    throw new Error(
+      "Comprovante de dry-run inválido: banco alterado desde o dry-run ou token corrompido.",
+    );
+  }
+
+  return {
+    valid: true,
+    expiresAt: new Date(decoded.expiresAt).toISOString(),
+    proofId: decoded.proofId,
+  };
+}
+
+export function formatValidationFailure(validation) {
+  const parts = [];
+  if (validation.missing.length > 0) {
+    parts.push(`Variáveis obrigatórias ausentes: ${validation.missing.join(", ")}`);
+  }
+  if (validation.errors.length > 0) {
+    parts.push(...validation.errors);
+  }
+  return parts.join("\n");
+}
+
+export function validateReencryptEnv(config, { mode, args = {} }) {
+  const validation = collectReencryptValidationErrors(config, { mode, args });
+  if (!validation.ok) {
+    throw new Error(formatValidationFailure(validation));
   }
 }
 
@@ -327,7 +669,7 @@ export async function runReencryptOperation(client, options) {
     injectFailureAfterUpdate = false,
   } = options;
 
-  validateReencryptEnv(config, { mode });
+  validateReencryptEnv(config, { mode, args: options.args ?? {} });
 
   await client.query("BEGIN");
 
@@ -422,6 +764,24 @@ export async function runReencryptOperation(client, options) {
     } else {
       report.integrity.after = beforeIntegrity;
       await client.query("ROLLBACK");
+    }
+
+    if (!write && mode === "reencrypt") {
+      const proof = createDryRunProof({
+        integrationId: integration.id,
+        tenantId: config.tenantId,
+        integrityChecksums: beforeIntegrity.checksums,
+        encryptedSecretsHash: report.encryptedSecrets.previousHash,
+      });
+      report.dryRunProof = {
+        token: encodeDryRunProofToken(proof),
+        expiresAt: new Date(proof.expiresAt).toISOString(),
+        proofId: proof.proofId,
+        integrationId: proof.integrationId,
+        tenantId: proof.tenantId,
+      };
+      report.executeInstructions =
+        "Defina REENCRYPT_DRY_RUN_PROOF com o token retornado antes de executar --execute.";
     }
 
     return report;

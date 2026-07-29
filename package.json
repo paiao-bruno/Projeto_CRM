@@ -27,6 +27,7 @@
     "bootstrap:production": "node scripts/bootstrap-production.mjs",
     "test:bootstrap": "node --test scripts/bootstrap-production.spec.mjs",
     "reencrypt:sgp-integration": "node scripts/reencrypt-sgp-integration.mjs",
+    "reencrypt:sgp-integration:preflight": "node scripts/reencrypt-sgp-integration.mjs --preflight",
     "test:reencrypt-sgp-integration": "npm run build -w apps/api && node --test scripts/reencrypt-sgp-integration.spec.mjs",
     "test:reencrypt-sgp-integration:live": "npm run build -w apps/api && node scripts/reencrypt-sgp-integration.integration.mjs",
     "load-test": "node scripts/load-test.mjs",
