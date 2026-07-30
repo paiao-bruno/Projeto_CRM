@@ -1,6 +1,6 @@
 export type SgpEntityKind = "customer" | "contract" | "invoice";
 
-const WRAPPER_KEYS = ["data", "result", "response", "results"] as const;
+const WRAPPER_KEYS = ["data", "dados", "result", "response", "results"] as const;
 
 const PAGINATION_KEYS = new Set([
   "offset",
@@ -208,21 +208,50 @@ export function extractSgpEntityRecords(
 }
 
 export function summarizeSgpResponseStructure(body: unknown) {
+  return describeSgpPayload(body);
+}
+
+export type SgpPayloadShape = ReturnType<typeof describeSgpPayload>;
+
+export function describeSgpPayload(body: unknown) {
   if (body === null || body === undefined) {
-    return { type: "empty", topLevelKeys: [], arrayKeys: {}, detectedPaths: [] };
+    return {
+      payloadType: "null",
+      topLevelKeys: [] as string[],
+      arrayKeys: {} as Record<string, number>,
+      detectedPaths: [] as string[],
+      textLength: 0,
+    };
   }
 
   if (Array.isArray(body)) {
     return {
-      type: "array",
-      topLevelKeys: [],
+      payloadType: "array",
+      topLevelKeys: [] as string[],
       arrayKeys: { root: body.length },
-      detectedPaths: ["root[]"],
+      detectedPaths: [`root[]:${body.length}`],
+      textLength: 0,
+    };
+  }
+
+  if (typeof body === "string") {
+    return {
+      payloadType: "string",
+      topLevelKeys: [] as string[],
+      arrayKeys: {} as Record<string, number>,
+      detectedPaths: [] as string[],
+      textLength: body.length,
     };
   }
 
   if (!isRecord(body)) {
-    return { type: typeof body, topLevelKeys: [], arrayKeys: {}, detectedPaths: [] };
+    return {
+      payloadType: typeof body,
+      topLevelKeys: [] as string[],
+      arrayKeys: {} as Record<string, number>,
+      detectedPaths: [] as string[],
+      textLength: 0,
+    };
   }
 
   const topLevelKeys = Object.keys(body);
@@ -241,10 +270,89 @@ export function summarizeSgpResponseStructure(body: unknown) {
   }
 
   return {
-    type: "object",
+    payloadType: "object",
     topLevelKeys: topLevelKeys.slice(0, 20),
     arrayKeys,
     detectedPaths,
+    textLength: 0,
+  };
+}
+
+export function isValidEmptySgpPage(body: unknown, kind: SgpEntityKind) {
+  if (body === null || body === undefined) {
+    return true;
+  }
+
+  if (Array.isArray(body) && body.length === 0) {
+    return true;
+  }
+
+  if (!isRecord(body)) {
+    return false;
+  }
+
+  const records = extractSgpEntityRecords(body, kind);
+  if (records.length > 0) {
+    return false;
+  }
+
+  const listKeys = LIST_KEYS[kind];
+  for (const key of listKeys) {
+    const value = body[key];
+    if (Array.isArray(value) && value.length === 0) {
+      return true;
+    }
+  }
+
+  for (const key of WRAPPER_KEYS) {
+    const value = body[key];
+    if (value === null || value === undefined) {
+      continue;
+    }
+    if (isValidEmptySgpPage(value, kind)) {
+      return true;
+    }
+  }
+
+  if (bodyMayContainEntityPayload(body, kind)) {
+    return false;
+  }
+
+  const keys = Object.keys(body);
+  if (keys.length === 0) {
+    return true;
+  }
+
+  return keys.every((key) => PAGINATION_KEYS.has(key.toLowerCase()));
+}
+
+export function validateSgpListResponse(body: unknown, kind: SgpEntityKind) {
+  const records = extractSgpEntityRecords(body, kind);
+
+  if (records.length > 0) {
+    return {
+      ok: true as const,
+      records,
+      empty: false,
+      shape: describeSgpPayload(body),
+    };
+  }
+
+  if (isValidEmptySgpPage(body, kind)) {
+    return {
+      ok: true as const,
+      records: [] as Array<Record<string, unknown>>,
+      empty: true,
+      shape: describeSgpPayload(body),
+    };
+  }
+
+  return {
+    ok: false as const,
+    records: [] as Array<Record<string, unknown>>,
+    empty: false,
+    shape: describeSgpPayload(body),
+    technicalMessage: `Resposta SGP de ${kind} sem registros reconhecíveis nem indicador válido de página vazia.`,
   };
 }
 

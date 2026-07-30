@@ -54,8 +54,17 @@ import {
   extractSgpEntityRecords,
   looksLikeContract,
   looksLikeTitle,
+  SgpEntityKind,
   summarizeSgpResponseStructure,
+  validateSgpListResponse,
 } from "./sgp/sgp-response-parser";
+import { SgpSyncFailureDetails } from "./sgp/sgp-error.util";
+import {
+  buildInvalidSgpPayloadFailure,
+  buildSgpSyncFailureDetails,
+  extractHttpErrorMessage,
+} from "./sgp/sgp-error.util";
+import { SgpHttpResponse } from "./sgp/types/sgp-client.types";
 
 type SgpCustomerMapping = {
   customer: ExternalCustomerInput;
@@ -285,19 +294,19 @@ export class IntegrationsService {
         );
       })
       .catch(async (error) => {
+        const failure = buildSgpSyncFailureDetails(error);
         this.logger.error(
           safeJsonStringify({
             event: "sgp.sync-customers.failed",
             tenantId: user.tenantId,
             runId: run.id,
-            error: error instanceof Error ? error.message : String(error),
+            error: failure.message,
+            errorCode: failure.errorCode,
+            stage: failure.stage,
+            httpStatus: failure.httpStatus,
           }),
         );
-        await this.failSyncRunIfStillRunning(
-          run.id,
-          error instanceof Error ? error.message : String(error),
-          error instanceof Error ? error.stack : undefined,
-        );
+        await this.failSyncRunIfStillRunning(run.id, failure);
       })
       .finally(() => {
         this.runningCustomerSyncs.delete(lockKey);
@@ -599,6 +608,7 @@ export class IntegrationsService {
       syncMode: "incremental",
       watermark: null,
     };
+    const syncStageRef = { current: "customers.pagination" };
     let pagination = request.pagination;
     let customerPagesFetched = 0;
     const seenExternalIds = createSgpSeenExternalIds();
@@ -630,11 +640,18 @@ export class IntegrationsService {
           });
         }
 
+        syncStageRef.current = `customers.page.${customerPagesFetched}`;
         const response = await this.sgpClient.discoverCustomers(
           credentials,
           this.buildSyncPayload(request, incrementalContext, pagination),
         );
-        this.assertCustomerDiscoveryResponse(response.body, request.endpoint);
+        this.assertValidatedSgpListResponse(
+          response,
+          "customer",
+          request.endpoint ?? "/api/ura/clientes/",
+          pagination,
+          syncStageRef,
+        );
         const responseBody = this.isRecord(response.body) ? response.body : {};
         this.trackRootExternalIds(responseBody, seenExternalIds);
         if (extractSgpEntityRecords(responseBody, "contract").length > 0) {
@@ -832,6 +849,7 @@ export class IntegrationsService {
         if (!pagination) break;
       }
 
+      syncStageRef.current = "contracts.pagination";
       const dedicatedContractSync = await this.processSgpContractsFromApi(
         user,
         credentials,
@@ -840,11 +858,13 @@ export class IntegrationsService {
         runId,
         seenExternalIds,
         result,
+        syncStageRef,
       );
       if (dedicatedContractSync) {
         syncIncludedContractPayload = true;
       }
 
+      syncStageRef.current = "invoices.pagination";
       const dedicatedInvoiceSync = await this.processSgpInvoicesFromApi(
         user,
         credentials,
@@ -853,6 +873,7 @@ export class IntegrationsService {
         runId,
         seenExternalIds,
         result,
+        syncStageRef,
       );
       if (dedicatedInvoiceSync) {
         syncIncludedInvoicePayload = true;
@@ -890,13 +911,40 @@ export class IntegrationsService {
           }),
         );
       }
+      syncStageRef.current = "finalize";
     } catch (error) {
+      const failure = buildSgpSyncFailureDetails(error, { stage: syncStageRef.current });
       if (runId) {
+        await this.createSyncLog({
+          tenantId: user.tenantId,
+          runId,
+          entity: this.mapSyncEntityFromKind(failure.entity),
+          action: "error",
+          status: IntegrationSyncStatus.FAILED,
+          message: failure.message,
+          metadata: this.toJsonValue({
+            errorCode: failure.errorCode,
+            stage: failure.stage,
+            responseShape: failure.responseShape,
+            httpStatus: failure.httpStatus,
+            endpoint: failure.endpoint,
+            method: failure.method,
+            contentType: failure.contentType,
+          }),
+        });
         await this.flushSyncLogs();
         const durationMs = Date.now() - startedAt;
         await this.safeFinalizeSyncRun(runId, IntegrationSyncStatus.FAILED, result, durationMs, {
-          errorMessage: error instanceof Error ? error.message : String(error),
-          stackTrace: error instanceof Error ? error.stack : undefined,
+          errorMessage: failure.message,
+          stackTrace: failure.stackTrace,
+          errorCode: failure.errorCode,
+          stage: failure.stage,
+          responseShape: failure.responseShape,
+          httpStatus: failure.httpStatus,
+          entity: failure.entity,
+          endpoint: failure.endpoint,
+          method: failure.method,
+          contentType: failure.contentType,
           cursor: pagination,
         });
       }
@@ -1031,6 +1079,14 @@ export class IntegrationsService {
       cursor?: unknown;
       errorMessage?: string;
       stackTrace?: string;
+      errorCode?: string;
+      stage?: string;
+      responseShape?: SgpSyncFailureDetails["responseShape"];
+      httpStatus?: number;
+      entity?: string;
+      endpoint?: string;
+      method?: string;
+      contentType?: string;
     } = {},
   ) {
     const contractsProcessed =
@@ -1101,6 +1157,14 @@ export class IntegrationsService {
             deleted: counters.invoicesDeleted,
           },
           errors: counters.errors.slice(0, 100),
+          ...(options.errorCode ? { errorCode: options.errorCode } : {}),
+          ...(options.stage ? { stage: options.stage } : {}),
+          ...(options.responseShape ? { responseShape: options.responseShape } : {}),
+          ...(options.httpStatus !== undefined ? { httpStatus: options.httpStatus } : {}),
+          ...(options.entity ? { entity: options.entity } : {}),
+          ...(options.endpoint ? { endpoint: options.endpoint } : {}),
+          ...(options.method ? { method: options.method } : {}),
+          ...(options.contentType ? { contentType: options.contentType } : {}),
         }),
       },
     });
@@ -1150,6 +1214,14 @@ export class IntegrationsService {
       cursor?: unknown;
       errorMessage?: string;
       stackTrace?: string;
+      errorCode?: string;
+      stage?: string;
+      responseShape?: SgpSyncFailureDetails["responseShape"];
+      httpStatus?: number;
+      entity?: string;
+      endpoint?: string;
+      method?: string;
+      contentType?: string;
     } = {},
   ) {
     try {
@@ -1183,7 +1255,7 @@ export class IntegrationsService {
 
   private async failSyncRunIfStillRunning(
     runId: string,
-    errorMessage: string,
+    failure: SgpSyncFailureDetails | string,
     stackTrace?: string,
   ) {
     const run = await this.prisma.integrationSyncRun.findUnique({
@@ -1194,6 +1266,11 @@ export class IntegrationsService {
     if (!run || run.status !== IntegrationSyncStatus.RUNNING) {
       return;
     }
+
+    const details =
+      typeof failure === "string"
+        ? { message: failure, stackTrace }
+        : { ...failure, stackTrace: failure.stackTrace ?? stackTrace };
 
     await this.safeFinalizeSyncRun(
       runId,
@@ -1213,12 +1290,23 @@ export class IntegrationsService {
         contractsDeleted: 0,
         invoicesDeleted: 0,
         ignored: 0,
-        errors: [{ index: 0, message: errorMessage }],
+        errors: [{ index: 0, message: details.message }],
         syncMode: "incremental",
         watermark: null,
       },
       0,
-      { errorMessage, stackTrace },
+      {
+        errorMessage: details.message,
+        stackTrace: details.stackTrace,
+        errorCode: "errorCode" in details ? details.errorCode : undefined,
+        stage: "stage" in details ? details.stage : undefined,
+        responseShape: "responseShape" in details ? details.responseShape : undefined,
+        httpStatus: "httpStatus" in details ? details.httpStatus : undefined,
+        entity: "entity" in details ? details.entity : undefined,
+        endpoint: "endpoint" in details ? details.endpoint : undefined,
+        method: "method" in details ? details.method : undefined,
+        contentType: "contentType" in details ? details.contentType : undefined,
+      },
     );
   }
 
@@ -1243,7 +1331,67 @@ export class IntegrationsService {
       return undefined;
     }
 
-    return this.nextPagination(body, currentPagination);
+    const pagination = this.extractPaginationFromBody(body);
+    const root = this.isRecord(body) ? body : {};
+    const nextValue = pagination.next ?? root.next;
+    if (nextValue === false || nextValue === null) {
+      return undefined;
+    }
+
+    const limit =
+      this.numberFrom(pagination.limit) ??
+      this.numberFrom(pagination.per_page) ??
+      this.numberFrom(pagination.por_pagina) ??
+      this.numberFrom(currentPagination?.limit) ??
+      this.numberFrom(currentPagination?.per_page) ??
+      this.numberFrom(currentPagination?.por_pagina);
+
+    if (limit !== undefined && recordsOnPage < limit) {
+      return undefined;
+    }
+
+    const partial =
+      this.numberFrom(pagination.parcial) ??
+      this.numberFrom(pagination.partial) ??
+      this.numberFrom(pagination.count);
+    if (partial !== undefined && partial > 0 && recordsOnPage < partial) {
+      return undefined;
+    }
+
+    const next = this.nextPagination(body, currentPagination);
+    if (!next) {
+      return undefined;
+    }
+
+    return this.ensurePaginationAdvances(currentPagination, next) ? next : undefined;
+  }
+
+  private ensurePaginationAdvances(
+    currentPagination: Record<string, unknown> | undefined,
+    nextPagination: Record<string, unknown>,
+  ) {
+    const currentOffset = this.numberFrom(currentPagination?.offset);
+    const nextOffset = this.numberFrom(nextPagination.offset);
+    if (currentOffset !== undefined && nextOffset !== undefined && nextOffset <= currentOffset) {
+      return false;
+    }
+
+    const currentPage =
+      this.numberFrom(currentPagination?.page) ?? this.numberFrom(currentPagination?.pagina);
+    const nextPage =
+      this.numberFrom(nextPagination.page) ?? this.numberFrom(nextPagination.pagina);
+    if (currentPage !== undefined && nextPage !== undefined && nextPage <= currentPage) {
+      return false;
+    }
+
+    if (
+      currentPagination &&
+      JSON.stringify(currentPagination) === JSON.stringify(nextPagination)
+    ) {
+      return false;
+    }
+
+    return true;
   }
 
   private nextPagination(
@@ -1403,6 +1551,66 @@ export class IntegrationsService {
     };
   }
 
+  private assertValidatedSgpListResponse(
+    response: SgpHttpResponse,
+    kind: SgpEntityKind,
+    endpoint: string,
+    pagination?: Record<string, unknown>,
+    syncStageRef?: { current: string },
+  ) {
+    const validation = validateSgpListResponse(response.body, kind);
+    if (validation.ok) {
+      return;
+    }
+
+    const stage = syncStageRef?.current ?? `sync.${kind}.pagination`;
+    const failure = buildInvalidSgpPayloadFailure({
+      stage,
+      entity: kind,
+      endpoint,
+      method: "POST",
+      httpStatus: response.status,
+      contentType:
+        typeof response.headers?.["content-type"] === "string"
+          ? response.headers["content-type"]
+          : undefined,
+      body: response.body,
+      offset: this.numberFrom(pagination?.offset),
+      limit: this.numberFrom(pagination?.limit),
+      technicalMessage:
+        validation.technicalMessage ??
+        `Resposta SGP de ${kind} sem registros reconhecíveis nem indicador válido de página vazia.`,
+    });
+
+    throw new BadGatewayException({
+      code: failure.errorCode,
+      message: failure.message,
+      context: {
+        stage: failure.stage,
+        entity: failure.entity,
+        endpoint: failure.endpoint,
+        method: failure.method,
+        status: failure.httpStatus,
+        contentType: failure.contentType,
+        responseShape: failure.responseShape,
+        offset: this.numberFrom(pagination?.offset),
+        limit: this.numberFrom(pagination?.limit),
+      },
+    });
+  }
+
+  private mapSyncEntityFromKind(entity?: string): IntegrationSyncEntity {
+    switch (entity) {
+      case "contract":
+        return IntegrationSyncEntity.CONTRACT;
+      case "invoice":
+        return IntegrationSyncEntity.INVOICE;
+      case "customer":
+      default:
+        return IntegrationSyncEntity.CUSTOMER;
+    }
+  }
+
   private assertCustomerDiscoveryResponse(body: unknown, endpoint?: string) {
     if (typeof body === "string") {
       const normalized = body.toLowerCase();
@@ -1486,6 +1694,7 @@ export class IntegrationsService {
     runId: string | undefined,
     seenExternalIds: SgpSeenExternalIds,
     result: SyncCounters,
+    syncStageRef: { current: string },
   ) {
     let pagination = request.pagination;
     let includedPayload = false;
@@ -1501,11 +1710,18 @@ export class IntegrationsService {
         });
       }
 
+      syncStageRef.current = `contracts.page.${pagesFetched}`;
       const response = await this.sgpClient.discoverContracts(
         credentials,
         this.buildSyncPayload(request, incrementalContext, pagination),
       );
-      this.assertListDiscoveryResponse(response.body, "/api/contrato/list/");
+      this.assertValidatedSgpListResponse(
+        response,
+        "contract",
+        "/api/contrato/list/",
+        pagination,
+        syncStageRef,
+      );
       const contracts = this.extractContracts(response.body);
       if (contracts.length === 0) {
         this.logUnexpectedEmptyExtraction("contract", "/api/contrato/list/", response.body);
@@ -1581,6 +1797,7 @@ export class IntegrationsService {
     runId: string | undefined,
     seenExternalIds: SgpSeenExternalIds,
     result: SyncCounters,
+    syncStageRef: { current: string },
   ) {
     let pagination = request.pagination;
     let includedPayload = false;
@@ -1596,11 +1813,18 @@ export class IntegrationsService {
         });
       }
 
+      syncStageRef.current = `invoices.page.${pagesFetched}`;
       const response = await this.sgpClient.discoverTitles(
         credentials,
         this.buildSyncPayload(request, incrementalContext, pagination),
       );
-      this.assertListDiscoveryResponse(response.body, "/api/ura/titulos/");
+      this.assertValidatedSgpListResponse(
+        response,
+        "invoice",
+        "/api/ura/titulos/",
+        pagination,
+        syncStageRef,
+      );
       const invoices = this.extractTitles(response.body);
       if (invoices.length === 0) {
         this.logUnexpectedEmptyExtraction("invoice", "/api/ura/titulos/", response.body);

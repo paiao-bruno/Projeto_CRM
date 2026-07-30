@@ -3,6 +3,8 @@ import { describe, it } from "node:test";
 import {
   callSgpDirectWithRetry,
   classifyDirectSgpProbeResult,
+  buildSyncRunReportEntry,
+  formatSyncFailureMessage,
   computeRetryDelayMs,
   DEFAULT_SGP_DIRECT_ENDPOINTS,
   findExistingCredential,
@@ -192,5 +194,55 @@ describe("sgp-homologation", () => {
     );
     assert.equal(first?.id, "existing-id");
     assert.equal(second?.id, "existing-id");
+  });
+
+  it("formatSyncFailureMessage prefers run.errorMessage for homologation issues", () => {
+    const message = formatSyncFailureMessage({
+      status: "FAILED",
+      errorMessage: "O SGP retornou uma resposta inesperada (HTTP 500).",
+      metadata: { errorCode: "SGP_UNEXPECTED_RESPONSE", stage: "invoices.page.12" },
+    });
+    assert.match(message, /HTTP 500/);
+    assert.doesNotMatch(message, /token=/);
+  });
+
+  it("buildSyncRunReportEntry exposes errorMessage and metadata without secrets", () => {
+    const entry = buildSyncRunReportEntry({
+      id: "run-1",
+      status: "FAILED",
+      durationMs: 1000,
+      errorMessage: "O SGP retornou uma resposta inesperada (HTTP 500).",
+      metadata: {
+        errorCode: "SGP_UNEXPECTED_RESPONSE",
+        stage: "invoices.page.12",
+        responseShape: { payloadType: "object", topLevelKeys: ["erro"] },
+      },
+      customersProcessed: 1113,
+      customersIgnored: 1113,
+    });
+
+    assert.equal(entry.runId, "run-1");
+    assert.equal(entry.errorMessage, "O SGP retornou uma resposta inesperada (HTTP 500).");
+    assert.equal(entry.metadata.errorCode, "SGP_UNEXPECTED_RESPONSE");
+    assert.equal(entry.processed, 1113);
+    assert.doesNotMatch(JSON.stringify(entry), /token/);
+  });
+
+  it("formatSyncFailureMessage propagates real sync cause for full and incremental runs", () => {
+    const fullMessage = formatSyncFailureMessage({
+      status: "FAILED",
+      errorMessage: "O SGP retornou uma resposta inesperada (HTTP 502).",
+      metadata: { stage: "contracts.page.8", errorCode: "SGP_UNEXPECTED_RESPONSE" },
+    });
+    const incrementalMessage = formatSyncFailureMessage({
+      status: "FAILED",
+      errorMessage: "Resposta SGP de invoice sem registros reconhecíveis nem indicador válido de página vazia.",
+      metadata: { stage: "invoices.page.2", errorCode: "SGP_INVALID_RESPONSE_SHAPE" },
+    });
+
+    assert.match(fullMessage, /HTTP 502/);
+    assert.match(incrementalMessage, /invoice sem registros reconhecíveis/);
+    assert.doesNotMatch(fullMessage, /FAILED$/);
+    assert.doesNotMatch(JSON.stringify({ fullMessage, incrementalMessage }), /secret/);
   });
 });

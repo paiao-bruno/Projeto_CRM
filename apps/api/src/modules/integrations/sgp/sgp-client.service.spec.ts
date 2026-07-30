@@ -64,4 +64,37 @@ describe("SgpClientService", () => {
 
     await assert.rejects(() => service.discoverCustomers(credentials), HttpException);
   });
+
+  it("includes HTTP status in unexpected non-2xx failures without leaking body", async () => {
+    global.fetch = (async () =>
+      new Response(JSON.stringify({ token: "secret", app: "hidden", erro: true }), {
+        status: 500,
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch;
+
+    const service = new SgpClientService();
+
+    await assert.rejects(
+      async () => {
+        try {
+          await service.discoverTitles(credentials, { offset: 100, limit: 50 });
+        } catch (error) {
+          if (error instanceof HttpException) {
+            const response = error.getResponse() as Record<string, unknown>;
+            assert.match(String(response.message), /HTTP 500/);
+            assert.equal(response.code, "SGP_UNEXPECTED_RESPONSE");
+            const context = response.context as Record<string, unknown>;
+            assert.equal(typeof context.endpoint, "string");
+            assert.equal(context.method, "POST");
+            assert.equal(context.status, 500);
+            assert.equal((context.responseShape as { payloadType: string }).payloadType, "object");
+            assert.doesNotMatch(JSON.stringify(response), /secret/);
+            assert.doesNotMatch(JSON.stringify(response), /hidden/);
+          }
+          throw error;
+        }
+      },
+      HttpException,
+    );
+  });
 });

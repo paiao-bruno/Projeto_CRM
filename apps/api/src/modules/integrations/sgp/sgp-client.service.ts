@@ -1,5 +1,6 @@
 import { HttpException, HttpStatus, Injectable, Logger } from "@nestjs/common";
 import { redactSensitiveData, safeJsonStringify } from "../../../security/utils/redact-sensitive.util";
+import { describeSgpPayload } from "./sgp-response-parser";
 import {
   SgpErrorCode,
   SgpHttpResponse,
@@ -141,21 +142,24 @@ export class SgpClientService {
       );
 
       if (!response.ok) {
+        const responseShape = describeSgpPayload(body);
+        const contentType = response.headers.get("content-type") ?? undefined;
+        const isAuthFailure =
+          response.status === HttpStatus.UNAUTHORIZED ||
+          response.status === HttpStatus.FORBIDDEN;
         throw this.toHttpException(
-          response.status === HttpStatus.UNAUTHORIZED ||
-            response.status === HttpStatus.FORBIDDEN
-            ? "SGP_AUTH_FAILED"
-            : "SGP_UNEXPECTED_RESPONSE",
-          response.status === HttpStatus.UNAUTHORIZED ||
-            response.status === HttpStatus.FORBIDDEN
+          isAuthFailure ? "SGP_AUTH_FAILED" : "SGP_UNEXPECTED_RESPONSE",
+          isAuthFailure
             ? "Falha de autenticação ao consultar o SGP."
-            : "O SGP retornou uma resposta inesperada.",
+            : `O SGP retornou uma resposta inesperada (HTTP ${response.status}).`,
           response.status,
           {
             endpoint: options.endpoint,
+            method: "POST",
             status: response.status,
             statusText: response.statusText,
-            body: redactSensitiveData(body),
+            contentType,
+            responseShape,
           },
         );
       }

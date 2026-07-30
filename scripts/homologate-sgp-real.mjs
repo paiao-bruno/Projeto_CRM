@@ -27,6 +27,8 @@ import {
   DEFAULT_SGP_DIRECT_ENDPOINTS,
   findExistingCredential,
   fetchPaginatedWithRetry,
+  buildSyncRunReportEntry,
+  formatSyncFailureMessage,
   normalizeSgpApiUrl,
   redactSgpRequestUrl,
   resolveHomologationCredentials,
@@ -411,26 +413,15 @@ async function main() {
       steps.fail("sync-full", JSON.stringify(fullStart.body));
     } else {
       const fullRun = await waitSync(token, fullStart.body.runId);
-      report.sync.full = {
+      report.sync.full = buildSyncRunReportEntry({
+        ...fullRun,
         runId: fullStart.body.runId,
-        status: fullRun.status,
-        durationMs: fullRun.durationMs,
-        processed: fullRun.customersProcessed ?? fullRun.processed ?? 0,
-        created: fullRun.customersCreated ?? fullRun.created ?? 0,
-        updated: fullRun.customersUpdated ?? fullRun.updated ?? 0,
-        ignored: fullRun.customersIgnored ?? fullRun.ignored ?? 0,
-        contractsCreated: fullRun.contractsCreated ?? 0,
-        contractsUpdated: fullRun.contractsUpdated ?? 0,
-        contractsDeleted: fullRun.contractsDeleted ?? 0,
-        invoicesCreated: fullRun.invoicesCreated ?? 0,
-        invoicesUpdated: fullRun.invoicesUpdated ?? 0,
-        invoicesDeleted: fullRun.invoicesDeleted ?? 0,
-      };
+      });
       if (fullRun.status === "COMPLETED" || fullRun.status === "PARTIAL") {
         steps.pass("sync-full", report.sync.full);
         passLegacy("sync-completa", `${fullRun.durationMs}ms`);
       } else {
-        steps.fail("sync-full", fullRun.status ?? "FAILED");
+        steps.fail("sync-full", formatSyncFailureMessage(fullRun));
       }
     }
 
@@ -477,19 +468,14 @@ async function main() {
       steps.fail("sync-incremental", JSON.stringify(incStart.body));
     } else {
       const incRun = await waitSync(token, incStart.body.runId);
-      report.sync.incremental = {
+      report.sync.incremental = buildSyncRunReportEntry({
+        ...incRun,
         runId: incStart.body.runId,
-        status: incRun.status,
-        durationMs: incRun.durationMs,
-        processed: incRun.customersProcessed ?? incRun.processed ?? 0,
-        created: incRun.customersCreated ?? incRun.created ?? 0,
-        updated: incRun.customersUpdated ?? incRun.updated ?? 0,
-        ignored: incRun.customersIgnored ?? incRun.ignored ?? 0,
-      };
+      });
       if (incRun.status === "COMPLETED" || incRun.status === "PARTIAL") {
         steps.pass("sync-incremental", report.sync.incremental);
       } else {
-        steps.fail("sync-incremental", incRun.status ?? "FAILED");
+        steps.fail("sync-incremental", formatSyncFailureMessage(incRun));
       }
     }
 

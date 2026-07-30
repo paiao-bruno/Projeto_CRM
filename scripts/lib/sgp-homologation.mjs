@@ -44,6 +44,55 @@ export function sanitizeText(value) {
   return String(value).replace(/(token|senha|password|secret|app)=([^&\s]+)/gi, "$1=[REDACTED]");
 }
 
+export function formatSyncFailureMessage(run) {
+  if (!run || typeof run !== "object") {
+    return "FAILED";
+  }
+
+  if (typeof run.errorMessage === "string" && run.errorMessage.trim()) {
+    return sanitizeText(run.errorMessage.trim());
+  }
+
+  const metadata = run.metadata && typeof run.metadata === "object" ? run.metadata : null;
+  if (typeof metadata?.errorCode === "string" && metadata.errorCode.trim()) {
+    const stage = typeof metadata.stage === "string" ? metadata.stage : null;
+    return sanitizeText(stage ? `${metadata.errorCode} (${stage})` : metadata.errorCode);
+  }
+
+  if (typeof run.status === "string" && run.status.trim()) {
+    return sanitizeText(run.status.trim());
+  }
+
+  return "FAILED";
+}
+
+export function buildSyncRunReportEntry(run) {
+  const metadata =
+    run?.metadata && typeof run.metadata === "object" && !Array.isArray(run.metadata)
+      ? run.metadata
+      : null;
+
+  return {
+    runId: run?.id ?? run?.runId ?? null,
+    status: run?.status ?? null,
+    durationMs: run?.durationMs ?? null,
+    errorMessage: run?.errorMessage ? sanitizeText(run.errorMessage) : null,
+    stackTrace: run?.stackTrace ? sanitizeText(String(run.stackTrace).slice(0, 500)) : null,
+    metadata,
+    errors: Array.isArray(run?.errors) ? run.errors : null,
+    processed: run?.customersProcessed ?? run?.processed ?? 0,
+    created: run?.customersCreated ?? run?.created ?? 0,
+    updated: run?.customersUpdated ?? run?.updated ?? 0,
+    ignored: run?.customersIgnored ?? run?.ignored ?? 0,
+    contractsCreated: run?.contractsCreated ?? 0,
+    contractsUpdated: run?.contractsUpdated ?? 0,
+    contractsDeleted: run?.contractsDeleted ?? 0,
+    invoicesCreated: run?.invoicesCreated ?? 0,
+    invoicesUpdated: run?.invoicesUpdated ?? 0,
+    invoicesDeleted: run?.invoicesDeleted ?? 0,
+  };
+}
+
 export function isRecord(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
