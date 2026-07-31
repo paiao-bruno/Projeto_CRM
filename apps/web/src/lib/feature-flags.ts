@@ -39,6 +39,7 @@ export const ALL_NAV_ITEMS: NavItem[] = [
     icon: "MessageCircle",
     children: [{ href: "/team-chat", label: "Team", icon: "Hash", feature: "teamChat" }],
   },
+  { href: "/sales-funnel", label: "Funil de Vendas", icon: "Kanban" },
   { href: "/customers", label: "CRM", icon: "Users" },
   { href: "/contracts", label: "Contratos", icon: "FileText" },
   { href: "/invoices", label: "Faturas", icon: "Receipt" },

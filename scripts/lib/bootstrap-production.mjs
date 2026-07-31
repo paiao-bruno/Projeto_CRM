@@ -6,6 +6,8 @@ export const PRODUCTION_PERMISSIONS = [
   "ai_agents.manage",
   "crm.manage",
   "customers.manage",
+  "sales_funnel.read",
+  "sales_funnel.manage",
 ];
 
 export const PLACEHOLDER_VALUES = new Set([

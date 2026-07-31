@@ -211,6 +211,13 @@ enum DealStatus {
   LOST
 }
 
+enum DealPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
 enum ContractStatus {
   ACTIVE
   INACTIVE
@@ -351,6 +358,7 @@ model Tenant {
   pipelines           Pipeline[]
   pipelineStages      PipelineStage[]
   deals               Deal[]
+  dealHistory         DealHistory[]
   campaigns           Campaign[]
   campaignRecipients  CampaignRecipient[]
   campaignEvents      CampaignEvent[]
@@ -491,6 +499,11 @@ model TenantMember {
   ownedCustomers        Customer[]            @relation("CustomerOwner")
   ownedLeads            Lead[]                @relation("LeadOwner")
   ownedDeals            Deal[]                @relation("DealOwner")
+  createdDeals          Deal[]                @relation("DealCreatedBy")
+  updatedDeals          Deal[]                @relation("DealUpdatedBy")
+  lostDeals             Deal[]                @relation("DealLostBy")
+  archivedDeals         Deal[]                @relation("DealArchivedBy")
+  dealHistory           DealHistory[]
   assignedEvents        ScheduleEvent[]       @relation("EventAssignee")
   assignedTasks         Task[]                @relation("TaskAssignee")
   integrationSyncRuns   IntegrationSyncRun[]
@@ -1260,6 +1273,7 @@ model PipelineStage {
   tenantId   String   @db.Uuid
   pipelineId String   @db.Uuid
   name       String
+  code       String?
   position   Int
   color      String?
   createdAt  DateTime @default(now())
@@ -1271,37 +1285,89 @@ model PipelineStage {
 
   @@unique([pipelineId, position])
   @@unique([pipelineId, name])
+  @@unique([pipelineId, code])
   @@index([tenantId])
 }
 
 model Deal {
-  id              String     @id @default(uuid()) @db.Uuid
-  tenantId        String     @db.Uuid
-  pipelineId      String     @db.Uuid
-  stageId         String     @db.Uuid
-  customerId      String?    @db.Uuid
-  leadId          String?    @db.Uuid
-  ownerMemberId   String?    @db.Uuid
-  title           String
-  valueCents      Int
-  currency        String     @default("BRL")
-  status          DealStatus @default(OPEN)
-  expectedCloseAt DateTime?
-  wonAt           DateTime?
-  lostAt          DateTime?
-  metadata        Json?
-  createdAt       DateTime   @default(now())
-  updatedAt       DateTime   @updatedAt
+  id                String       @id @default(uuid()) @db.Uuid
+  tenantId          String       @db.Uuid
+  pipelineId        String       @db.Uuid
+  stageId           String       @db.Uuid
+  customerId        String?      @db.Uuid
+  leadId            String?      @db.Uuid
+  ownerMemberId     String?      @db.Uuid
+  createdByMemberId String?      @db.Uuid
+  updatedByMemberId String?      @db.Uuid
+  lostByMemberId    String?      @db.Uuid
+  archivedByMemberId String?     @db.Uuid
+  title             String
+  phone             String?
+  email             String?
+  clientType        String?
+  entrySource       String?
+  contactType       String?
+  city              String?
+  neighborhood      String?
+  priority          DealPriority @default(MEDIUM)
+  valueCents        Int          @default(0)
+  currency          String       @default("BRL")
+  status            DealStatus   @default(OPEN)
+  position          Int          @default(0)
+  nextAction        String?
+  nextActionAt      DateTime?
+  notes             String?      @db.Text
+  lossReason        String?
+  expectedCloseAt   DateTime?
+  wonAt             DateTime?
+  lostAt            DateTime?
+  archivedAt        DateTime?
+  version           Int          @default(1)
+  metadata          Json?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
 
-  tenant      Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  pipeline    Pipeline      @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
-  stage       PipelineStage @relation(fields: [stageId], references: [id], onDelete: Cascade)
-  customer    Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  lead        Lead?         @relation(fields: [leadId], references: [id], onDelete: SetNull)
-  ownerMember TenantMember? @relation("DealOwner", fields: [ownerMemberId], references: [id], onDelete: SetNull)
+  tenant           Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  pipeline         Pipeline       @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  stage            PipelineStage  @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  customer         Customer?      @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  lead             Lead?          @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  ownerMember      TenantMember?  @relation("DealOwner", fields: [ownerMemberId], references: [id], onDelete: SetNull)
+  createdByMember  TenantMember?  @relation("DealCreatedBy", fields: [createdByMemberId], references: [id], onDelete: SetNull)
+  updatedByMember  TenantMember?  @relation("DealUpdatedBy", fields: [updatedByMemberId], references: [id], onDelete: SetNull)
+  lostByMember     TenantMember?  @relation("DealLostBy", fields: [lostByMemberId], references: [id], onDelete: SetNull)
+  archivedByMember TenantMember?  @relation("DealArchivedBy", fields: [archivedByMemberId], references: [id], onDelete: SetNull)
+  history          DealHistory[]
 
   @@index([tenantId, status])
   @@index([tenantId, stageId])
+  @@index([tenantId, stageId, position])
+  @@index([tenantId, ownerMemberId])
+  @@index([tenantId, archivedAt])
+  @@index([tenantId, entrySource])
+  @@index([tenantId, clientType])
+  @@index([tenantId, city])
+  @@index([tenantId, nextActionAt])
+  @@index([tenantId, createdAt])
+}
+
+model DealHistory {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @db.Uuid
+  dealId        String   @db.Uuid
+  action        String
+  fieldName     String?
+  previousValue Json?
+  newValue      Json?
+  actorMemberId String?  @db.Uuid
+  createdAt     DateTime @default(now())
+
+  tenant Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  deal   Deal          @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  actor  TenantMember? @relation(fields: [actorMemberId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, dealId, createdAt])
+  @@index([tenantId, action, createdAt])
 }
 
 model Campaign {

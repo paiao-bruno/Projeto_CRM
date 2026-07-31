@@ -22,6 +22,7 @@ describe("frontend routes", () => {
       "flows",
       "integrations",
       "invoices",
+      "sales-funnel",
       "schedule",
       "team-chat",
     ]);

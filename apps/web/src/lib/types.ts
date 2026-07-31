@@ -340,3 +340,120 @@ export type DashboardOverview = {
     }>;
   };
 };
+
+export type DealPriority = "LOW" | "MEDIUM" | "HIGH" | "URGENT";
+export type DealStatus = "OPEN" | "WON" | "LOST";
+
+export type TenantMemberSummary = {
+  id: string;
+  displayName: string | null;
+  jobTitle: string | null;
+  user: { id: string; name: string; email: string };
+};
+
+export type DealStage = {
+  id: string;
+  name: string;
+  code: string | null;
+  color: string | null;
+  position: number;
+};
+
+export type DealOwner = {
+  id: string;
+  displayName: string | null;
+  user: { name: string };
+};
+
+export type DealSummary = {
+  id: string;
+  title: string;
+  phone?: string | null;
+  email?: string | null;
+  clientType?: string | null;
+  entrySource?: string | null;
+  contactType?: string | null;
+  city?: string | null;
+  neighborhood?: string | null;
+  priority: DealPriority;
+  valueCents: number;
+  status: DealStatus;
+  position: number;
+  nextAction?: string | null;
+  nextActionAt?: string | null;
+  notes?: string | null;
+  lossReason?: string | null;
+  archivedAt?: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  stage: DealStage;
+  ownerMember?: DealOwner | null;
+};
+
+export type DealHistoryEntry = {
+  id: string;
+  action: string;
+  fieldName?: string | null;
+  previousValue?: unknown;
+  newValue?: unknown;
+  createdAt: string;
+  actor?: {
+    id: string;
+    displayName: string | null;
+    user: { name: string };
+  } | null;
+};
+
+export type DealDetail = DealSummary & {
+  history?: DealHistoryEntry[];
+};
+
+export type SalesFunnelBoard = {
+  pipeline: { id: string; name: string; isDefault: boolean };
+  stages: Array<DealStage & { deals: DealSummary[]; count: number }>;
+};
+
+export type SalesFunnelMetrics = {
+  definitions: {
+    overallConversion: string;
+    stageConversion: string;
+  };
+  totals: {
+    open: number;
+    won: number;
+    lost: number;
+    createdInPeriod: number;
+    activatedInPeriod: number;
+    overdueNextAction: number;
+    withoutOwner: number;
+    estimatedValueCents: number;
+    overallConversionRate: number | null;
+  };
+  byStage: Array<{ code: string; name: string; count: number }>;
+  stageConversion: Array<{ from: string; to: string; rate: number | null }>;
+  segments: {
+    entrySource: Array<{ key: string; count: number }>;
+    clientType: Array<{ key: string; count: number }>;
+    contactType: Array<{ key: string; count: number }>;
+    city: Array<{ key: string; count: number }>;
+    neighborhood: Array<{ key: string; count: number }>;
+    owner: Array<{ key: string; count: number }>;
+  };
+};
+
+export type SalesFunnelFilters = {
+  search?: string;
+  stageCode?: string;
+  ownerMemberId?: string;
+  entrySource?: string;
+  clientType?: string;
+  contactType?: string;
+  city?: string;
+  neighborhood?: string;
+  priority?: DealPriority;
+  includeArchived?: boolean;
+  includeLost?: boolean;
+  createdFrom?: string;
+  createdTo?: string;
+};

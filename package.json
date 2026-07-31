@@ -7,6 +7,7 @@
   ],
   "scripts": {
     "dev": "node scripts/ensure-db.mjs && npm run prisma:generate && npm run db:migrate:deploy && node scripts/dev.mjs",
+    "dev:funnel": "SGP_AUTO_SYNC_ENABLED=false node scripts/ensure-db.mjs && npm run prisma:generate && npm run db:migrate:deploy && SGP_AUTO_SYNC_ENABLED=false node scripts/dev.mjs",
     "dev:no-db": "node scripts/dev.mjs",
     "build": "npm run build -w apps/api && npm run build -w apps/web",
     "test": "npm run test -w apps/api && npm run test -w apps/web",
@@ -31,7 +32,8 @@
     "test:reencrypt-sgp-integration": "npm run build -w apps/api && node --test scripts/reencrypt-sgp-integration.spec.mjs",
     "test:reencrypt-sgp-integration:live": "npm run build -w apps/api && node scripts/reencrypt-sgp-integration.integration.mjs",
     "load-test": "node scripts/load-test.mjs",
-    "db:test-migrate-deploy": "node scripts/test-migrate-deploy.mjs"
+    "db:test-migrate-deploy": "node scripts/test-migrate-deploy.mjs",
+    "test:sales-funnel-integration": "node scripts/test-sales-funnel-integration.mjs"
   },
   "repository": {
     "type": "git",

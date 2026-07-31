@@ -11,6 +11,8 @@ const PERMISSIONS = [
   "ai_agents.manage",
   "crm.manage",
   "customers.manage",
+  "sales_funnel.read",
+  "sales_funnel.manage",
 ];
 
 @Injectable()

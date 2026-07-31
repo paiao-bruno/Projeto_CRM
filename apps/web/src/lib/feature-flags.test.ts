@@ -53,7 +53,7 @@ describe("feature-flags", () => {
     const nav = buildNavItems(env);
     const hrefs = nav.flatMap((item) => [item.href, ...(item.children?.map((child) => child.href) ?? [])]);
 
-    for (const required of ["/dashboard", "/integrations", "/chat", "/customers", "/contracts", "/invoices", "/ai-agents"]) {
+    for (const required of ["/dashboard", "/integrations", "/chat", "/sales-funnel", "/customers", "/contracts", "/invoices", "/ai-agents"]) {
       assert.ok(hrefs.includes(required), `missing ${required}`);
     }
   });

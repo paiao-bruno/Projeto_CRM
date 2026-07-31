@@ -12,6 +12,7 @@ import { DatabaseModule } from "./modules/database/database.module";
 import { IntegrationsModule } from "./modules/integrations/integrations.module";
 import { HealthModule } from "./modules/health/health.module";
 import { InvoicesModule } from "./modules/invoices/invoices.module";
+import { SalesFunnelModule } from "./modules/sales-funnel/sales-funnel.module";
 import { SeedModule } from "./modules/seed/seed.module";
 import { readSecurityConfig } from "./security/security.config";
 import { SecurityModule } from "./security/security.module";
@@ -60,6 +61,7 @@ const seedEnabled =
     IntegrationsModule,
     ContractsModule,
     InvoicesModule,
+    SalesFunnelModule,
     HealthModule,
   ],
   providers: [
