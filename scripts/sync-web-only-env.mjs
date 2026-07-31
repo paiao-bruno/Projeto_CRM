@@ -1,6 +1,7 @@
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "./preflight.mjs";
+import { resolveJwtSecretForDev } from "./lib/jwt-secret.mjs";
 
 const WEB_ENV_PATH = join(REPO_ROOT, "apps/web/.env.development.local");
 
@@ -15,12 +16,16 @@ function readDatabaseUrl() {
 
 export function syncWebOnlyEnv() {
   const databaseUrl = readDatabaseUrl();
+  const jwtSecret = resolveJwtSecretForDev({
+    env: { ...process.env, NODE_ENV: "development" },
+  });
+
   const contents = `# Gerado automaticamente por dev:web:funnel (nao commitar)
 NEXT_PUBLIC_API_URL=/api
 NEXT_PUBLIC_WEB_ONLY_MODE=true
 SGP_AUTO_SYNC_ENABLED=false
 DATABASE_URL=${databaseUrl}
-JWT_ACCESS_SECRET=dev-access-secret-min-32-chars-long
+JWT_ACCESS_SECRET=${jwtSecret}
 `;
 
   writeFileSync(WEB_ENV_PATH, contents, "utf8");

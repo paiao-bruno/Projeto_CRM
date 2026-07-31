@@ -1,34 +1,60 @@
 #!/usr/bin/env node
 /**
- * Teste de integração do funil em banco descartável.
- * Requer PostgreSQL local (ex.: docker compose up -d postgres).
+ * Teste de integração do funil — SOMENTE em banco descartável.
  */
 import { spawnSync } from "node:child_process";
 import { Client } from "pg";
 import { PrismaClient, DealStatus } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
+import {
+  assertDisposableDatabase,
+  DEFAULT_E2E_DATABASE_URL,
+} from "./lib/disposable-db.mjs";
+import { applyDisposableMigrations } from "./lib/apply-disposable-migrations.mjs";
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ??
-  "postgresql://crm:crm@localhost:5432/isp_crm?schema=public";
+const DATABASE_URL = process.env.DATABASE_URL ?? DEFAULT_E2E_DATABASE_URL;
 
-function run(command, args) {
+function run(command, args, env = process.env) {
   const result = spawnSync(command, args, {
     stdio: "inherit",
     shell: process.platform === "win32",
-    env: process.env,
+    env,
   });
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
+async function ensureDatabase() {
+  const target = assertDisposableDatabase(DATABASE_URL, {
+    requireFlag: process.env.ALLOW_DISPOSABLE_DB === "true",
+  });
+
+  const admin = new Client({
+    connectionString: `postgresql://crm:crm@${target.host}:${target.port}/postgres`,
+  });
+  await admin.connect();
+  const exists = await admin.query(`SELECT 1 FROM pg_database WHERE datname = $1`, [
+    target.database,
+  ]);
+  if (exists.rowCount === 0) {
+    await admin.query(`CREATE DATABASE "${target.database}" OWNER crm`);
+  }
+  await admin.end();
+}
+
 async function main() {
+  assertDisposableDatabase(DATABASE_URL, {
+    requireFlag: process.env.ALLOW_DISPOSABLE_DB === "true",
+  });
+
+  await ensureDatabase();
+
   const admin = new Client({ connectionString: DATABASE_URL });
   await admin.connect();
   await admin.query("DROP SCHEMA IF EXISTS public CASCADE");
   await admin.query("CREATE SCHEMA public");
   await admin.end();
 
-  run("npx", ["prisma", "migrate", "deploy", "--schema", "prisma/schema.prisma"]);
+  await applyDisposableMigrations(DATABASE_URL);
   run("npx", ["prisma", "generate", "--schema", "prisma/schema.prisma"]);
 
   const pool = new Client({ connectionString: DATABASE_URL });

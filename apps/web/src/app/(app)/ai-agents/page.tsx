@@ -10,6 +10,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
+import { isWebOnlyMode } from "@/lib/runtime-config";
+import { LegacyApiPageShell } from "@/components/legacy-api-unavailable";
 import { AiAgent } from "@/lib/types";
 
 const emptyForm = {
@@ -26,13 +28,15 @@ export default function AiAgentsPage() {
   const [form, setForm] = useState(emptyForm);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const webOnly = isWebOnlyMode();
 
   async function loadAgents() {
-    if (!token) return;
+    if (!token || webOnly) return;
     setAgents(await api.get<AiAgent[]>("/ai-agents", token));
   }
 
   useEffect(() => {
+    if (webOnly) return;
     loadAgents().catch((err) =>
       setError(err instanceof Error ? err.message : "Erro ao carregar agentes."),
     );
@@ -75,6 +79,17 @@ export default function AiAgentsPage() {
     if (!token || !confirm("Excluir este agente?")) return;
     await api.delete(`/ai-agents/${id}`, token);
     await loadAgents();
+  }
+
+  if (webOnly) {
+    return (
+      <LegacyApiPageShell
+        title="Agentes IA"
+        description="Configure prompts, modelos e disponibilidade dos assistentes virtuais."
+      >
+        <div />
+      </LegacyApiPageShell>
+    );
   }
 
   return (

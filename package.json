@@ -29,7 +29,11 @@
     "homologate:sgp": "node scripts/homologate-sgp-real.mjs",
     "investigate:sgp": "node scripts/investigate-sgp-sync.mjs",
     "audit:sgp-regression": "node scripts/audit-sgp-regression.mjs",
-    "bootstrap:production": "node scripts/bootstrap-production.mjs",
+    "bootstrap:web-only": "node scripts/bootstrap-web-only.mjs",
+    "test:disposable-db": "node --test scripts/disposable-db.spec.mjs",
+    "test:jwt-secret": "node --test scripts/jwt-secret.spec.mjs",
+    "test:sales-funnel-contract": "node scripts/sales-funnel-contract.spec.mjs",
+    "test:web-only-e2e": "node scripts/test-web-only-e2e.mjs",
     "test:bootstrap": "node --test scripts/bootstrap-production.spec.mjs",
     "reencrypt:sgp-integration": "node scripts/reencrypt-sgp-integration.mjs",
     "reencrypt:sgp-integration:preflight": "node scripts/reencrypt-sgp-integration.mjs --preflight",
@@ -37,7 +41,7 @@
     "test:reencrypt-sgp-integration:live": "npm run build -w apps/api && node scripts/reencrypt-sgp-integration.integration.mjs",
     "load-test": "node scripts/load-test.mjs",
     "db:test-migrate-deploy": "node scripts/test-migrate-deploy.mjs",
-    "test:sales-funnel-integration": "node scripts/test-sales-funnel-integration.mjs"
+    "test:sales-funnel-integration": "ALLOW_DISPOSABLE_DB=true node scripts/test-sales-funnel-integration.mjs"
   },
   "repository": {
     "type": "git",

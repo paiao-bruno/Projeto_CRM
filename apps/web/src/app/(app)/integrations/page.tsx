@@ -20,6 +20,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
+import { isWebOnlyMode } from "@/lib/runtime-config";
+import { LegacyApiPageShell } from "@/components/legacy-api-unavailable";
 import {
   IntegrationSyncRun,
   SgpCredentials,
@@ -147,6 +149,7 @@ export default function IntegrationsPage() {
   const [form, setForm] = useState<CredentialFormState>(emptyForm);
   const [isCreating, setIsCreating] = useState(true);
   const [fullSync, setFullSync] = useState(false);
+  const webOnly = isWebOnlyMode();
 
   const selectedCredential = useMemo(
     () => credentials.find((item) => item.id === selectedCredentialId) ?? null,
@@ -154,7 +157,7 @@ export default function IntegrationsPage() {
   );
 
   const loadCredentials = useCallback(async () => {
-    if (!token) return;
+    if (!token || webOnly) return;
 
     const items = await api.get<SgpCredentials[]>("/integrations/sgp/credentials", token);
     setCredentials(items);
@@ -170,10 +173,10 @@ export default function IntegrationsPage() {
     setSelectedCredentialId(current.id);
     setForm(toFormState(current));
     setIsCreating(false);
-  }, [selectedCredentialId, token]);
+  }, [selectedCredentialId, token, webOnly]);
 
   const loadSyncHistory = useCallback(async () => {
-    if (!token) return;
+    if (!token || webOnly) return;
 
     const response = await api.get<SgpSyncHistoryListResponse>(
       `/integrations/sgp/sync-runs?page=${historyPage}&limit=10`,
@@ -181,25 +184,27 @@ export default function IntegrationsPage() {
     );
     setSyncHistory(response.items);
     setHistoryTotalPages(response.totalPages || 1);
-  }, [historyPage, token]);
+  }, [historyPage, token, webOnly]);
 
   const loadHistoryDetail = useCallback(
     async (runId: string) => {
-      if (!token) return;
+      if (!token || webOnly) return;
       const detail = await api.get<IntegrationSyncRun>(`/integrations/sgp/sync-runs/${runId}`, token);
       setHistoryDetail(detail);
       setSelectedHistoryId(runId);
     },
-    [token],
+    [token, webOnly],
   );
 
   useEffect(() => {
+    if (webOnly) return;
     void loadCredentials().catch((err) => {
       setError(err instanceof Error ? err.message : "Erro ao carregar credenciais SGP.");
     });
-  }, [loadCredentials]);
+  }, [loadCredentials, webOnly]);
 
   useEffect(() => {
+    if (webOnly) return;
     void loadSyncHistory().catch((err) => {
       setError(err instanceof Error ? err.message : "Erro ao carregar histórico de sincronização.");
     });
@@ -392,6 +397,17 @@ export default function IntegrationsPage() {
 
   const visible = "sgp".includes(search.toLowerCase()) || "api externa".includes(search.toLowerCase());
   const activeCredentials = credentials.filter((item) => item.status === "ACTIVE").length;
+
+  if (webOnly) {
+    return (
+      <LegacyApiPageShell
+        title="Integrations"
+        description="Credenciais SGP, sincronização e conectores externos."
+      >
+        <div />
+      </LegacyApiPageShell>
+    );
+  }
 
   return (
     <div className="space-y-6">

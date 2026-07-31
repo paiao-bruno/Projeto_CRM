@@ -1,40 +1,19 @@
-import { spawn } from "node:child_process";
+#!/usr/bin/env node
+/**
+ * dev:web delega ao fluxo oficial web-only (dev:web:funnel).
+ */
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
-const commands = [{ name: "web", args: ["run", "dev", "-w", "apps/web"] }];
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-const children = commands.map(({ name, args }) => {
-  const child = spawn("npm", args, {
-    stdio: ["inherit", "pipe", "pipe"],
-    shell: process.platform === "win32",
-    env: process.env,
-  });
+console.log("[dev:web] Redirecionando para o fluxo oficial npm run dev:web:funnel...\n");
 
-  child.stdout.on("data", (chunk) => {
-    process.stdout.write(`[${name}] ${chunk}`);
-  });
-
-  child.stderr.on("data", (chunk) => {
-    process.stderr.write(`[${name}] ${chunk}`);
-  });
-
-  child.on("exit", (code) => {
-    if (code && code !== 0) {
-      console.error(`[${name}] exited with code ${code}`);
-      shutdown(code);
-    }
-  });
-
-  return child;
+const result = spawnSync("node", [join(root, "scripts/dev-web-funnel.mjs")], {
+  stdio: "inherit",
+  env: process.env,
+  shell: process.platform === "win32",
 });
 
-function shutdown(code = 0) {
-  for (const child of children) {
-    if (!child.killed) {
-      child.kill("SIGTERM");
-    }
-  }
-  process.exit(code);
-}
-
-process.on("SIGINT", () => shutdown(0));
-process.on("SIGTERM", () => shutdown(0));
+process.exit(result.status ?? 0);

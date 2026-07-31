@@ -6,6 +6,7 @@ coverage/
 .env
 .env.local
 .env.*.local
+apps/web/.jwt-secret.local
 
 # Local storage for development uploads
 storage/

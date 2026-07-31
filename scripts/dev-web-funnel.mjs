@@ -35,7 +35,13 @@ console.log("\n[dev:web:funnel] Iniciando somente apps/web (sem apps/api)...");
 console.log("[dev:web:funnel] API interna: http://localhost:3000/api");
 console.log("[dev:web:funnel] Funil: http://localhost:3000/sales-funnel\n");
 
-const child = spawn("npm", ["run", "dev", "-w", "apps/web"], {
+const WEB_ARGS = ["run", "dev", "-w", "apps/web"];
+if (WEB_ARGS.some((arg) => arg.includes("apps/api"))) {
+  console.error("[dev:web:funnel] ABORTADO: tentativa de iniciar apps/api.");
+  process.exit(1);
+}
+
+const child = spawn("npm", WEB_ARGS, {
   stdio: "inherit",
   shell: process.platform === "win32",
   env: process.env,

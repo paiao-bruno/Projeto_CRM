@@ -2,6 +2,7 @@ import { compare } from "bcryptjs";
 import { SignJWT, jwtVerify } from "jose";
 import { getPrisma } from "./prisma";
 import { HttpError } from "./http";
+import { jwtSecretKey } from "./jwt-secret";
 
 export type ServerAuthUser = {
   sub: string;
@@ -13,12 +14,6 @@ export type ServerAuthUser = {
   role: string;
   permissions?: string[];
 };
-
-function jwtSecret() {
-  return new TextEncoder().encode(
-    process.env.JWT_ACCESS_SECRET ?? "dev-access-secret-min-32-chars-long",
-  );
-}
 
 export async function login(email: string, password: string) {
   const prisma = getPrisma();
@@ -73,14 +68,14 @@ export async function login(email: string, password: string) {
   const accessToken = await new SignJWT(payload)
     .setProtectedHeader({ alg: "HS256" })
     .setExpirationTime("8h")
-    .sign(jwtSecret());
+    .sign(jwtSecretKey());
 
   return { accessToken, user: payload };
 }
 
 export async function verifyAccessToken(token: string): Promise<ServerAuthUser> {
   try {
-    const verified = await jwtVerify(token, jwtSecret());
+    const verified = await jwtVerify(token, jwtSecretKey());
     return verified.payload as ServerAuthUser;
   } catch {
     throw new HttpError(401, "Token invalido ou expirado.");

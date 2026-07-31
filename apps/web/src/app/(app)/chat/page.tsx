@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
+import { isWebOnlyMode } from "@/lib/runtime-config";
+import { LegacyApiPageShell } from "@/components/legacy-api-unavailable";
 import { Conversation } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -18,9 +20,10 @@ export default function ChatPage() {
   const [selected, setSelected] = useState<Conversation | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const webOnly = isWebOnlyMode();
 
   async function loadConversations() {
-    if (!token) return;
+    if (!token || webOnly) return;
     const data = await api.get<Conversation[]>("/chat/conversations", token);
     setConversations(data);
     if (!selectedId && data[0]) {
@@ -29,33 +32,45 @@ export default function ChatPage() {
   }
 
   async function loadConversation(id: string) {
-    if (!token) return;
+    if (!token || webOnly) return;
     const data = await api.get<Conversation>(`/chat/conversations/${id}`, token);
     setSelected(data);
   }
 
   useEffect(() => {
+    if (webOnly) return;
     loadConversations().catch((err) =>
       setError(err instanceof Error ? err.message : "Erro ao carregar conversas."),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+  }, [token, webOnly]);
 
   useEffect(() => {
-    if (!selectedId) return;
+    if (webOnly || !selectedId) return;
     loadConversation(selectedId).catch((err) =>
       setError(err instanceof Error ? err.message : "Erro ao carregar historico."),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, token]);
+  }, [selectedId, token, webOnly]);
 
   async function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!token || !selected || !message.trim()) return;
+    if (!token || !selected || !message.trim() || webOnly) return;
 
     await api.post(`/chat/conversations/${selected.id}/messages`, { body: message }, token);
     setMessage("");
     await Promise.all([loadConversations(), loadConversation(selected.id)]);
+  }
+
+  if (webOnly) {
+    return (
+      <LegacyApiPageShell
+        title="Chat"
+        description="Atendimento manual, histórico completo e transferência entre humano e IA."
+      >
+        <div />
+      </LegacyApiPageShell>
+    );
   }
 
   return (

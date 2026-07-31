@@ -35,6 +35,8 @@ import { useAuth } from "@/components/auth-provider";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { api } from "@/lib/api";
+import { isWebOnlyMode } from "@/lib/runtime-config";
+import { LegacyApiPageShell } from "@/components/legacy-api-unavailable";
 import { DashboardOverview } from "@/lib/types";
 
 const cardIcons = {
@@ -94,14 +96,26 @@ export default function DashboardPage() {
   const { token } = useAuth();
   const [data, setData] = useState<DashboardOverview | null>(null);
   const [error, setError] = useState("");
+  const webOnly = isWebOnlyMode();
 
   useEffect(() => {
-    if (!token) return;
+    if (!token || webOnly) return;
     api
       .get<DashboardOverview>("/dashboard", token)
       .then(setData)
       .catch((err) => setError(err instanceof Error ? err.message : "Erro ao carregar."));
-  }, [token]);
+  }, [token, webOnly]);
+
+  if (webOnly) {
+    return (
+      <LegacyApiPageShell
+        title="Dashboard"
+        description="Visão geral operacional e métricas do CRM."
+      >
+        <div />
+      </LegacyApiPageShell>
+    );
+  }
 
   if (error) {
     return <div className="rounded-2xl bg-red-500/10 p-4 text-red-200">{error}</div>;

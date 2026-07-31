@@ -1,14 +1,5 @@
 import { LoginResponse } from "./types";
-
-/** URL da API — leitura direta para o Next.js inlined no bundle do browser. */
-function getApiBaseUrl(): string {
-  if (process.env.NEXT_PUBLIC_WEB_ONLY_MODE === "true") {
-    return "/api";
-  }
-  const configured = process.env.NEXT_PUBLIC_API_URL?.trim();
-  if (configured) return configured;
-  return "http://localhost:4000/api";
-}
+import { resolveApiBaseUrl } from "./runtime-config";
 
 type RequestOptions = RequestInit & {
   token?: string | null;
@@ -22,7 +13,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     headers.set("Authorization", `Bearer ${options.token}`);
   }
 
-  const response = await fetch(`${getApiBaseUrl()}${path}`, {
+  const response = await fetch(`${resolveApiBaseUrl()}${path}`, {
     ...options,
     headers,
   });
