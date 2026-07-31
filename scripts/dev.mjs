@@ -1,5 +1,10 @@
 import { spawn } from "node:child_process";
 
+console.log(
+  "[dev] Modo completo/legado: inicia apps/api (NestJS :4000) + apps/web (:3000). " +
+    "Para web-only use: npm run dev:web:funnel",
+);
+
 const commands = [
   { name: "api", args: ["run", "dev", "-w", "apps/api"] },
   { name: "web", args: ["run", "dev", "-w", "apps/web"] },

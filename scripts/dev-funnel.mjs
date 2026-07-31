@@ -7,6 +7,11 @@ import { spawnSync } from "node:child_process";
 
 process.env.SGP_AUTO_SYNC_ENABLED = "false";
 
+console.log(
+  "[dev:funnel] Modo completo/legado: inicia apps/api (NestJS :4000) + apps/web (:3000), SGP off. " +
+    "Para web-only use: npm run dev:web:funnel",
+);
+
 function run(label, command, args) {
   console.log(`\n[dev:funnel] ${label}...`);
   const result = spawnSync(command, args, {
