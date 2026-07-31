@@ -4,6 +4,10 @@
  * Não inicia apps/api, NestJS, dist/main.js nem sincronização SGP.
  */
 import { spawn, spawnSync } from "node:child_process";
+import { runPreflight, REPO_ROOT } from "./preflight.mjs";
+
+process.chdir(REPO_ROOT);
+await runPreflight({ skipDatabase: false });
 
 process.env.NEXT_PUBLIC_API_URL = "/api";
 process.env.NEXT_PUBLIC_WEB_ONLY_MODE = "true";
