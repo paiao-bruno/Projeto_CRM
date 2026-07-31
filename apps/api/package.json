@@ -5,7 +5,8 @@
   "type": "commonjs",
   "scripts": {
     "prebuild": "node ../../scripts/sync-shared-constants.mjs",
-    "dev": "nest start --watch",
+    "dev": "node ../../scripts/run-api-dev.mjs",
+    "dev:nest": "nest start --watch",
     "dev:watch": "nest start --watch",
     "build": "nest build",
     "start": "node dist/main.js",
