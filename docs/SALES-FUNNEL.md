@@ -37,6 +37,13 @@ npm run dev:funnel
 # 2) revise DATABASE_URL no .env
 # 3) execute apenas migrate deploy, nunca reset em banco real
 npm run db:migrate:deploy
+
+# Se a API falhar com "Cannot find module ... dist\main":
+npm run build -w apps/api
+
+# Se a Web falhar com "EADDRINUSE :::3000" (porta ocupada):
+Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue |
+  ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }
 ```
 
 ### Como reativar a API/SGP no futuro

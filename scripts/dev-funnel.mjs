@@ -23,4 +23,5 @@ function run(label, command, args) {
 run("Verificando banco", "node", ["scripts/ensure-db.mjs"]);
 run("Gerando Prisma Client", "npm", ["run", "prisma:generate"]);
 run("Aplicando migrations", "npm", ["run", "db:migrate:deploy"]);
+run("Compilando API", "npm", ["run", "build", "-w", "apps/api"]);
 run("Iniciando API e Web", "node", ["scripts/dev.mjs"]);
