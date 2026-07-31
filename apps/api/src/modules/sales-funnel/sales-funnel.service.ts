@@ -12,7 +12,7 @@ import {
   SALES_FUNNEL_PIPELINE_NAME,
   SALES_FUNNEL_STAGES,
   SALES_FUNNEL_STAGE_CODES,
-} from "../../../../../shared/sales-funnel.constants";
+} from "../../shared/sales-funnel.constants";
 import { CreateDealDto } from "./dto/create-deal.dto";
 import { UpdateDealDto } from "./dto/update-deal.dto";
 import { MoveDealDto } from "./dto/move-deal.dto";

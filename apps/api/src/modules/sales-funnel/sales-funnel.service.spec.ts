@@ -3,7 +3,7 @@ import { ConflictException, ForbiddenException } from "@nestjs/common";
 import { DealStatus } from "@prisma/client";
 import { describe, it } from "node:test";
 import { SalesFunnelService } from "./sales-funnel.service";
-import { SALES_FUNNEL_STAGE_CODES } from "../../../../../shared/sales-funnel.constants";
+import { SALES_FUNNEL_STAGE_CODES } from "../../shared/sales-funnel.constants";
 
 const tenantId = "tenant-a";
 const memberId = "member-a";

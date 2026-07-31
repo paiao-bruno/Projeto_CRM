@@ -11,7 +11,7 @@ import {
   MinLength,
 } from "class-validator";
 import { DealPriority } from "@prisma/client";
-import { SALES_FUNNEL_FIELD_LIMITS } from "../../../../../../shared/sales-funnel.constants";
+import { SALES_FUNNEL_FIELD_LIMITS } from "../../../shared/sales-funnel.constants";
 
 export class CreateDealDto {
   @IsString()

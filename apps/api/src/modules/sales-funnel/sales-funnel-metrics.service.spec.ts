@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { DealStatus } from "@prisma/client";
 import { describe, it } from "node:test";
 import { SalesFunnelMetricsService } from "./sales-funnel-metrics.service";
-import { SALES_FUNNEL_STAGE_CODES } from "../../../../../shared/sales-funnel.constants";
+import { SALES_FUNNEL_STAGE_CODES } from "../../shared/sales-funnel.constants";
 
 describe("SalesFunnelMetricsService", () => {
   it("returns null conversion when there are no created deals", async () => {

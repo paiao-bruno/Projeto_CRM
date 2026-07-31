@@ -20,6 +20,7 @@ function run(label, command, args) {
   }
 }
 
+run("Sincronizando constantes", "node", ["scripts/sync-shared-constants.mjs"]);
 run("Verificando banco", "node", ["scripts/ensure-db.mjs"]);
 run("Gerando Prisma Client", "npm", ["run", "prisma:generate"]);
 run("Aplicando migrations", "npm", ["run", "db:migrate:deploy"]);

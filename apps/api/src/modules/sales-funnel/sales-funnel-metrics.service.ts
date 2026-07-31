@@ -5,7 +5,7 @@ import {
   SALES_FUNNEL_METRICS_DOC,
   SALES_FUNNEL_STAGE_CODES,
   SALES_FUNNEL_STAGES,
-} from "../../../../../shared/sales-funnel.constants";
+} from "../../shared/sales-funnel.constants";
 import { ListDealsQueryDto } from "./dto/list-deals-query.dto";
 
 @Injectable()

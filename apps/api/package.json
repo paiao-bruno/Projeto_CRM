@@ -4,6 +4,7 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
+    "prebuild": "node ../../scripts/sync-shared-constants.mjs",
     "dev": "nest start --watch",
     "dev:watch": "nest start --watch",
     "build": "nest build",

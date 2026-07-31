@@ -1,5 +1,5 @@
 import { IsInt, IsOptional, IsString, MaxLength, Min, MinLength } from "class-validator";
-import { SALES_FUNNEL_FIELD_LIMITS } from "../../../../../../shared/sales-funnel.constants";
+import { SALES_FUNNEL_FIELD_LIMITS } from "../../../shared/sales-funnel.constants";
 
 export class MarkDealLostDto {
   @IsString()
