@@ -25,6 +25,11 @@
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "recharts": "^3.1.2",
+    "bcryptjs": "^3.0.2",
+    "jose": "^5.9.6",
+    "pg": "^8.16.3",
+    "@prisma/client": "^7.8.0",
+    "@prisma/adapter-pg": "^7.8.0",
     "tailwind-merge": "^2.6.0",
     "tailwindcss-animate": "^1.0.7"
   },

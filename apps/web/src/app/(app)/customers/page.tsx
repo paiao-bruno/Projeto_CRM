@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
+import { isWebOnlyMode, LEGACY_API_UNAVAILABLE_MESSAGE } from "@/lib/runtime-config";
 import { Customer, IntegrationSyncRun, PaginatedResponse, SgpCredentials, SgpSyncStartResponse } from "@/lib/types";
 
 const statusVariant = {
@@ -46,6 +47,10 @@ export default function CustomersPage() {
 
   useEffect(() => {
     if (!token) return;
+    if (isWebOnlyMode()) {
+      setError(LEGACY_API_UNAVAILABLE_MESSAGE);
+      return;
+    }
     api
       .get<SgpCredentials[]>("/integrations/sgp/credentials", token)
       .then((items) => {
@@ -71,6 +76,11 @@ export default function CustomersPage() {
   }
 
   useEffect(() => {
+    if (!token) return;
+    if (isWebOnlyMode()) {
+      setError(LEGACY_API_UNAVAILABLE_MESSAGE);
+      return;
+    }
     loadCustomers().catch((err) =>
       setError(err instanceof Error ? err.message : "Erro ao carregar clientes."),
     );

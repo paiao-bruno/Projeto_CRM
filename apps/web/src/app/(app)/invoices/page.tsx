@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { api } from "@/lib/api";
+import { isWebOnlyMode, LEGACY_API_UNAVAILABLE_MESSAGE } from "@/lib/runtime-config";
 import { Invoice, PaginatedResponse } from "@/lib/types";
 
 function formatCurrency(cents?: number | null) {
@@ -26,6 +27,10 @@ export default function InvoicesPage() {
 
   useEffect(() => {
     if (!token) return;
+    if (isWebOnlyMode()) {
+      setError(LEGACY_API_UNAVAILABLE_MESSAGE);
+      return;
+    }
     api
       .get<PaginatedResponse<Invoice>>(`/invoices?page=${page}&limit=100`, token)
       .then((response) => {

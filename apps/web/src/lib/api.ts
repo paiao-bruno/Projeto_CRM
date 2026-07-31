@@ -1,6 +1,7 @@
 import { LoginResponse } from "./types";
+import { resolveApiBaseUrl } from "./runtime-config";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000/api";
+const API_URL = resolveApiBaseUrl();
 
 type RequestOptions = RequestInit & {
   token?: string | null;

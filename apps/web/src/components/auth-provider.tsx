@@ -11,6 +11,7 @@ import {
   useState,
 } from "react";
 import { api } from "@/lib/api";
+import { isWebOnlyMode } from "@/lib/runtime-config";
 import { AuthUser } from "@/lib/types";
 
 type AuthContextValue = {
@@ -65,7 +66,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       localStorage.setItem("isp-crm-user", JSON.stringify(response.user));
       setToken(response.accessToken);
       setUser(response.user);
-      router.push("/dashboard");
+      router.push(isWebOnlyMode() ? "/sales-funnel" : "/dashboard");
     },
     [router],
   );

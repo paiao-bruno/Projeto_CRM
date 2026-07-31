@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
+import { isWebOnlyMode, LEGACY_API_UNAVAILABLE_MESSAGE } from "@/lib/runtime-config";
 import { Contract, PaginatedResponse } from "@/lib/types";
 
 export default function ContractsPage() {
@@ -19,6 +20,10 @@ export default function ContractsPage() {
 
   useEffect(() => {
     if (!token) return;
+    if (isWebOnlyMode()) {
+      setError(LEGACY_API_UNAVAILABLE_MESSAGE);
+      return;
+    }
     api
       .get<PaginatedResponse<Contract>>(`/contracts?page=${page}&limit=100`, token)
       .then((response) => {
