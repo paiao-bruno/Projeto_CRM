@@ -7,7 +7,7 @@
   ],
   "scripts": {
     "dev": "node scripts/ensure-db.mjs && npm run prisma:generate && npm run db:migrate:deploy && node scripts/dev.mjs",
-    "dev:funnel": "SGP_AUTO_SYNC_ENABLED=false node scripts/ensure-db.mjs && npm run prisma:generate && npm run db:migrate:deploy && SGP_AUTO_SYNC_ENABLED=false node scripts/dev.mjs",
+    "dev:funnel": "node scripts/dev-funnel.mjs",
     "dev:no-db": "node scripts/dev.mjs",
     "build": "npm run build -w apps/api && npm run build -w apps/web",
     "test": "npm run test -w apps/api && npm run test -w apps/web",
