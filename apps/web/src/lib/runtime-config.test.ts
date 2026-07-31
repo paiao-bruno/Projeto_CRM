@@ -16,7 +16,7 @@ describe("runtime-config", () => {
     assert.equal(
       resolveApiBaseUrl({
         NEXT_PUBLIC_WEB_ONLY_MODE: "true",
-        NEXT_PUBLIC_API_URL: "/api",
+        NEXT_PUBLIC_API_URL: "http://localhost:4000/api",
       }),
       "/api",
     );

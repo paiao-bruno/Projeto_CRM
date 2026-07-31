@@ -5,9 +5,11 @@
  */
 import { spawn, spawnSync } from "node:child_process";
 import { runPreflight, REPO_ROOT } from "./preflight.mjs";
+import { syncWebOnlyEnv } from "./sync-web-only-env.mjs";
 
 process.chdir(REPO_ROOT);
 await runPreflight({ skipDatabase: false });
+syncWebOnlyEnv();
 
 process.env.NEXT_PUBLIC_API_URL = "/api";
 process.env.NEXT_PUBLIC_WEB_ONLY_MODE = "true";

@@ -44,7 +44,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot "node_modules"))) {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
-Write-Host "[4/5] Verificando PostgreSQL..." -ForegroundColor Gray
+Write-Host "[4/6] Verificando PostgreSQL..." -ForegroundColor Gray
 $dbTest = Test-NetConnection -ComputerName localhost -Port 5432 -WarningAction SilentlyContinue
 if (-not $dbTest.TcpTestSucceeded) {
     Write-Host "  PostgreSQL nao responde na porta 5432. Tentando Docker..." -ForegroundColor Yellow
@@ -63,7 +63,18 @@ if (-not $dbTest.TcpTestSucceeded) {
 }
 Write-Host "  PostgreSQL OK na porta 5432."
 
-Write-Host "[5/5] Iniciando apps/web (sem apps/api)..." -ForegroundColor Gray
+Write-Host "[5/6] Liberando porta 3000 (instancias antigas)..." -ForegroundColor Gray
+Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue |
+  Select-Object -Property OwningProcess -Unique |
+  ForEach-Object {
+    $p = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue
+    if ($p -and $p.ProcessName -eq "node") {
+      Write-Host "  Encerrando node PID $($_.OwningProcess) na porta 3000..."
+      Stop-Process -Id $_.OwningProcess -Force
+    }
+  }
+
+Write-Host "[6/6] Iniciando apps/web (sem apps/api)..." -ForegroundColor Gray
 Write-Host ""
 Write-Host "  Funil: http://localhost:3000/sales-funnel" -ForegroundColor Green
 Write-Host "  API interna: http://localhost:3000/api" -ForegroundColor Green

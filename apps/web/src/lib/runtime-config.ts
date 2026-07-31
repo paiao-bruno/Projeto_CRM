@@ -7,9 +7,9 @@ export function isWebOnlyMode(
 export function resolveApiBaseUrl(
   env: Record<string, string | undefined> = process.env,
 ) {
+  if (isWebOnlyMode(env)) return "/api";
   const configured = env.NEXT_PUBLIC_API_URL?.trim();
   if (configured) return configured;
-  if (isWebOnlyMode(env)) return "/api";
   return "http://localhost:4000/api";
 }
 
