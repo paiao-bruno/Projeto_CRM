@@ -11,6 +11,8 @@ import {
   normalizeEmail,
   normalizeSlug,
   PRODUCTION_PERMISSIONS,
+  SALES_FUNNEL_PERMISSIONS,
+  ensureSalesFunnelPermissionsForUser,
   PLACEHOLDER_VALUES,
 } from "./lib/bootstrap-production.mjs";
 import { parseDatabaseTarget } from "./lib/disposable-db.mjs";
@@ -94,12 +96,19 @@ async function main() {
     );
 
     if (existing.rows.length > 0) {
+      const rolesUpdated = await ensureSalesFunnelPermissionsForUser(
+        client,
+        config.adminEmail,
+      );
       console.log(
         JSON.stringify(
           {
             status: "exists",
             adminEmail: config.adminEmail,
-            message: "Administrador já existe. Senha não foi alterada.",
+            rolesUpdated,
+            permissions: SALES_FUNNEL_PERMISSIONS,
+            message:
+              "Administrador já existe. Senha não foi alterada. Permissões do Funil garantidas.",
           },
           null,
           2,
@@ -127,7 +136,7 @@ async function main() {
           tenantId: result.tenantId,
           tenantSlug: result.tenantSlug,
           adminEmail: result.adminEmail,
-          permissions: PRODUCTION_PERMISSIONS.filter((p) => p.startsWith("sales_funnel")),
+          permissions: SALES_FUNNEL_PERMISSIONS,
           message: "Administrador web-only criado com sucesso.",
         },
         null,

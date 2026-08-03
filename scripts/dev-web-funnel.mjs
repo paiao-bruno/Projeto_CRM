@@ -31,6 +31,19 @@ runSync("Verificando banco", "node", ["scripts/ensure-db.mjs"]);
 runSync("Gerando Prisma Client", "npm", ["run", "prisma:generate"]);
 runSync("Aplicando migrations", "npm", ["run", "db:migrate:deploy"]);
 
+console.log("\n[dev:web:funnel] Permissões Funil (idempotente)...");
+const permResult = spawnSync("node", ["scripts/ensure-sales-funnel-permissions.mjs"], {
+  stdio: "inherit",
+  shell: process.platform === "win32",
+  env: process.env,
+});
+if (permResult.status !== 0) {
+  console.warn(
+    "[dev:web:funnel] Aviso: não foi possível garantir permissões do Funil automaticamente.",
+  );
+  console.warn("[dev:web:funnel] Execute manualmente: npm run ensure:sales-funnel-permissions");
+}
+
 console.log("\n[dev:web:funnel] Iniciando somente apps/web (sem apps/api)...");
 console.log("[dev:web:funnel] API interna: http://localhost:3000/api");
 console.log("[dev:web:funnel] Funil: http://localhost:3000/sales-funnel\n");

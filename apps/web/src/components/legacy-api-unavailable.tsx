@@ -10,7 +10,29 @@ export function LegacyApiUnavailableAlert() {
   );
 }
 
-/** Retorna true quando a página legada deve exibir aviso e não chamar a API NestJS. */
+/** Banner discreto no topo — não substitui a página inteira. */
+export function WebOnlyApiBanner() {
+  if (!isWebOnlyMode()) return null;
+
+  return (
+    <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+      <span className="font-medium">Modo web-only:</span>{" "}
+      esta página está visível, mas ações que dependem da API NestJS (porta 4000) estão
+      temporariamente desativadas. Use o Funil de Vendas para operações ativas.
+    </div>
+  );
+}
+
+export function WebOnlyDisabledHint({ action }: { action: string }) {
+  if (!isWebOnlyMode()) return null;
+  return (
+    <p className="text-xs text-amber-200/90">
+      {action} indisponível no modo web-only — API NestJS desligada.
+    </p>
+  );
+}
+
+/** Retorna true quando a página legada deve bloquear chamadas à API NestJS. */
 export function isLegacyApiUnavailableInWebOnly(): boolean {
   return isWebOnlyMode();
 }
@@ -21,7 +43,7 @@ type LegacyApiPageShellProps = {
   children: React.ReactNode;
 };
 
-/** Exibe aviso controlado no modo web-only; renderiza children no modo completo. */
+/** Usado por CRM/Contratos/Faturas — preserva estrutura existente com aviso. */
 export function LegacyApiPageShell({ title, description, children }: LegacyApiPageShellProps) {
   if (isWebOnlyMode()) {
     return (
@@ -30,7 +52,8 @@ export function LegacyApiPageShell({ title, description, children }: LegacyApiPa
           <h1 className="text-3xl font-semibold text-white">{title}</h1>
           {description ? <p className="mt-1 text-slate-400">{description}</p> : null}
         </div>
-        <LegacyApiUnavailableAlert />
+        <WebOnlyApiBanner />
+        {children}
       </div>
     );
   }

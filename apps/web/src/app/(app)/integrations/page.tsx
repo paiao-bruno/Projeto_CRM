@@ -21,7 +21,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
 import { isWebOnlyMode } from "@/lib/runtime-config";
-import { LegacyApiPageShell } from "@/components/legacy-api-unavailable";
+import { WebOnlyApiBanner, WebOnlyDisabledHint } from "@/components/legacy-api-unavailable";
 import {
   IntegrationSyncRun,
   SgpCredentials,
@@ -395,22 +395,13 @@ export default function IntegrationsPage() {
     setMessage("Sincronização ainda em execução. Consulte o histórico em alguns instantes.");
   }
 
-  const visible = "sgp".includes(search.toLowerCase()) || "api externa".includes(search.toLowerCase());
+  const visible = webOnly || "sgp".includes(search.toLowerCase()) || "api externa".includes(search.toLowerCase());
   const activeCredentials = credentials.filter((item) => item.status === "ACTIVE").length;
-
-  if (webOnly) {
-    return (
-      <LegacyApiPageShell
-        title="Integrations"
-        description="Credenciais SGP, sincronização e conectores externos."
-      >
-        <div />
-      </LegacyApiPageShell>
-    );
-  }
+  const apiDisabled = webOnly;
 
   return (
     <div className="space-y-6">
+      <WebOnlyApiBanner />
       <div className="flex flex-col justify-between gap-4 md:flex-row md:items-start">
         <div>
           <h1 className="text-3xl font-semibold text-white">Integrations</h1>
@@ -421,10 +412,10 @@ export default function IntegrationsPage() {
       </div>
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard icon={Plug} title="Total Integrations" value={credentials.length} hint="SGP API" />
-        <MetricCard icon={CheckCircle2} title="Active Integrations" value={activeCredentials || (connectionState === "online" ? 1 : 0)} hint={activeCredentials ? "configured" : connectionState === "online" ? "online" : "pending setup"} />
-        <MetricCard icon={Activity} title="Last Preview" value={lastPreview?.processed ?? 0} hint="customers read" />
-        <MetricCard icon={Database} title="Preview Relations" value={(lastPreview?.customers ?? []).reduce((total, item) => total + item.contractsCount + item.invoicesCount, 0)} hint="contracts + invoices" />
+        <MetricCard icon={Plug} title="Total Integrations" value={apiDisabled ? "—" : credentials.length} hint="SGP API" />
+        <MetricCard icon={CheckCircle2} title="Active Integrations" value={apiDisabled ? "—" : activeCredentials || (connectionState === "online" ? 1 : 0)} hint={apiDisabled ? "indisponível" : activeCredentials ? "configured" : connectionState === "online" ? "online" : "pending setup"} />
+        <MetricCard icon={Activity} title="Last Preview" value={apiDisabled ? "—" : (lastPreview?.processed ?? 0)} hint="customers read" />
+        <MetricCard icon={Database} title="Preview Relations" value={apiDisabled ? "—" : (lastPreview?.customers ?? []).reduce((total, item) => total + item.contractsCount + item.invoicesCount, 0)} hint="contracts + invoices" />
       </section>
 
       <Input
@@ -487,6 +478,7 @@ export default function IntegrationsPage() {
             </div>
 
             <form className="grid gap-4 md:grid-cols-2" onSubmit={saveCredentials}>
+              <fieldset className="contents" disabled={apiDisabled}>
               <Input
                 placeholder="Nome da integração"
                 value={form.name}
@@ -523,12 +515,12 @@ export default function IntegrationsPage() {
               />
 
               <div className="md:col-span-2 flex flex-wrap gap-2">
-                <Button disabled={Boolean(loadingAction)} type="submit">
+                <Button disabled={Boolean(loadingAction) || apiDisabled} type="submit">
                   <Save size={16} />
                   {isCreating ? "Salvar credenciais" : "Atualizar credenciais"}
                 </Button>
                 <Button
-                  disabled={Boolean(loadingAction)}
+                  disabled={Boolean(loadingAction) || apiDisabled}
                   type="button"
                   variant="secondary"
                   onClick={() => void testStoredCredentials()}
@@ -538,7 +530,7 @@ export default function IntegrationsPage() {
                 </Button>
                 {!isCreating && selectedCredentialId ? (
                   <Button
-                    disabled={Boolean(loadingAction)}
+                    disabled={Boolean(loadingAction) || apiDisabled}
                     type="button"
                     variant="secondary"
                     onClick={() => void deleteCredentials()}
@@ -548,6 +540,10 @@ export default function IntegrationsPage() {
                   </Button>
                 ) : null}
               </div>
+              <div className="md:col-span-2">
+                <WebOnlyDisabledHint action="Credenciais e sincronização SGP" />
+              </div>
+              </fieldset>
             </form>
 
             {selectedCredential ? (
@@ -646,7 +642,7 @@ export default function IntegrationsPage() {
                   </p>
                 </div>
               </div>
-              <Button disabled={Boolean(loadingAction)} type="button" variant="secondary" onClick={() => void loadSyncHistory()}>
+              <Button disabled={Boolean(loadingAction) || apiDisabled} type="button" variant="secondary" onClick={() => void loadSyncHistory()}>
                 <RefreshCcw size={16} />
                 Atualizar histórico
               </Button>
@@ -716,7 +712,7 @@ export default function IntegrationsPage() {
               <p className="text-sm text-slate-400">Página {historyPage} de {historyTotalPages}</p>
               <div className="flex gap-2">
                 <Button
-                  disabled={historyPage <= 1}
+                  disabled={historyPage <= 1 || apiDisabled}
                   type="button"
                   variant="secondary"
                   onClick={() => setHistoryPage((current) => Math.max(1, current - 1))}
@@ -724,7 +720,7 @@ export default function IntegrationsPage() {
                   Anterior
                 </Button>
                 <Button
-                  disabled={historyPage >= historyTotalPages}
+                  disabled={historyPage >= historyTotalPages || apiDisabled}
                   type="button"
                   variant="secondary"
                   onClick={() => setHistoryPage((current) => current + 1)}
@@ -814,15 +810,15 @@ export default function IntegrationsPage() {
                   />
                   Sincronização completa
                 </label>
-                <Button disabled={Boolean(loadingAction) || credentials.length === 0} variant="secondary" onClick={testSgp}>
+                <Button disabled={Boolean(loadingAction) || apiDisabled || credentials.length === 0} variant="secondary" onClick={testSgp}>
                   <Search size={16} />
                   Test Connection
                 </Button>
-                <Button disabled={Boolean(loadingAction) || credentials.length === 0} variant="secondary" onClick={discoverCustomers}>
+                <Button disabled={Boolean(loadingAction) || apiDisabled || credentials.length === 0} variant="secondary" onClick={discoverCustomers}>
                   <Activity size={16} />
                   Discover
                 </Button>
-                <Button disabled={Boolean(loadingAction) || credentials.length === 0} onClick={syncCustomers}>
+                <Button disabled={Boolean(loadingAction) || apiDisabled || credentials.length === 0} onClick={syncCustomers}>
                   <RefreshCcw className={loadingAction === "sync" ? "animate-spin" : ""} size={16} />
                   Sync Customers
                 </Button>

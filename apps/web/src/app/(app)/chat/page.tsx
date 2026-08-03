@@ -9,7 +9,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import { isWebOnlyMode } from "@/lib/runtime-config";
-import { LegacyApiPageShell } from "@/components/legacy-api-unavailable";
+import { WebOnlyApiBanner, WebOnlyDisabledHint } from "@/components/legacy-api-unavailable";
 import { Conversation } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -62,19 +62,9 @@ export default function ChatPage() {
     await Promise.all([loadConversations(), loadConversation(selected.id)]);
   }
 
-  if (webOnly) {
-    return (
-      <LegacyApiPageShell
-        title="Chat"
-        description="Atendimento manual, histórico completo e transferência entre humano e IA."
-      >
-        <div />
-      </LegacyApiPageShell>
-    );
-  }
-
   return (
     <div className="space-y-6">
+      <WebOnlyApiBanner />
       <div>
         <h1 className="text-3xl font-semibold text-white">Chat</h1>
         <p className="mt-1 text-slate-400">
@@ -90,10 +80,19 @@ export default function ChatPage() {
         <Card className="overflow-hidden">
           <div className="border-b border-slate-800 p-4">
             <p className="font-semibold text-white">Conversas</p>
-            <p className="text-sm text-slate-500">{conversations.length} em atendimento</p>
+            <p className="text-sm text-slate-500">
+              {webOnly ? "— em atendimento (indisponível)" : `${conversations.length} em atendimento`}
+            </p>
           </div>
           <div className="divide-y divide-slate-800">
-            {conversations.map((conversation) => (
+            {conversations.length === 0 ? (
+              <div className="p-6 text-center text-sm text-slate-500">
+                {webOnly
+                  ? "Nenhuma conversa — API NestJS temporariamente desligada."
+                  : "Nenhuma conversa em atendimento."}
+              </div>
+            ) : (
+            conversations.map((conversation) => (
               <button
                 className={cn(
                   "w-full p-4 text-left transition hover:bg-slate-900/60",
@@ -117,7 +116,7 @@ export default function ChatPage() {
                   </Badge>
                 </div>
               </button>
-            ))}
+            )))}
           </div>
         </Card>
 
@@ -167,20 +166,27 @@ export default function ChatPage() {
                 <div className="flex gap-3">
                   <Textarea
                     className="min-h-12"
-                    placeholder="Digite sua resposta manual..."
+                    disabled={webOnly}
+                    placeholder={
+                      webOnly
+                        ? "Envio indisponível no modo web-only..."
+                        : "Digite sua resposta manual..."
+                    }
                     value={message}
                     onChange={(event) => setMessage(event.target.value)}
                   />
-                  <Button className="self-end" type="submit">
+                  <Button className="self-end" disabled={webOnly} type="submit">
                     <Send size={17} />
                     Enviar
                   </Button>
                 </div>
+                <WebOnlyDisabledHint action="Envio de mensagens" />
               </form>
             </>
           ) : (
-            <div className="flex flex-1 items-center justify-center text-slate-500">
-              Selecione uma conversa.
+            <div className="flex flex-1 flex-col items-center justify-center gap-2 text-slate-500">
+              <p>{webOnly ? "Selecione uma conversa quando a API estiver ativa." : "Selecione uma conversa."}</p>
+              {webOnly ? <WebOnlyDisabledHint action="Carregamento de conversas" /> : null}
             </div>
           )}
         </Card>

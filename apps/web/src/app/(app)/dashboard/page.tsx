@@ -36,7 +36,11 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { api } from "@/lib/api";
 import { isWebOnlyMode } from "@/lib/runtime-config";
-import { LegacyApiPageShell } from "@/components/legacy-api-unavailable";
+import { WebOnlyApiBanner } from "@/components/legacy-api-unavailable";
+import {
+  createWebOnlyDashboardShell,
+  formatWebOnlyMetric,
+} from "@/lib/web-only-empty-states";
 import { DashboardOverview } from "@/lib/types";
 
 const cardIcons = {
@@ -106,34 +110,29 @@ export default function DashboardPage() {
       .catch((err) => setError(err instanceof Error ? err.message : "Erro ao carregar."));
   }, [token, webOnly]);
 
-  if (webOnly) {
-    return (
-      <LegacyApiPageShell
-        title="Dashboard"
-        description="Visão geral operacional e métricas do CRM."
-      >
-        <div />
-      </LegacyApiPageShell>
-    );
-  }
+  const effectiveData: DashboardOverview | null = webOnly
+    ? createWebOnlyDashboardShell()
+    : data;
 
-  if (error) {
+  if (!webOnly && error) {
     return <div className="rounded-2xl bg-red-500/10 p-4 text-red-200">{error}</div>;
   }
 
-  if (!data) {
+  if (!effectiveData) {
     return <div className="text-slate-400">Carregando dashboard...</div>;
   }
 
-  const channelTotal = data.channelDistribution.reduce(
+  const dataView = effectiveData;
+  const channelTotal = dataView.channelDistribution.reduce(
     (total, item) => total + item.value,
     0,
   );
-  const memory = data.agentMemory;
-  const sgpSync = data.sgpSync;
+  const memory = dataView.agentMemory;
+  const sgpSync = dataView.sgpSync;
 
   return (
     <div className="space-y-6">
+      <WebOnlyApiBanner />
       <div>
         <h1 className="text-3xl font-semibold text-white">Dashboard</h1>
         <p className="mt-1 text-slate-400">
@@ -142,10 +141,14 @@ export default function DashboardPage() {
       </div>
 
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {Object.entries(data.cards).map(([key, value]) => {
+        {Object.entries(dataView.cards).map(([key, value]) => {
           const Icon = cardIcons[key as keyof typeof cardIcons];
           const label = cardLabels[key as keyof typeof cardLabels];
-          const display = key === "responseRate" ? `${value}%` : value;
+          const display = webOnly
+            ? formatWebOnlyMetric(value, true)
+            : key === "responseRate"
+              ? `${value}%`
+              : value;
           return (
             <Card key={key}>
               <CardContent className="flex items-center justify-between pt-5">
@@ -198,8 +201,8 @@ export default function DashboardPage() {
                     : "—",
                 ],
                 ["Duração", formatDuration(sgpSync.lastSync?.durationMs)],
-                ["Registros processados", sgpSync.recordCount],
-                ["Erros", sgpSync.errorsCount],
+                ["Registros processados", webOnly ? "—" : sgpSync.recordCount],
+                ["Erros", webOnly ? "—" : sgpSync.errorsCount],
               ].map(([label, value]) => (
                 <div
                   className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4"
@@ -336,10 +339,10 @@ export default function DashboardPage() {
               </div>
               <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
                 {[
-                  ["Total", memory.summary.totalAgents, Bot],
-                  ["Active", memory.summary.activeAgents, CheckCircle2],
-                  ["Average", `${memory.summary.averageLearning}%`, TrendingUp],
-                  ["Memories", memory.summary.totalMemoriesRegistered, Database],
+                  ["Total", webOnly ? "—" : memory.summary.totalAgents, Bot],
+                  ["Active", webOnly ? "—" : memory.summary.activeAgents, CheckCircle2],
+                  ["Average", webOnly ? "—" : `${memory.summary.averageLearning}%`, TrendingUp],
+                  ["Memories", webOnly ? "—" : memory.summary.totalMemoriesRegistered, Database],
                 ].map(([label, value, Icon]) => {
                   const MetricIcon = Icon as typeof Bot;
                   return (
@@ -361,10 +364,10 @@ export default function DashboardPage() {
           <CardContent className="space-y-5">
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               {[
-                ["Hoje", memory.summary.acquiredToday],
-                ["Semana", memory.summary.acquiredThisWeek],
-                ["Mês", memory.summary.acquiredThisMonth],
-                ["Crescimento", `${memory.summary.growthRate}%`],
+                ["Hoje", webOnly ? "—" : memory.summary.acquiredToday],
+                ["Semana", webOnly ? "—" : memory.summary.acquiredThisWeek],
+                ["Mês", webOnly ? "—" : memory.summary.acquiredThisMonth],
+                ["Crescimento", webOnly ? "—" : `${memory.summary.growthRate}%`],
               ].map(([label, value]) => (
                 <div
                   className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4"
@@ -538,7 +541,7 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent className="h-80">
             <ResponsiveContainer height="100%" width="100%">
-              <AreaChart data={data.chart}>
+              <AreaChart data={dataView.chart}>
                 <defs>
                   <linearGradient id="inbound" x1="0" x2="0" y1="0" y2="1">
                     <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.5} />
@@ -572,7 +575,7 @@ export default function DashboardPage() {
             <p className="text-sm text-slate-400">Status dos servicos principais.</p>
           </CardHeader>
           <CardContent className="space-y-3">
-            {data.health.map((item) => (
+            {dataView.health.map((item) => (
               <div
                 className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/40 p-3"
                 key={item.label}
@@ -601,7 +604,7 @@ export default function DashboardPage() {
                     <Pie
                       cx="50%"
                       cy="50%"
-                      data={data.channelDistribution}
+                      data={dataView.channelDistribution}
                       dataKey="value"
                       innerRadius={64}
                       outerRadius={104}
@@ -609,7 +612,7 @@ export default function DashboardPage() {
                       stroke="#ffffff"
                       strokeWidth={3}
                     >
-                      {data.channelDistribution.map((entry) => (
+                      {dataView.channelDistribution.map((entry) => (
                         <Cell fill={entry.color} key={entry.name} />
                       ))}
                     </Pie>
@@ -630,7 +633,7 @@ export default function DashboardPage() {
                 <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                   <div className="text-center">
                     <p className="text-3xl font-semibold text-slate-950">
-                      {channelTotal}
+                      {webOnly || channelTotal === 0 ? "—" : channelTotal}
                     </p>
                     <p className="text-xs text-slate-500">Total</p>
                   </div>
@@ -638,7 +641,7 @@ export default function DashboardPage() {
               </div>
 
               <div className="space-y-4">
-                {data.channelDistribution.map((item) => (
+                {dataView.channelDistribution.map((item) => (
                   <div className="flex items-center justify-between gap-4" key={item.name}>
                     <div className="flex items-center gap-3">
                       <span
@@ -664,7 +667,9 @@ export default function DashboardPage() {
                 <div className="border-t border-slate-200 pt-4">
                   <div className="flex justify-between text-sm">
                     <span className="text-slate-500">Total</span>
-                    <span className="font-semibold text-slate-950">{channelTotal}</span>
+                    <span className="font-semibold text-slate-950">
+                      {webOnly ? "—" : channelTotal}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -680,7 +685,7 @@ export default function DashboardPage() {
           <CardContent className="h-80">
             <ResponsiveContainer height="100%" width="100%">
               <BarChart
-                data={data.agentPerformance}
+                data={dataView.agentPerformance}
                 margin={{ bottom: 8, left: -20, right: 8, top: 16 }}
               >
                 <CartesianGrid stroke="#eef2f7" vertical={false} />
@@ -709,7 +714,7 @@ export default function DashboardPage() {
                   ]}
                 />
                 <Bar dataKey="messagesProcessed" radius={[10, 10, 0, 0]}>
-                  {data.agentPerformance.map((entry) => (
+                  {dataView.agentPerformance.map((entry) => (
                     <Cell fill={entry.color} key={entry.name} />
                   ))}
                 </Bar>

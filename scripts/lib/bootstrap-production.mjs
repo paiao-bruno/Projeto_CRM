@@ -10,6 +10,8 @@ export const PRODUCTION_PERMISSIONS = [
   "sales_funnel.manage",
 ];
 
+export const SALES_FUNNEL_PERMISSIONS = ["sales_funnel.read", "sales_funnel.manage"];
+
 export const PLACEHOLDER_VALUES = new Set([
   "",
   "change-me",
@@ -213,4 +215,56 @@ export async function bootstrapProduction(client, config, hashPassword) {
     await client.query("ROLLBACK");
     throw error;
   }
+}
+
+export async function ensureSalesFunnelPermissions(client, roleId) {
+  for (const code of SALES_FUNNEL_PERMISSIONS) {
+    await client.query(
+      `INSERT INTO "Permission" (id, code, description, "createdAt")
+       VALUES (gen_random_uuid(), $1, $1, NOW())
+       ON CONFLICT (code) DO NOTHING`,
+      [code],
+    );
+  }
+
+  const permissions = await client.query(
+    `SELECT id, code FROM "Permission" WHERE code = ANY($1)`,
+    [SALES_FUNNEL_PERMISSIONS],
+  );
+
+  for (const permission of permissions.rows) {
+    await client.query(
+      `INSERT INTO "RolePermission" ("roleId", "permissionId", "createdAt")
+       VALUES ($1, $2, NOW())
+       ON CONFLICT DO NOTHING`,
+      [roleId, permission.id],
+    );
+  }
+}
+
+/** Garante permissões do Funil em todos os papéis Administrador (idempotente). */
+export async function ensureSalesFunnelPermissionsForAllAdmins(client) {
+  const roles = await client.query(
+    `SELECT id FROM "Role" WHERE name = 'Administrador'`,
+  );
+  for (const role of roles.rows) {
+    await ensureSalesFunnelPermissions(client, role.id);
+  }
+  return roles.rowCount;
+}
+
+export async function ensureSalesFunnelPermissionsForUser(client, adminEmail) {
+  const memberships = await client.query(
+    `SELECT tm."roleId"
+     FROM "TenantMember" tm
+     JOIN "User" u ON u.id = tm."userId"
+     WHERE lower(u.email) = lower($1) AND tm.status = 'ACTIVE'`,
+    [adminEmail],
+  );
+
+  for (const row of memberships.rows) {
+    await ensureSalesFunnelPermissions(client, row.roleId);
+  }
+
+  return memberships.rowCount;
 }

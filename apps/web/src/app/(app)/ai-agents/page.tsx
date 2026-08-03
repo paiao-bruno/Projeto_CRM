@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/lib/api";
 import { isWebOnlyMode } from "@/lib/runtime-config";
-import { LegacyApiPageShell } from "@/components/legacy-api-unavailable";
+import { WebOnlyApiBanner, WebOnlyDisabledHint } from "@/components/legacy-api-unavailable";
 import { AiAgent } from "@/lib/types";
 
 const emptyForm = {
@@ -45,7 +45,7 @@ export default function AiAgentsPage() {
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!token) return;
+    if (!token || webOnly) return;
 
     setLoading(true);
     setError("");
@@ -70,30 +70,20 @@ export default function AiAgentsPage() {
   }
 
   async function toggleAgent(id: string) {
-    if (!token) return;
+    if (!token || webOnly) return;
     await api.patch(`/ai-agents/${id}/toggle`, {}, token);
     await loadAgents();
   }
 
   async function removeAgent(id: string) {
-    if (!token || !confirm("Excluir este agente?")) return;
+    if (!token || webOnly || !confirm("Excluir este agente?")) return;
     await api.delete(`/ai-agents/${id}`, token);
     await loadAgents();
   }
 
-  if (webOnly) {
-    return (
-      <LegacyApiPageShell
-        title="Agentes IA"
-        description="Configure prompts, modelos e disponibilidade dos assistentes virtuais."
-      >
-        <div />
-      </LegacyApiPageShell>
-    );
-  }
-
   return (
     <div className="space-y-6">
+      <WebOnlyApiBanner />
       <div>
         <h1 className="text-3xl font-semibold text-white">Agentes IA</h1>
         <p className="mt-1 text-slate-400">
@@ -115,6 +105,7 @@ export default function AiAgentsPage() {
           </CardHeader>
           <CardContent>
             <form className="space-y-4" onSubmit={onSubmit}>
+              <fieldset className="space-y-4" disabled={webOnly}>
               <div className="space-y-2">
                 <Label htmlFor="name">Nome</Label>
                 <Input
@@ -172,16 +163,27 @@ export default function AiAgentsPage() {
                   required
                 />
               </div>
-              <Button className="w-full" disabled={loading} type="submit">
+              <Button className="w-full" disabled={loading || webOnly} type="submit">
                 <Plus size={17} />
                 Criar agente
               </Button>
+              <WebOnlyDisabledHint action="Criação de agentes" />
+            </fieldset>
             </form>
           </CardContent>
         </Card>
 
         <div className="grid gap-4 lg:grid-cols-2">
-          {agents.map((agent) => (
+          {agents.length === 0 ? (
+            <Card className="lg:col-span-2">
+              <CardContent className="py-12 text-center text-slate-400">
+                {webOnly
+                  ? "Nenhum agente carregado — API NestJS temporariamente desligada."
+                  : "Nenhum agente cadastrado."}
+              </CardContent>
+            </Card>
+          ) : (
+          agents.map((agent) => (
             <Card key={agent.id}>
               <CardHeader>
                 <div className="flex items-start justify-between gap-3">
@@ -216,18 +218,19 @@ export default function AiAgentsPage() {
                     className="flex-1"
                     type="button"
                     variant="secondary"
+                    disabled={webOnly}
                     onClick={() => toggleAgent(agent.id)}
                   >
                     <Power size={16} />
                     {agent.status === "ACTIVE" ? "Desativar" : "Ativar"}
                   </Button>
-                  <Button type="button" variant="ghost" onClick={() => removeAgent(agent.id)}>
+                  <Button type="button" variant="ghost" disabled={webOnly} onClick={() => removeAgent(agent.id)}>
                     <Trash2 size={16} />
                   </Button>
                 </div>
               </CardContent>
             </Card>
-          ))}
+          )))}
         </div>
       </section>
     </div>
