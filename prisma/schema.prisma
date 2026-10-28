@@ -333,6 +333,9 @@ model Tenant {
   teamRooms           TeamRoom[]
   teamMessages        TeamMessage[]
   teamPresence        TeamPresence[]
+  inboundEvents       InboundEvent[]
+  conversationEvents  ConversationEvent[]
+  tenantCounters      TenantCounter[]
   aiAgents            AiAgent[]
   agentMemories       AgentMemory[]
   memoryHistory       MemoryHistory[]
@@ -372,42 +375,42 @@ model Tenant {
 }
 
 model IntegrationSyncRun {
-  id            String                @id @default(uuid()) @db.Uuid
-  tenantId      String                @db.Uuid
-  integrationId String?               @db.Uuid
-  triggeredById String?               @db.Uuid
-  operation     String
-  status        IntegrationSyncStatus @default(RUNNING)
-  syncMode      String?
-  trigger       String?
-  startedAt     DateTime              @default(now())
-  finishedAt    DateTime?
-  durationMs    Int?
-  processed     Int                   @default(0)
-  created       Int                   @default(0)
-  updated       Int                   @default(0)
-  ignored       Int                   @default(0)
-  errorsCount   Int                   @default(0)
-  customersProcessed Int              @default(0)
-  customersCreated   Int              @default(0)
-  customersUpdated   Int              @default(0)
-  customersDeleted   Int              @default(0)
-  customersIgnored   Int              @default(0)
-  contractsProcessed Int              @default(0)
-  contractsCreated   Int              @default(0)
-  contractsUpdated   Int              @default(0)
-  contractsDeleted   Int              @default(0)
-  contractsIgnored   Int              @default(0)
-  invoicesProcessed  Int              @default(0)
-  invoicesCreated    Int              @default(0)
-  invoicesUpdated    Int              @default(0)
-  invoicesDeleted    Int              @default(0)
-  invoicesIgnored    Int              @default(0)
-  errors        Json?
-  stackTrace    String?               @db.Text
-  cursor        Json?
-  errorMessage  String?
-  metadata      Json?
+  id                 String                @id @default(uuid()) @db.Uuid
+  tenantId           String                @db.Uuid
+  integrationId      String?               @db.Uuid
+  triggeredById      String?               @db.Uuid
+  operation          String
+  status             IntegrationSyncStatus @default(RUNNING)
+  syncMode           String?
+  trigger            String?
+  startedAt          DateTime              @default(now())
+  finishedAt         DateTime?
+  durationMs         Int?
+  processed          Int                   @default(0)
+  created            Int                   @default(0)
+  updated            Int                   @default(0)
+  ignored            Int                   @default(0)
+  errorsCount        Int                   @default(0)
+  customersProcessed Int                   @default(0)
+  customersCreated   Int                   @default(0)
+  customersUpdated   Int                   @default(0)
+  customersDeleted   Int                   @default(0)
+  customersIgnored   Int                   @default(0)
+  contractsProcessed Int                   @default(0)
+  contractsCreated   Int                   @default(0)
+  contractsUpdated   Int                   @default(0)
+  contractsDeleted   Int                   @default(0)
+  contractsIgnored   Int                   @default(0)
+  invoicesProcessed  Int                   @default(0)
+  invoicesCreated    Int                   @default(0)
+  invoicesUpdated    Int                   @default(0)
+  invoicesDeleted    Int                   @default(0)
+  invoicesIgnored    Int                   @default(0)
+  errors             Json?
+  stackTrace         String?               @db.Text
+  cursor             Json?
+  errorMessage       String?
+  metadata           Json?
 
   tenant      Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   integration Integration?         @relation(fields: [integrationId], references: [id], onDelete: SetNull)
@@ -567,7 +570,7 @@ model Integration {
   createdAt        DateTime            @default(now())
   updatedAt        DateTime            @updatedAt
 
-  tenant           Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant           Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   webhookEndpoints WebhookEndpoint[]
   conversations    Conversation[]
   campaigns        Campaign[]
@@ -651,6 +654,10 @@ model Conversation {
   priority             ConversationPriority @default(NORMAL)
   lastMessageAt        DateTime?
   closedAt             DateTime?
+  protocol             String?
+  version              Int                  @default(1)
+  unreadCount          Int                  @default(0)
+  claimedAt            DateTime?
   metadata             Json?
   createdAt            DateTime             @default(now())
   updatedAt            DateTime             @updatedAt
@@ -666,8 +673,10 @@ model Conversation {
   flowExecutions     FlowExecution[]
   scheduleEvents     ScheduleEvent[]
   tasks              Task[]
+  events             ConversationEvent[]
 
   @@unique([tenantId, externalId])
+  @@unique([tenantId, protocol])
   @@index([tenantId, status, lastMessageAt])
   @@index([tenantId, assignedMemberId])
   @@index([tenantId, customerId])
@@ -1290,53 +1299,53 @@ model PipelineStage {
 }
 
 model Deal {
-  id                String       @id @default(uuid()) @db.Uuid
-  tenantId          String       @db.Uuid
-  pipelineId        String       @db.Uuid
-  stageId           String       @db.Uuid
-  customerId        String?      @db.Uuid
-  leadId            String?      @db.Uuid
-  ownerMemberId     String?      @db.Uuid
-  createdByMemberId String?      @db.Uuid
-  updatedByMemberId String?      @db.Uuid
-  lostByMemberId    String?      @db.Uuid
-  archivedByMemberId String?     @db.Uuid
-  title             String
-  phone             String?
-  email             String?
-  clientType        String?
-  entrySource       String?
-  contactType       String?
-  city              String?
-  neighborhood      String?
-  priority          DealPriority @default(MEDIUM)
-  valueCents        Int          @default(0)
-  currency          String       @default("BRL")
-  status            DealStatus   @default(OPEN)
-  position          Int          @default(0)
-  nextAction        String?
-  nextActionAt      DateTime?
-  notes             String?      @db.Text
-  lossReason        String?
-  expectedCloseAt   DateTime?
-  wonAt             DateTime?
-  lostAt            DateTime?
-  archivedAt        DateTime?
-  version           Int          @default(1)
-  metadata          Json?
-  createdAt         DateTime     @default(now())
-  updatedAt         DateTime     @updatedAt
+  id                 String       @id @default(uuid()) @db.Uuid
+  tenantId           String       @db.Uuid
+  pipelineId         String       @db.Uuid
+  stageId            String       @db.Uuid
+  customerId         String?      @db.Uuid
+  leadId             String?      @db.Uuid
+  ownerMemberId      String?      @db.Uuid
+  createdByMemberId  String?      @db.Uuid
+  updatedByMemberId  String?      @db.Uuid
+  lostByMemberId     String?      @db.Uuid
+  archivedByMemberId String?      @db.Uuid
+  title              String
+  phone              String?
+  email              String?
+  clientType         String?
+  entrySource        String?
+  contactType        String?
+  city               String?
+  neighborhood       String?
+  priority           DealPriority @default(MEDIUM)
+  valueCents         Int          @default(0)
+  currency           String       @default("BRL")
+  status             DealStatus   @default(OPEN)
+  position           Int          @default(0)
+  nextAction         String?
+  nextActionAt       DateTime?
+  notes              String?      @db.Text
+  lossReason         String?
+  expectedCloseAt    DateTime?
+  wonAt              DateTime?
+  lostAt             DateTime?
+  archivedAt         DateTime?
+  version            Int          @default(1)
+  metadata           Json?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
 
-  tenant           Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  pipeline         Pipeline       @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
-  stage            PipelineStage  @relation(fields: [stageId], references: [id], onDelete: Cascade)
-  customer         Customer?      @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  lead             Lead?          @relation(fields: [leadId], references: [id], onDelete: SetNull)
-  ownerMember      TenantMember?  @relation("DealOwner", fields: [ownerMemberId], references: [id], onDelete: SetNull)
-  createdByMember  TenantMember?  @relation("DealCreatedBy", fields: [createdByMemberId], references: [id], onDelete: SetNull)
-  updatedByMember  TenantMember?  @relation("DealUpdatedBy", fields: [updatedByMemberId], references: [id], onDelete: SetNull)
-  lostByMember     TenantMember?  @relation("DealLostBy", fields: [lostByMemberId], references: [id], onDelete: SetNull)
-  archivedByMember TenantMember?  @relation("DealArchivedBy", fields: [archivedByMemberId], references: [id], onDelete: SetNull)
+  tenant           Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  pipeline         Pipeline      @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  stage            PipelineStage @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  customer         Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  lead             Lead?         @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  ownerMember      TenantMember? @relation("DealOwner", fields: [ownerMemberId], references: [id], onDelete: SetNull)
+  createdByMember  TenantMember? @relation("DealCreatedBy", fields: [createdByMemberId], references: [id], onDelete: SetNull)
+  updatedByMember  TenantMember? @relation("DealUpdatedBy", fields: [updatedByMemberId], references: [id], onDelete: SetNull)
+  lostByMember     TenantMember? @relation("DealLostBy", fields: [lostByMemberId], references: [id], onDelete: SetNull)
+  archivedByMember TenantMember? @relation("DealArchivedBy", fields: [archivedByMemberId], references: [id], onDelete: SetNull)
   history          DealHistory[]
 
   @@index([tenantId, status])
@@ -1544,4 +1553,44 @@ model AuditLog {
 
   @@index([tenantId, entityType, entityId])
   @@index([tenantId, createdAt])
+}
+
+model InboundEvent {
+  id              String   @id @default(uuid()) @db.Uuid
+  tenantId        String   @db.Uuid
+  provider        String
+  providerEventId String
+  payloadHash     String
+  conversationId  String?  @db.Uuid
+  receivedAt      DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, provider, providerEventId])
+  @@index([tenantId, receivedAt])
+}
+
+model ConversationEvent {
+  id             String   @id @default(uuid()) @db.Uuid
+  tenantId       String   @db.Uuid
+  conversationId String   @db.Uuid
+  type           String
+  actorMemberId  String?  @db.Uuid
+  data           Json?
+  createdAt      DateTime @default(now())
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, conversationId, createdAt])
+}
+
+model TenantCounter {
+  tenantId String @db.Uuid
+  key      String
+  value    Int    @default(0)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, key])
 }

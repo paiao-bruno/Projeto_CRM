@@ -45,7 +45,8 @@
     "test:reencrypt-sgp-integration:live": "npm run build -w apps/api && node scripts/reencrypt-sgp-integration.integration.mjs",
     "load-test": "node scripts/load-test.mjs",
     "db:test-migrate-deploy": "node scripts/test-migrate-deploy.mjs",
-    "test:sales-funnel-integration": "ALLOW_DISPOSABLE_DB=true node scripts/test-sales-funnel-integration.mjs"
+    "test:sales-funnel-integration": "ALLOW_DISPOSABLE_DB=true node scripts/test-sales-funnel-integration.mjs",
+    "test:inbox-integration": "node scripts/test-inbox-integration.mjs"
   },
   "repository": {
     "type": "git",
