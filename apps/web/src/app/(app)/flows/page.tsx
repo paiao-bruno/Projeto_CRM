@@ -95,8 +95,8 @@ const blockPalette: BlockType[] = [
 
 const initialFlows: FlowItem[] = [
   {
-    id: "sgp-ai",
-    name: "SGP - Atendimento IA Autônomo",
+    id: "ia-autonomo",
+    name: "Atendimento IA Autônomo",
     trigger: "message_received",
     status: "Active",
     channel: "Internal Chat",
@@ -125,11 +125,11 @@ const initialFlows: FlowItem[] = [
 
 const initialNodes: FlowNode[] = [
   { id: "objective", type: "Objective", title: "Objetivo do Agente", subtitle: "Definir resultado esperado", x: 80, y: 170 },
-  { id: "collect", type: "Data Collection", title: "Captura de Dados SGP", subtitle: "Coletar contrato e CPF", x: 410, y: 80 },
-  { id: "context", type: "API Request", title: "Consulta SGP", subtitle: "Buscar dados do assinante", x: 410, y: 210 },
+  { id: "collect", type: "Data Collection", title: "Captura de Dados", subtitle: "Coletar contrato e CPF", x: 410, y: 80 },
+  { id: "context", type: "API Request", title: "Consulta de cliente", subtitle: "Buscar dados do assinante", x: 410, y: 210 },
   { id: "diagnosis", type: "AI Agent", title: "1 - Diagnóstico", subtitle: "Analisar problema do cliente", x: 720, y: 320 },
   { id: "solution", type: "Message", title: "2 - Apresentação de Solução", subtitle: "Enviar orientação automática", x: 720, y: 450 },
-  { id: "action", type: "CRM Action", title: "3 - Execução da Ação SGP", subtitle: "Criar ticket ou atualizar lead", x: 720, y: 580 },
+  { id: "action", type: "CRM Action", title: "3 - Execução da Ação", subtitle: "Criar ticket ou atualizar lead", x: 720, y: 580 },
   { id: "end", type: "End", title: "Conclusão", subtitle: "Encerrar fluxo", x: 1070, y: 330 },
 ];
 

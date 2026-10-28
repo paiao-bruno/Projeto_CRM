@@ -1,6 +1,6 @@
 /**
  * Fonte única de marca e tema do Vértice (nome provisório).
- * Trocar nome, tagline ou paleta aqui e em `vertice.css` (os valores são verificados por teste).
+ * Trocar nome, tagline ou paleta aqui e em `theme.css` (os valores são verificados por teste).
  */
 export const BRAND = {
   name: "Vértice",

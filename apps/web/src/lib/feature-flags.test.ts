@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ALL_NAV_ITEMS, buildNavItems, isFeatureEnabled, isMockRouteEnabled } from "./feature-flags";
+import { ALL_NAV_ITEMS, buildNavItems, defaultLandingPath, isFeatureEnabled, isMockRouteEnabled } from "./feature-flags";
 
 describe("feature-flags", () => {
   it("disables mock modules by default in production", () => {
@@ -20,7 +20,7 @@ describe("feature-flags", () => {
     assert.ok(!hrefs.includes("/campaigns"));
     assert.ok(!hrefs.includes("/flows"));
     assert.ok(!hrefs.includes("/schedule"));
-    assert.equal(nav.find((item) => item.href === "/chat")?.children?.length ?? 0, 0);
+    assert.ok(!hrefs.includes("/team-chat"));
   });
 
   it("shows mock modules only when explicitly enabled", () => {
@@ -38,7 +38,7 @@ describe("feature-flags", () => {
     assert.ok(hrefs.includes("/campaigns"));
     assert.ok(hrefs.includes("/flows"));
     assert.ok(hrefs.includes("/schedule"));
-    assert.equal(nav.find((item) => item.href === "/chat")?.children?.length, 1);
+    assert.ok(hrefs.includes("/team-chat"));
   });
 
   it("keeps stable modules visible regardless of mock flags", () => {
@@ -51,9 +51,9 @@ describe("feature-flags", () => {
     };
 
     const nav = buildNavItems(env);
-    const hrefs = nav.flatMap((item) => [item.href, ...(item.children?.map((child) => child.href) ?? [])]);
+    const hrefs = nav.map((item) => item.href);
 
-    for (const required of ["/dashboard", "/integrations", "/chat", "/sales-funnel", "/customers", "/contracts", "/invoices", "/ai-agents"]) {
+    for (const required of ["/dashboard", "/integrations", "/inbox", "/sales-funnel", "/customers", "/contracts", "/invoices", "/ai-agents"]) {
       assert.ok(hrefs.includes(required), `missing ${required}`);
     }
   });
@@ -79,5 +79,21 @@ describe("feature-flags", () => {
       ["/campaigns", "/flows", "/schedule"].includes(item.href),
     );
     assert.equal(mockItems.every((item) => Boolean(item.feature)), true);
+  });
+
+  it("menu único: não existe mais /chat e itens seguem as permissões", () => {
+    const all = ALL_NAV_ITEMS.map((item) => item.href);
+    assert.ok(!all.includes("/chat"));
+    const agent = buildNavItems({}, ["chat.read", "chat.reply"]).map((item) => item.href);
+    assert.deepEqual(agent, ["/inbox"]);
+    const admin = buildNavItems({}, ["dashboard.read", "chat.read", "customers.manage", "sales_funnel.read", "ai_agents.manage", "crm.manage"]).map((item) => item.href);
+    assert.deepEqual(admin, ["/dashboard", "/inbox", "/sales-funnel", "/customers", "/contracts", "/invoices", "/ai-agents", "/integrations"]);
+  });
+
+  it("destino padrão após login respeita permissões", () => {
+    assert.equal(defaultLandingPath(["dashboard.read", "chat.read"]), "/dashboard");
+    assert.equal(defaultLandingPath(["chat.read"]), "/inbox");
+    assert.equal(defaultLandingPath(["sales_funnel.read"]), "/sales-funnel");
+    assert.equal(defaultLandingPath([]), "/inbox");
   });
 });

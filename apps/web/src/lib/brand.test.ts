@@ -5,12 +5,12 @@ import { describe, it } from "node:test";
 import { BRAND, THEME, THEME_CSS_VARS, type ThemeToken } from "./brand";
 
 describe("marca e tema centralizados", () => {
-  const css = readFileSync(join(process.cwd(), "src/app/(vertice)/vertice.css"), "utf8");
+  const css = readFileSync(join(process.cwd(), "src/app/theme.css"), "utf8");
 
-  it("vertice.css declara cada token de THEME com o mesmo valor", () => {
+  it("theme.css declara cada token de THEME com o mesmo valor", () => {
     for (const token of Object.keys(THEME) as ThemeToken[]) {
       const declaration = new RegExp(`${THEME_CSS_VARS[token]}:\\s*${THEME[token]}\\s*;`, "i");
-      assert.match(css, declaration, `token ${token} divergente em vertice.css`);
+      assert.match(css, declaration, `token ${token} divergente em theme.css`);
     }
   });
 

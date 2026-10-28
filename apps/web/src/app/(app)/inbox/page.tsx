@@ -3,15 +3,17 @@
 import { Check, Lock, RefreshCw, Search, Send, UserPlus } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
+import { api } from "@/lib/api";
+import { RealtimeState, connectRealtime } from "@/lib/realtime-client";
 import {
   ConversationDetail,
+  deliveryLabel,
   InboxList,
   InboxTab,
   TeamMember,
   formatPhone,
   inboxApi,
 } from "@/lib/inbox-client";
-import { isWebOnlyMode } from "@/lib/runtime-config";
 
 const POLL_MS = 5000;
 
@@ -52,6 +54,7 @@ export default function InboxPage() {
   const [demoEnabled, setDemoEnabled] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [realtime, setRealtime] = useState<RealtimeState>("connecting");
 
   const refreshList = useCallback(async () => {
     if (!token) return;
@@ -73,17 +76,40 @@ export default function InboxPage() {
     }
   }, [token, selectedId]);
 
+  const refreshRef = useRef({ list: refreshList, detail: refreshDetail });
+  refreshRef.current = { list: refreshList, detail: refreshDetail };
+  const selectedRef = useRef(selectedId);
+  selectedRef.current = selectedId;
+
   useEffect(() => {
     void refreshList();
-    const timer = setInterval(() => void refreshList(), POLL_MS);
-    return () => clearInterval(timer);
   }, [refreshList]);
 
   useEffect(() => {
     void refreshDetail();
-    const timer = setInterval(() => void refreshDetail(), POLL_MS);
-    return () => clearInterval(timer);
   }, [refreshDetail]);
+
+  useEffect(() => {
+    if (!token) return;
+    return connectRealtime({
+      token,
+      onState: setRealtime,
+      onResync: () => void Promise.all([refreshRef.current.list(), refreshRef.current.detail()]),
+      onChange: (change) => {
+        void refreshRef.current.list();
+        if (!change.conversationId || change.conversationId === selectedRef.current) void refreshRef.current.detail();
+      },
+    });
+  }, [token]);
+
+  useEffect(() => {
+    if (realtime !== "polling") return;
+    const timer = setInterval(() => {
+      void refreshRef.current.list();
+      void refreshRef.current.detail();
+    }, POLL_MS);
+    return () => clearInterval(timer);
+  }, [realtime]);
 
   useEffect(() => {
     if (!token) return;
@@ -104,18 +130,6 @@ export default function InboxPage() {
     }
   }
 
-  if (!isWebOnlyMode()) {
-    return (
-      <div className="vx-card mx-auto max-w-xl p-6">
-        <h1 className="text-lg font-bold">Caixa de entrada indisponivel neste modo</h1>
-        <p className="mt-2 text-sm vx-muted">
-          A caixa de entrada usa as rotas do proprio Next.js (/api/inbox) e exige o modo web-only. Inicie com{" "}
-          <code>npm run dev:web:funnel</code>.
-        </p>
-      </div>
-    );
-  }
-
   const isSupervisor = list?.counts.all !== null && list?.counts.all !== undefined;
   const tabs: Array<{ key: InboxTab; label: string; count?: number | null }> = [
     { key: "queue", label: "Fila", count: list?.counts.queue },
@@ -125,7 +139,7 @@ export default function InboxPage() {
   ];
 
   return (
-    <div className="grid h-[calc(100vh-110px)] min-h-[480px] gap-4 lg:grid-cols-[340px_1fr]">
+    <div className="grid h-[calc(100vh-140px)] min-h-[480px] gap-4 lg:grid-cols-[340px_1fr]">
       <section className="vx-card flex min-h-0 flex-col overflow-hidden" aria-label="Lista de conversas">
         <div className="space-y-3 border-b p-3" style={{ borderColor: "var(--vx-border)" }}>
           <div role="tablist" className="flex flex-wrap gap-1">
@@ -186,6 +200,9 @@ export default function InboxPage() {
       </section>
 
       <section className="vx-card flex min-h-0 flex-col overflow-hidden" aria-label="Conversa">
+        <p className="border-b px-3 py-1 text-[11px] vx-muted" style={{ borderColor: "var(--vx-border)" }} data-testid="realtime-state">
+          {realtime === "live" ? "Tempo real conectado" : realtime === "polling" ? "Tempo real indisponível: atualizando por consulta periódica" : "Conectando ao tempo real..."}
+        </p>
         {error ? <div className="vx-alert vx-alert-error m-3" role="alert">{error}</div> : null}
         {!detail ? (
           <div className="flex flex-1 items-center justify-center p-8 text-center text-sm vx-muted">
@@ -205,6 +222,7 @@ export default function InboxPage() {
             onReply={(body, internal) =>
               act(() => inboxApi.reply(token!, detail.id, body, internal, crypto.randomUUID()))
             }
+            onResolve={(messageId, action) => act(() => inboxApi.resolveDelivery(token!, detail.id, messageId, action))}
             onTransfer={(memberId) =>
               act(async () => {
                 const result = await inboxApi.transfer(token!, detail.id, memberId, detail.version);
@@ -232,6 +250,7 @@ function ConversationPanel(props: {
   onRead: () => void;
   onReply: (body: string, internal: boolean) => Promise<void> | void;
   onTransfer: (memberId: string) => void;
+  onResolve: (messageId: string, action: "retry" | "mark_failed") => void;
 }) {
   const { detail, members, busy } = props;
   const [text, setText] = useState("");
@@ -342,8 +361,17 @@ function ConversationPanel(props: {
               {entry.m.body}
               <div className="mt-1 text-right text-[10px] opacity-70">
                 {formatTime(entry.at)}
-                {entry.m.direction === "OUTBOUND" && entry.m.metadata?.delivery === "RECORDED_ONLY" ? " · registrada, sem canal conectado" : ""}
+                {(() => {
+                  const label = deliveryLabel(entry.m);
+                  return label ? <span data-delivery={entry.m.delivery?.status ?? "RECORDED_ONLY"}> · {label.text}</span> : null;
+                })()}
               </div>
+              {entry.m.delivery?.status === "UNKNOWN" && detail.can.reply ? (
+                <div className="mt-1 flex flex-wrap justify-end gap-1">
+                  <button className="vx-btn" style={{ height: 26, fontSize: 12 }} disabled={busy} onClick={() => props.onResolve(entry.m.id, "retry")} type="button">Reenviar (pode duplicar)</button>
+                  <button className="vx-btn" style={{ height: 26, fontSize: 12 }} disabled={busy} onClick={() => props.onResolve(entry.m.id, "mark_failed")} type="button">Marcar como não enviada</button>
+                </div>
+              ) : null}
             </div>
           ),
         )}
@@ -389,12 +417,18 @@ function DemoInbound({ token, onSent }: { token: string; onSent: () => void }) {
   const [text, setText] = useState("Olá, preciso de ajuda com minha conexão.");
   const [state, setState] = useState<"idle" | "sending" | "ok" | "error">("idle");
   const [message, setMessage] = useState("");
+  const [channelId, setChannelId] = useState("");
+  const [channels, setChannels] = useState<Array<{ id: string; name: string; status: string }>>([]);
+
+  useEffect(() => {
+    void api.get<Array<{ id: string; name: string; status: string }>>("/channels", token).then(setChannels).catch(() => setChannels([]));
+  }, [token]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     setState("sending");
     try {
-      await inboxApi.demoInbound(token, { contactName: name, contactPhone: phone, text });
+      await inboxApi.demoInbound(token, { contactName: name, contactPhone: phone, text, channelId: channelId || undefined });
       setState("ok");
       setMessage("Evento sintético recebido.");
       onSent();
@@ -412,6 +446,12 @@ function DemoInbound({ token, onSent }: { token: string; onSent: () => void }) {
       <input className="vx-input" value={name} onChange={(e) => setName(e.target.value)} aria-label="Nome do contato simulado" />
       <input className="vx-input" value={phone} onChange={(e) => setPhone(e.target.value)} aria-label="Telefone do contato simulado" />
       <textarea className="vx-input" rows={2} value={text} onChange={(e) => setText(e.target.value)} aria-label="Texto simulado" />
+      {channels.length > 0 ? (
+        <select className="vx-input" value={channelId} onChange={(e) => setChannelId(e.target.value)} aria-label="Canal da conversa simulada">
+          <option value="">Sem canal (respostas só registradas)</option>
+          {channels.filter((c) => c.status === "ACTIVE").map((c) => <option key={c.id} value={c.id}>Canal de teste: {c.name}</option>)}
+        </select>
+      ) : null}
       <button className="vx-btn vx-btn-accent w-full" disabled={state === "sending"} type="submit">
         Simular mensagem recebida
       </button>

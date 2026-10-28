@@ -15,11 +15,11 @@ describe("frontend routes", () => {
     assert.deepEqual(routes, [
       "ai-agents",
       "campaigns",
-      "chat",
       "contracts",
       "customers",
       "dashboard",
       "flows",
+      "inbox",
       "integrations",
       "invoices",
       "sales-funnel",
