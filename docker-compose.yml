@@ -17,7 +17,9 @@ services:
       timeout: 5s
       retries: 5
 
+  # Redis não é usado pelo site único (fila/tempo real usam PostgreSQL). Só sobe com --profile legacy.
   redis:
+    profiles: ["legacy"]
     image: redis:7-alpine
     container_name: isp-crm-redis
     restart: unless-stopped

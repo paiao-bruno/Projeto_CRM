@@ -7,6 +7,7 @@ describe("SgpAutoSyncScheduler", () => {
   const previousEnv = { ...process.env };
 
   beforeEach(() => {
+    process.env.SGP_LEGACY_SYNC_ENABLED = "true";
     process.env.SGP_AUTO_SYNC_ENABLED = "true";
     process.env.SGP_AUTO_SYNC_INTERVAL_MINUTES = "30";
     process.env.SGP_AUTO_SYNC_CRON = "0 */6 * * *";
@@ -39,6 +40,19 @@ describe("SgpAutoSyncScheduler", () => {
 
   it("does not register jobs when disabled via env", () => {
     process.env.SGP_AUTO_SYNC_ENABLED = "false";
+    const registry = new SchedulerRegistry();
+    const scheduler = new SgpAutoSyncScheduler(registry, {
+      runDueSyncs: async () => [],
+    } as never);
+
+    scheduler.onModuleInit();
+
+    assert.equal(registry.doesExist("cron", "sgp-auto-sync-cron"), false);
+    assert.equal(registry.doesExist("interval", "sgp-auto-sync-interval"), false);
+  });
+
+  it("fica inativo por padrão sem SGP_LEGACY_SYNC_ENABLED, mesmo com auto-sync ligado", () => {
+    delete process.env.SGP_LEGACY_SYNC_ENABLED;
     const registry = new SchedulerRegistry();
     const scheduler = new SgpAutoSyncScheduler(registry, {
       runDueSyncs: async () => [],
