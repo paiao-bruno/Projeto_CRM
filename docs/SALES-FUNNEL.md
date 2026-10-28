@@ -1,3 +1,5 @@
+> **Atualização:** `npm run dev:web:funnel` agora é alias do site único (`npm run dev`): Next + worker, sem NestJS/SGP. Ver `docs/vertice/`.
+
 # Funil de Vendas (Kanban)
 
 Este documento descreve o funil manual multiusuário, a persistência, a desativação segura da sincronização SGP e como reativar componentes legados.

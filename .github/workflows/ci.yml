@@ -1,0 +1,87 @@
+name: ci
+
+on:
+  push:
+    branches: ["cursor/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux (PostgreSQL com pgvector)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: ci_admin
+          POSTGRES_PASSWORD: ci_admin_password
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_admin"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      TEST_DATABASE_ADMIN_URL: postgresql://ci_admin:ci_admin_password@localhost:5432/postgres
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Typecheck (web)
+        run: npm run typecheck
+      - name: Typecheck (API legado)
+        run: npm run typecheck:legacy-api
+      - name: Testes unitarios web e site unico
+        run: npm test
+      - name: Testes do harness de banco
+        run: npm run test:harness
+      - name: Migrations (limpa e atualizacao de legado)
+        run: npm run prisma:validate:migrations
+      - name: Funil de vendas (integracao)
+        run: npm run test:sales-funnel-integration
+      - name: Caixa de entrada (integracao)
+        run: npm run test:inbox-integration
+      - name: Registros locais (integracao)
+        run: npm run test:records-integration
+      - name: Outbox, webhook e SSE (integracao)
+        run: npm run test:outbox-integration
+      - name: API legada (opt-in)
+        run: npm run test:legacy-api
+      - name: Prova de independencia (E2E sem SGP/NestJS)
+        run: npm run test:site-e2e
+
+  windows:
+    name: Windows (sem banco)
+    # Este job NAO cobre testes de integracao: o runner Windows nao provisiona PostgreSQL com
+    # pgvector. Cobre type-check, testes unitarios, validacao estatica de schema/migrations e build.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Typecheck (web)
+        run: npm run typecheck
+      - name: Testes unitarios web e site unico
+        run: npm test
+      - name: Validacao estatica de schema e migrations
+        run: npm run prisma:validate:static
+      - name: Build de producao
+        run: npm run build
+        env:
+          DATABASE_URL: postgresql://placeholder:placeholder@localhost:5432/placeholder

@@ -1,3 +1,5 @@
+> **Nota:** `(vertice)/`, `test-inbox-e2e.mjs` e o menu "legado intacto" descritos abaixo foram superados pela unificação em um site único; ver `05` a `10`.
+
 # 04 — Registro de continuidade (checkpoint)
 
 **Data:** 28/10/2026 · **Branch:** `cursor/vertice-foundation-edc0` (a partir de `f970dcc`)

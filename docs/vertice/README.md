@@ -1,7 +1,7 @@
 # Vértice — plataforma de atendimento, CRM e automação
 
 Nome provisório. Marca e tema ficam centralizados em `apps/web/src/lib/brand.ts` e
-`apps/web/src/app/(vertice)/vertice.css` (um teste garante que os dois não divergem).
+`apps/web/src/app/theme.css` (um teste garante que os dois não divergem).
 
 Este diretório documenta a construção **incremental** sobre o repositório existente
 (ISP CRM SaaS: Next.js + NestJS + Prisma + PostgreSQL + Redis). Nada foi substituído.
@@ -13,35 +13,35 @@ Este diretório documenta a construção **incremental** sobre o repositório ex
 | [03-modelo-de-dados-e-invariantes.md](03-modelo-de-dados-e-invariantes.md) | Tabelas novas, invariantes de concorrência, rotas |
 | [04-registro-de-continuidade.md](04-registro-de-continuidade.md) | Checkpoint: o que existe, comandos, resultados, próxima ação |
 
-## Como rodar (modo web-only, já usado no projeto)
+## Como rodar (site único)
 
-PowerShell (Windows), a partir da raiz do projeto:
+Procedimentos completos (PowerShell, Linux, rollback): [08-sequencias-de-comandos-e-rollback.md](08-sequencias-de-comandos-e-rollback.md).
 
 ```powershell
-git fetch origin
-git checkout cursor/vertice-foundation-edc0
 npm install
 docker compose up -d postgres
-.\scripts\backup-database.ps1          # recomendado antes de migrar (migration é aditiva)
-npm run dev:web:funnel                 # aplica migrations e sobe o Next.js em :3000
+npm run dev:web:funnel      # alias de `npm run dev`: Next :3000 + worker; sem NestJS/SGP
 ```
 
-Entre com o administrador já criado por `bootstrap:web-only` e abra
-`http://localhost:3000/inbox`. O menu legado **não foi alterado**; a caixa de entrada é
-acessada pela URL `/inbox` (um link no menu é uma decisão pendente do usuário).
-
-## Testes (nenhum toca o banco de desenvolvimento)
+## Testes (nenhum toca o banco de desenvolvimento; exigem TEST_DATABASE_ADMIN_URL)
 
 ```bash
-npm run typecheck
-npm test -w apps/web                       # unidade (regras, marca/tema)
-npm run test:inbox-integration             # PostgreSQL descartável: concorrência, replay, isolamento
-npm run test:inbox-e2e                     # Next.js real + HTTP + PostgreSQL descartável
+npm run typecheck && npm test               # unidade + site único
+npm run test:harness                        # harness de banco descartável
+npm run prisma:validate:migrations          # migrations: limpa, divergência, atualização legada
+npm run test:sales-funnel-integration
+npm run test:inbox-integration
+npm run test:records-integration
+npm run test:outbox-integration             # outbox, worker, webhook HMAC, SSE
+npm run test:site-e2e                       # prova de independência (sem SGP/NestJS)
+npm run test:legacy-api                     # API NestJS legada (opt-in)
 ```
 
-Os dois últimos criam/recriam apenas bancos `vertice_inbox_test` / `vertice_inbox_e2e`
-(guardas em `scripts/lib/disposable-db.mjs`: host local, nome com `test`/`_e2e`,
-`ALLOW_DISPOSABLE_DB=true`). Defina `INBOX_TEST_ADMIN_URL` para a conexão administrativa
-(`postgresql://USUARIO:SENHA@localhost:5432/postgres`). O padrão `crm:crm` é o do `docker-compose.yml`.
-Sem `vector` instalado, as migrations de teste trocam `vector(1536)` por `TEXT`
-(só em banco descartável).
+| Arquivo | Conteúdo (correção "site único") |
+|---|---|
+| [05-baseline-causas-e-correcoes.md](05-baseline-causas-e-correcoes.md) | Baseline, causas confirmadas e correções |
+| [06-site-unico-mapa-de-rotas.md](06-site-unico-mapa-de-rotas.md) | Layout, tema, rotas e permissões |
+| [07-desacoplamento-sgp-inventario.md](07-desacoplamento-sgp-inventario.md) | O que saiu do caminho operacional |
+| [08-sequencias-de-comandos-e-rollback.md](08-sequencias-de-comandos-e-rollback.md) | PowerShell, Linux, rollback |
+| [09-prova-de-independencia.md](09-prova-de-independencia.md) | Como a independência é provada e seus limites |
+| [10-comparacao-de-branches.md](10-comparacao-de-branches.md) | Branches comparadas, sem merge |
