@@ -10,6 +10,12 @@ import { createGlobalValidationPipe } from "./security/pipes/global-validation.p
 import { readSecurityConfig } from "./security/security.config";
 
 async function bootstrap() {
+  if (process.env.LEGACY_API_ENABLED !== "true") {
+    throw new Error(
+      "apps/api (NestJS) é legado e não faz parte da operação padrão. " +
+        "Use `npm run dev` (site único). Para iniciá-lo mesmo assim: LEGACY_API_ENABLED=true.",
+    );
+  }
   const app = await NestFactory.create(AppModule, { bodyParser: false });
   const config = app.get(ConfigService);
   assertProductionEnvironment(config);

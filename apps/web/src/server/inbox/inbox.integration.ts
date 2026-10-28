@@ -12,8 +12,9 @@ import { HttpError } from "../http";
 import { InboxService } from "./service";
 
 const url = process.env.DATABASE_URL ?? "";
-if (!/_(e2e|test)\b|test/i.test(url.split("/").pop() ?? "") || process.env.ALLOW_DISPOSABLE_DB !== "true") {
-  throw new Error("Recusado: DATABASE_URL precisa ser banco descartavel e ALLOW_DISPOSABLE_DB=true.");
+const runId = process.env.TEST_DATABASE_RUN_ID ?? "";
+if (!runId || !new URL(url).pathname.startsWith(`/vtest_${runId}`)) {
+  throw new Error("Recusado: execute via `npm run test:inbox-integration` (banco exclusivo criado pelo harness).");
 }
 
 const pool = new Pool({ connectionString: url });
