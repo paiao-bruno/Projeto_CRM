@@ -188,15 +188,15 @@ describe("cadastro local sem SGP", () => {
         headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
         body: JSON.stringify(payload),
       });
-    assert.equal((await handler(build(null, {}))).status, 401);
+    assert.equal((await handler(build(null, {}), { params: Promise.resolve({}) })).status, 401);
     const noPerm = await sign({ ...a, permissions: ["chat.read"] });
-    assert.equal((await handler(build(noPerm, { name: "x" }))).status, 403);
+    assert.equal((await handler(build(noPerm, { name: "x" }), { params: Promise.resolve({}) })).status, 403);
     const ok = await sign(a);
-    assert.equal((await handler(build(ok, { name: "" }))).status, 422);
-    const created = await handler(build(ok, { name: "Via rota" }));
+    assert.equal((await handler(build(ok, { name: "" }), { params: Promise.resolve({}) })).status, 422);
+    const created = await handler(build(ok, { name: "Via rota" }), { params: Promise.resolve({}) });
     assert.equal(created.status, 201);
     const malformed = new NextRequest("http://localhost/api/customers", { method: "POST", headers: { authorization: `Bearer ${ok}` }, body: "{" });
-    assert.equal((await handler(malformed)).status, 400);
+    assert.equal((await handler(malformed, { params: Promise.resolve({}) })).status, 400);
   });
 
   it("nenhum acesso de rede externa (SGP) ocorreu", () => {

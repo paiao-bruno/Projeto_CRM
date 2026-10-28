@@ -1,5 +1,5 @@
 /**
- * Cadastro local de clientes, contratos e faturas (sem SGP, sem servidor NestJS).
+ * Cadastro local de clientes, contratos e faturas.
  * Isolamento por organização em toda consulta; exclusão lógica; auditoria nas mutações.
  */
 import { Prisma, type PrismaClient } from "@prisma/client";

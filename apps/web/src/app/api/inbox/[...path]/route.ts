@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { requireAuth, requirePermission } from "@/server/auth";
 import { HttpError, jsonData, jsonError } from "@/server/http";
+import { getPrisma } from "@/server/prisma";
 import { getInboxService } from "@/server/inbox/service";
 import { PERMISSIONS } from "@/server/inbox/rules";
 
@@ -74,8 +75,18 @@ export async function POST(request: NextRequest, context: RouteContext) {
     if (path.length === 1 && path[0] === "demo-inbound") {
       if (!demoInboundEnabled()) throw new HttpError(404, "Rota nao encontrada.");
       requirePermission(user, PERMISSIONS.transfer);
+      let channelIntegrationId: string | undefined;
+      if (body.channelId !== undefined) {
+        const channel = await getPrisma().integration.findFirst({
+          where: { id: String(body.channelId), tenantId: user.tenantId, provider: "WEBHOOK", status: "ACTIVE" },
+          select: { id: true },
+        }).catch(() => null);
+        if (!channel) throw new HttpError(422, "channelId invalido.");
+        channelIntegrationId = channel.id;
+      }
       return jsonData(
         await service.ingestInbound(user.tenantId, {
+          channelIntegrationId,
           provider: "demo",
           providerEventId: String(body.providerEventId ?? ""),
           contactName: String(body.contactName ?? ""),
@@ -84,6 +95,10 @@ export async function POST(request: NextRequest, context: RouteContext) {
         }),
         201,
       );
+    }
+
+    if (path.length === 5 && path[0] === "conversations" && path[2] === "messages" && path[4] === "delivery") {
+      return jsonData(await service.resolveDelivery(user, path[1], path[3], String(body.action ?? "")));
     }
 
     if (path.length === 3 && path[0] === "conversations") {

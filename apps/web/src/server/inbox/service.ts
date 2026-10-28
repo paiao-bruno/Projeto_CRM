@@ -3,6 +3,8 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import type { ServerAuthUser } from "../auth";
 import { HttpError } from "../http";
 import { getPrisma } from "../prisma";
+import { OutboxService } from "../outbox/service";
+import { publishEvent } from "../realtime";
 import {
   PERMISSIONS,
   PRESENCE_STATUSES,
@@ -34,6 +36,7 @@ export type InboundInput = {
   contactPhone: string;
   text: string;
   occurredAt?: string | Date;
+  channelIntegrationId?: string;
 };
 
 export function actorFrom(user: Pick<ServerAuthUser, "memberId" | "permissions">): Actor {
@@ -117,6 +120,7 @@ export class InboxService {
               status: "OPEN",
               unreadCount: 1,
               lastMessageAt: occurredAt,
+              channelIntegrationId: input.channelIntegrationId,
               metadata: { provider },
             },
           });
@@ -153,6 +157,7 @@ export class InboxService {
           where: { tenantId, provider, providerEventId },
           data: { conversationId: conversation.id },
         });
+        await publishEvent(tx, { type: "message.received", tenantId, conversationId: conversation.id });
 
         return {
           duplicate: false as const,
@@ -190,7 +195,7 @@ export class InboxService {
     return formatProtocol(new Date(), Number(rows[0].value));
   }
 
-  private logEvent(
+  private async logEvent(
     tx: Tx,
     tenantId: string,
     conversationId: string,
@@ -198,9 +203,10 @@ export class InboxService {
     actorMemberId: string | null,
     data?: Prisma.InputJsonValue,
   ) {
-    return tx.conversationEvent.create({
+    await tx.conversationEvent.create({
       data: { tenantId, conversationId, type, actorMemberId, data },
     });
+    await publishEvent(tx, { type: `conversation.${type.toLowerCase()}`, tenantId, conversationId });
   }
 
   /* ------------------------------------------------------------------ */
@@ -372,17 +378,27 @@ export class InboxService {
         : null,
     ]);
 
+    const deliveries = await this.prisma.outboundDelivery.findMany({
+      where: { tenantId: user.tenantId, conversationId: id },
+      select: { messageId: true, status: true, attempts: true, lastError: true },
+    });
+    const deliveryByMessage = new Map(deliveries.map((d) => [d.messageId, d]));
+
     return {
       id: conversation.id,
       protocol: conversation.protocol,
       status: conversation.status,
       version: conversation.version,
       unreadCount: conversation.unreadCount,
+      channelIntegrationId: conversation.channelIntegrationId,
       assignee: assignee
         ? { id: assignee.id, name: assignee.displayName ?? assignee.user.name }
         : null,
       customer,
-      messages,
+      messages: messages.map((message) => ({
+        ...message,
+        delivery: deliveryByMessage.get(message.id) ?? null,
+      })),
       events,
       can: {
         claim: canClaim(actor, conversation),
@@ -545,8 +561,8 @@ export class InboxService {
   }
 
   /**
-   * Registra a resposta. Ainda não há adaptador de canal: a mensagem fica marcada como
-   * RECORDED_ONLY e nenhuma mensagem real é enviada a terceiros.
+   * Registra a resposta. Com canal conectado, a entrega entra na caixa de saída na MESMA transação
+   * (o worker envia depois); sem canal, a mensagem fica RECORDED_ONLY e nada é enviado a terceiros.
    */
   async reply(
     user: ServerAuthUser,
@@ -576,13 +592,24 @@ export class InboxService {
             externalId,
             senderMemberId: actor.memberId,
             sentAt: new Date(),
-            metadata: internal ? { internal: true } : { delivery: "RECORDED_ONLY" },
+            metadata: internal
+              ? { internal: true }
+              : { delivery: conversation.channelIntegrationId ? "PENDING" : "RECORDED_ONLY" },
           },
         });
         await tx.conversation.update({
           where: { id },
           data: { lastMessageAt: message.createdAt, unreadCount: 0 },
         });
+        if (!internal && conversation.channelIntegrationId) {
+          await OutboxService.enqueue(tx, {
+            tenantId: user.tenantId,
+            messageId: message.id,
+            conversationId: id,
+            integrationId: conversation.channelIntegrationId,
+          });
+        }
+        await publishEvent(tx, { type: "message.created", tenantId: user.tenantId, conversationId: id });
         return { id: message.id, duplicate: false };
       });
     } catch (error) {
@@ -594,6 +621,22 @@ export class InboxService {
       }
       throw error;
     }
+  }
+
+  /** Reconciliação de uma entrega em estado UNKNOWN: reenviar ou marcar como não enviada. */
+  async resolveDelivery(user: ServerAuthUser, id: string, messageId: string, action: string) {
+    await this.assertUuid(id);
+    if (action !== "retry" && action !== "mark_failed") throw new HttpError(422, "action invalida.");
+    const { conversation } = await this.loadScoped(this.prisma, user, id);
+    if (!canReply(actorFrom(user), conversation)) throw new HttpError(403, "Permissao insuficiente.");
+    const message = await this.prisma.message.findFirst({
+      where: { id: messageId, tenantId: user.tenantId, conversationId: id },
+      select: { id: true },
+    });
+    if (!message) throw new HttpError(404, "Mensagem nao encontrada.");
+    const resolved = await new OutboxService(this.prisma).resolveUnknown(user.tenantId, message.id, action);
+    if (!resolved) throw new HttpError(409, "A entrega nao esta em estado desconhecido.");
+    return { ok: true };
   }
 
   async markRead(user: ServerAuthUser, id: string) {

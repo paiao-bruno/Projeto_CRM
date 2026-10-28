@@ -336,6 +336,7 @@ model Tenant {
   inboundEvents       InboundEvent[]
   conversationEvents  ConversationEvent[]
   tenantCounters      TenantCounter[]
+  outboundDeliveries  OutboundDelivery[]
   aiAgents            AiAgent[]
   agentMemories       AgentMemory[]
   memoryHistory       MemoryHistory[]
@@ -570,11 +571,12 @@ model Integration {
   createdAt        DateTime            @default(now())
   updatedAt        DateTime            @updatedAt
 
-  tenant           Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  webhookEndpoints WebhookEndpoint[]
-  conversations    Conversation[]
-  campaigns        Campaign[]
-  syncRuns         IntegrationSyncRun[]
+  tenant             Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  webhookEndpoints   WebhookEndpoint[]
+  conversations      Conversation[]
+  campaigns          Campaign[]
+  syncRuns           IntegrationSyncRun[]
+  outboundDeliveries OutboundDelivery[]
 
   @@unique([tenantId, provider, name])
   @@index([tenantId, status])
@@ -702,12 +704,13 @@ model Message {
   readAt           DateTime?
   createdAt        DateTime           @default(now())
 
-  tenant         Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  conversation   Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  senderMember   TenantMember? @relation("MemberMessages", fields: [senderMemberId], references: [id], onDelete: SetNull)
-  senderCustomer Customer?     @relation("CustomerMessages", fields: [senderCustomerId], references: [id], onDelete: SetNull)
-  senderAiAgent  AiAgent?      @relation("AiAgentMessages", fields: [senderAiAgentId], references: [id], onDelete: SetNull)
-  fileAsset      FileAsset?    @relation(fields: [fileAssetId], references: [id], onDelete: SetNull)
+  tenant         Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation   Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderMember   TenantMember?     @relation("MemberMessages", fields: [senderMemberId], references: [id], onDelete: SetNull)
+  senderCustomer Customer?         @relation("CustomerMessages", fields: [senderCustomerId], references: [id], onDelete: SetNull)
+  senderAiAgent  AiAgent?          @relation("AiAgentMessages", fields: [senderAiAgentId], references: [id], onDelete: SetNull)
+  fileAsset      FileAsset?        @relation(fields: [fileAssetId], references: [id], onDelete: SetNull)
+  delivery       OutboundDelivery?
 
   @@unique([tenantId, externalId])
   @@index([tenantId, conversationId, createdAt])
@@ -1595,4 +1598,38 @@ model TenantCounter {
   tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@id([tenantId, key])
+}
+
+/// Caixa de saída transacional: criada na mesma transação da mensagem; processada pelo worker dedicado.
+model OutboundDelivery {
+  id                String    @id @default(uuid()) @db.Uuid
+  tenantId          String    @db.Uuid
+  messageId         String    @unique @db.Uuid
+  conversationId    String    @db.Uuid
+  integrationId     String?   @db.Uuid
+  status            String    @default("PENDING")
+  attempts          Int       @default(0)
+  maxAttempts       Int       @default(5)
+  nextAttemptAt     DateTime  @default(now())
+  leaseToken        String?
+  leaseExpiresAt    DateTime?
+  providerMessageId String?
+  lastError         String?
+  acceptedAt        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  message     Message      @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  integration Integration? @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+
+  @@index([status, nextAttemptAt])
+  @@index([tenantId, status])
+  @@index([integrationId, providerMessageId])
+}
+
+model WorkerHeartbeat {
+  name       String   @id
+  lastSeenAt DateTime @default(now())
+  info       Json?
 }

@@ -1,5 +1,7 @@
 /** Cliente das rotas Next.js /api/inbox/* (mesma origem; exige o modo web-only). */
 
+export type DeliveryStatus = "PENDING" | "PROCESSING" | "ACCEPTED" | "DELIVERED" | "READ" | "FAILED" | "UNKNOWN";
+
 export type InboxTab = "queue" | "mine" | "all" | "closed";
 
 export type ConversationSummary = {
@@ -35,6 +37,7 @@ export type ConversationDetail = {
     body: string | null;
     metadata: Record<string, unknown> | null;
     createdAt: string;
+    delivery: { status: DeliveryStatus; attempts: number; lastError: string | null } | null;
   }>;
   events: Array<{ id: string; type: string; createdAt: string; data: Record<string, unknown> | null }>;
   can: { claim: boolean; reply: boolean; transfer: boolean; close: boolean; reopen: boolean };
@@ -94,7 +97,9 @@ export const inboxApi = {
     post<{ id: string }>(`/conversations/${id}/messages`, token, { body, internal, clientMessageId }),
   markRead: (token: string, id: string) => post<{ ok: boolean }>(`/conversations/${id}/read`, token),
   presence: (token: string, status: "ONLINE" | "AWAY" | "OFFLINE") => post<{ status: string }>("/presence", token, { status }),
-  demoInbound: (token: string, input: { contactName: string; contactPhone: string; text: string }) =>
+  resolveDelivery: (token: string, conversationId: string, messageId: string, action: "retry" | "mark_failed") =>
+    post<{ ok: boolean }>(`/conversations/${conversationId}/messages/${messageId}/delivery`, token, { action }),
+  demoInbound: (token: string, input: { contactName: string; contactPhone: string; text: string; channelId?: string }) =>
     post<{ duplicate: boolean }>("/demo-inbound", token, {
       ...input,
       providerEventId: `demo-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
@@ -107,4 +112,23 @@ export function formatPhone(raw: string | null | undefined) {
   if (!digits) return "sem telefone";
   const match = /^55(\d{2})(9?\d{4})(\d{4})$/.exec(digits);
   return match ? `+55 ${match[1]} ${match[2]}-${match[3]}` : `+${digits}`;
+}
+
+/** Rótulo do estado de entrega de uma mensagem de saída (nenhum estado é inventado no cliente). */
+export function deliveryLabel(message: ConversationDetail["messages"][number]): { text: string; tone: "ok" | "wait" | "error" | "info" } | null {
+  if (message.direction !== "OUTBOUND") return null;
+  if (!message.delivery) {
+    return message.metadata?.delivery === "RECORDED_ONLY"
+      ? { text: "Registrada (demonstração, sem canal conectado)", tone: "info" }
+      : null;
+  }
+  switch (message.delivery.status) {
+    case "PENDING": return { text: "Aguardando envio", tone: "wait" };
+    case "PROCESSING": return { text: "Processando", tone: "wait" };
+    case "ACCEPTED": return { text: "Aceita pelo provedor", tone: "ok" };
+    case "DELIVERED": return { text: "Entregue", tone: "ok" };
+    case "READ": return { text: "Lida", tone: "ok" };
+    case "FAILED": return { text: "Falhou", tone: "error" };
+    case "UNKNOWN": return { text: "Resultado desconhecido", tone: "error" };
+  }
 }
