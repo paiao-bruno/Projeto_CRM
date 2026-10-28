@@ -46,7 +46,8 @@
     "load-test": "node scripts/load-test.mjs",
     "db:test-migrate-deploy": "node scripts/test-migrate-deploy.mjs",
     "test:sales-funnel-integration": "ALLOW_DISPOSABLE_DB=true node scripts/test-sales-funnel-integration.mjs",
-    "test:inbox-integration": "node scripts/test-inbox-integration.mjs"
+    "test:inbox-integration": "node scripts/test-inbox-integration.mjs",
+    "test:inbox-e2e": "node scripts/test-inbox-e2e.mjs"
   },
   "repository": {
     "type": "git",
