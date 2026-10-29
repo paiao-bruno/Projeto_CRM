@@ -3,11 +3,13 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import type { ServerAuthUser } from "../auth";
 import { HttpError } from "../http";
 import { getPrisma } from "../prisma";
+import { DistributionService } from "../distribution";
 import { OutboxService } from "../outbox/service";
 import { publishEvent } from "../realtime";
 import {
   PERMISSIONS,
   PRESENCE_STATUSES,
+  actorFrom,
   type Actor,
   type InboxTab,
   canClaim,
@@ -15,6 +17,7 @@ import {
   canReopen,
   canReply,
   canTransfer,
+  CLOSE_REASONS,
   canView,
   clampLimit,
   derivePresence,
@@ -37,11 +40,8 @@ export type InboundInput = {
   text: string;
   occurredAt?: string | Date;
   channelIntegrationId?: string;
+  sectorId?: string;
 };
-
-export function actorFrom(user: Pick<ServerAuthUser, "memberId" | "permissions">): Actor {
-  return { memberId: user.memberId, permissions: user.permissions ?? [] };
-}
 
 function requirePerm(actor: Actor, permission: string) {
   if (!has(actor, permission)) throw new HttpError(403, "Permissao insuficiente.");
@@ -121,6 +121,7 @@ export class InboxService {
               unreadCount: 1,
               lastMessageAt: occurredAt,
               channelIntegrationId: input.channelIntegrationId,
+              sectorId: input.sectorId,
               metadata: { provider },
             },
           });
@@ -167,7 +168,12 @@ export class InboxService {
         };
       },
       { timeout: 15_000 },
-    );
+    ).then(async (result) => {
+      if (!result.duplicate && result.conversationId) {
+        await new DistributionService(this.prisma).distribute(tenantId, result.conversationId).catch(() => undefined);
+      }
+      return result;
+    });
   }
 
   private async resolveCustomer(tx: Tx, tenantId: string, phone: string, name: string) {
@@ -215,7 +221,7 @@ export class InboxService {
 
   async list(
     user: ServerAuthUser,
-    query: { tab?: string; search?: string; page?: number; limit?: number },
+    query: { tab?: string; search?: string; page?: number; limit?: number; sectorId?: string; channelId?: string; operatorId?: string },
   ) {
     const actor = actorFrom(user);
     requirePerm(actor, PERMISSIONS.read);
@@ -230,22 +236,22 @@ export class InboxService {
     const page = Math.max(1, Math.floor(Number(query.page) || 1));
     const base = this.tabWhere(user.tenantId, actor, tab);
     const search = query.search?.trim();
-    const where: Prisma.ConversationWhereInput = search
-      ? {
-          AND: [
-            base,
-            {
-              OR: [
-                { protocol: { contains: search, mode: "insensitive" } },
-                { customer: { name: { contains: search, mode: "insensitive" } } },
-                ...(search.replace(/\D/g, "").length >= 3
-                  ? [{ customer: { phone: { contains: search.replace(/\D/g, "") } } }]
-                  : []),
-              ],
-            },
-          ],
-        }
-      : base;
+    const extras: Prisma.ConversationWhereInput[] = [];
+    if (query.sectorId) extras.push({ sectorId: query.sectorId });
+    if (query.channelId) extras.push({ channelIntegrationId: query.channelId });
+    if (query.operatorId) extras.push({ assignedMemberId: query.operatorId });
+    if (search) {
+      extras.push({
+        OR: [
+          { protocol: { contains: search, mode: "insensitive" } },
+          { customer: { name: { contains: search, mode: "insensitive" } } },
+          ...(search.replace(/\D/g, "").length >= 3
+            ? [{ customer: { phone: { contains: search.replace(/\D/g, "") } } }]
+            : []),
+        ],
+      });
+    }
+    const where: Prisma.ConversationWhereInput = extras.length ? { AND: [base, ...extras] } : base;
 
     const [items, total, counts] = await Promise.all([
       this.prisma.conversation.findMany({
@@ -388,6 +394,8 @@ export class InboxService {
       id: conversation.id,
       protocol: conversation.protocol,
       status: conversation.status,
+      closeReason: conversation.closeReason,
+      sectorId: conversation.sectorId,
       version: conversation.version,
       unreadCount: conversation.unreadCount,
       channelIntegrationId: conversation.channelIntegrationId,
@@ -406,6 +414,7 @@ export class InboxService {
         transfer: canTransfer(actor, conversation),
         close: canClose(actor, conversation),
         reopen: canReopen(actor, conversation),
+        assign: isSupervisor(actor) && conversation.status !== "SOLVED" && conversation.status !== "ARCHIVED",
       },
     };
   }
@@ -529,6 +538,69 @@ export class InboxService {
     return { ...updated, assigneeId: updated.assignedMemberId, stillVisible: canView(actor, updated) };
   }
 
+  /** Atribuição pelo supervisor (fila ou troca de responsável). Mesmo CAS de transferência. */
+  async assign(
+    user: ServerAuthUser,
+    id: string,
+    input: { toMemberId?: string; reason?: string; expectedVersion?: number },
+  ) {
+    if (!isSupervisor(actorFrom(user))) throw new HttpError(403, "Permissao insuficiente.");
+    return this.transfer(user, id, input);
+  }
+
+  async start(
+    user: ServerAuthUser,
+    input: { customerId?: string; contactName?: string; contactPhone?: string; text?: string; sectorId?: string; channelId?: string },
+  ) {
+    const actor = actorFrom(user);
+    requirePerm(actor, PERMISSIONS.reply);
+    const text = cleanText(input.text, "text", 1, 4000);
+    const name = input.contactName ? cleanText(input.contactName, "contactName", 1, 160) : "Contato";
+    const phone = input.contactPhone ? normalizePhone(input.contactPhone) : null;
+    if (input.contactPhone && !phone) throw new HttpError(422, "contactPhone invalido.");
+    const created = await this.prisma.$transaction(async (tx) => {
+      let customerId = input.customerId;
+      if (customerId) {
+        const customer = await tx.customer.findFirst({ where: { id: customerId, tenantId: user.tenantId, deletedAt: null } });
+        if (!customer) throw new HttpError(422, "Cliente invalido.");
+      } else if (phone) {
+        customerId = await this.resolveCustomer(tx, user.tenantId, phone, name);
+      } else {
+        throw new HttpError(422, "Informe o cliente ou um telefone.");
+      }
+      const protocol = await this.nextProtocol(tx, user.tenantId);
+      const conversation = await tx.conversation.create({
+        data: {
+          tenantId: user.tenantId,
+          customerId,
+          protocol,
+          status: "OPEN",
+          assignedMemberId: actor.memberId,
+          claimedAt: new Date(),
+          lastMessageAt: new Date(),
+          sectorId: input.sectorId,
+          channelIntegrationId: input.channelId,
+        },
+      });
+      await tx.message.create({
+        data: {
+          tenantId: user.tenantId,
+          conversationId: conversation.id,
+          senderType: "USER",
+          direction: "OUTBOUND",
+          contentType: "TEXT",
+          body: text,
+          senderMemberId: actor.memberId,
+          sentAt: new Date(),
+          metadata: { delivery: "RECORDED_ONLY", startedByAgent: true },
+        },
+      });
+      await this.logEvent(tx, user.tenantId, conversation.id, "STARTED", actor.memberId);
+      return conversation.id;
+    });
+    return this.get(user, created);
+  }
+
   async close(
     user: ServerAuthUser,
     id: string,
@@ -536,13 +608,27 @@ export class InboxService {
   ) {
     await this.assertUuid(id);
     const actor = actorFrom(user);
-    const reason = input.reason ? cleanText(input.reason, "reason", 1, 500) : null;
+    const reasonCode = input.reason ? cleanText(input.reason, "reason", 1, 80) : null;
+    if (reasonCode && !CLOSE_REASONS.some((item) => item.code === reasonCode) && reasonCode.length > 80) {
+      throw new HttpError(422, "Motivo de encerramento invalido.");
+    }
     await this.prisma.$transaction(async (tx) => {
       const { conversation } = await this.loadScoped(tx, user, id);
       if (!canClose(actor, conversation)) throw new HttpError(403, "Permissao insuficiente.");
       this.checkExpected(conversation, input.expectedVersion);
-      await this.cas(tx, conversation, { status: "SOLVED", closedAt: new Date() });
-      await this.logEvent(tx, user.tenantId, id, "CLOSED", actor.memberId, { reason });
+      if (conversation.sectorId) {
+        const sector = await tx.sector.findFirst({ where: { id: conversation.sectorId, tenantId: user.tenantId } });
+        if (sector?.requireCloseReason && !reasonCode) {
+          throw new HttpError(422, "Informe o motivo de encerramento.");
+        }
+      }
+      await this.cas(tx, conversation, {
+        status: "SOLVED",
+        closedAt: new Date(),
+        closeReason: reasonCode,
+        closedByMemberId: actor.memberId,
+      });
+      await this.logEvent(tx, user.tenantId, id, "CLOSED", actor.memberId, { reason: reasonCode });
     });
     return this.get(user, id);
   }
@@ -554,7 +640,7 @@ export class InboxService {
       const { conversation } = await this.loadScoped(tx, user, id);
       if (!canReopen(actor, conversation)) throw new HttpError(403, "Permissao insuficiente.");
       this.checkExpected(conversation, input.expectedVersion);
-      await this.cas(tx, conversation, { status: "OPEN", closedAt: null });
+      await this.cas(tx, conversation, { status: "OPEN", closedAt: null, closeReason: null });
       await this.logEvent(tx, user.tenantId, id, "REOPENED", actor.memberId);
     });
     return this.get(user, id);
@@ -599,7 +685,11 @@ export class InboxService {
         });
         await tx.conversation.update({
           where: { id },
-          data: { lastMessageAt: message.createdAt, unreadCount: 0 },
+          data: {
+            lastMessageAt: message.createdAt,
+            unreadCount: 0,
+            ...(internal || conversation.firstResponseAt ? {} : { firstResponseAt: message.createdAt }),
+          },
         });
         if (!internal && conversation.channelIntegrationId) {
           await OutboxService.enqueue(tx, {
@@ -674,6 +764,15 @@ export class InboxService {
         presence: derivePresence(member.presence, now),
       }))
       .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+  }
+
+  /** Fonte canônica da presença: a escolha da pessoa (persistida) e o estado efetivo (com expiração do heartbeat). */
+  async getPresence(user: ServerAuthUser) {
+    const record = await this.prisma.teamPresence.findUnique({ where: { memberId: user.memberId } });
+    const choice = (PRESENCE_STATUSES as readonly string[]).includes(record?.status ?? "")
+      ? (record!.status as (typeof PRESENCE_STATUSES)[number])
+      : "ONLINE";
+    return { choice, effective: derivePresence(record), lastSeenAt: record?.lastSeenAt ?? null };
   }
 
   async heartbeat(user: ServerAuthUser, status: string) {

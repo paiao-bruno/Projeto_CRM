@@ -43,12 +43,33 @@ async function seedOrg(slug: string, codes: string[]): Promise<ServerAuthUser> {
   const user = await prisma.user.create({
     data: { name: `User ${slug}`, email: `u@${slug}.test.local`, passwordHash: "x", status: "ACTIVE" },
   });
-  const role = await prisma.role.create({ data: { tenantId: tenant.id, name: "Admin" } });
+  const role = await prisma.role.create({
+    data: {
+      tenantId: tenant.id,
+      name: "Admin",
+      permissions: {
+        create: await Promise.all(
+          codes.map(async (code) => {
+            const permission = await prisma.permission.upsert({
+              where: { code },
+              update: {},
+              create: { code, description: code },
+            });
+            return { permissionId: permission.id };
+          }),
+        ),
+      },
+    },
+  });
   const member = await prisma.tenantMember.create({
     data: { tenantId: tenant.id, userId: user.id, roleId: role.id, status: "ACTIVE" },
   });
+  const session = await prisma.authSession.create({
+    data: { userId: user.id, expiresAt: new Date(Date.now() + 3_600_000) },
+  });
   return {
     sub: user.id,
+    sid: session.id,
     email: user.email,
     name: user.name,
     tenantId: tenant.id,
@@ -189,7 +210,8 @@ describe("cadastro local sem SGP", () => {
         body: JSON.stringify(payload),
       });
     assert.equal((await handler(build(null, {}), { params: Promise.resolve({}) })).status, 401);
-    const noPerm = await sign({ ...a, permissions: ["chat.read"] });
+    const reader = await seedOrg("rec-reader", ["chat.read"]);
+    const noPerm = await sign(reader);
     assert.equal((await handler(build(noPerm, { name: "x" }), { params: Promise.resolve({}) })).status, 403);
     const ok = await sign(a);
     assert.equal((await handler(build(ok, { name: "" }), { params: Promise.resolve({}) })).status, 422);

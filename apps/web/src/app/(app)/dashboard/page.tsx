@@ -1,17 +1,24 @@
 "use client";
 
 import Link from "next/link";
-import { PageHeader, ErrorAlert, formatCents, useResource } from "@/components/vx";
+import { PageHeader, ErrorAlert, formatCents, statusLabels, useResource } from "@/components/vx";
 
 type Overview = {
   generatedAt: string;
-  conversations: { queue: number; inProgress: number; closedToday: number; messagesToday: number; hasData: boolean };
+  timezone?: string;
+  window?: { from: string; to: string };
+  conversations: {
+    queue: number; inProgress: number; closedToday: number; messagesToday: number;
+    openedInWindow?: number; closedInWindow?: number; avgFirstResponseSeconds?: number | null;
+    firstResponseSampleSize?: number; hasData: boolean;
+  };
   customers: { total: number; byStatus: Record<string, number>; hasData: boolean };
   contracts: { byStatus: Record<string, number>; hasData: boolean };
   invoices: { byStatus: Record<string, { count: number; amountCents: number }>; overdueOpen: { count: number; amountCents: number }; hasData: boolean };
   deals: { byStatus: Record<string, number>; hasData: boolean };
   aiAgents: { byStatus: Record<string, number>; hasData: boolean };
   team: { online: number; away: number; offline: number; hasData: boolean };
+  birthdays?: { today: { id: string; name: string }[]; thisMonth: { id: string; name: string }[]; hasData: boolean };
 };
 
 function Metric({ label, value, hint }: { label: string; value: string | number; hint?: string }) {
@@ -53,11 +60,23 @@ export default function DashboardPage() {
             <Metric label="Em atendimento" value={data.conversations.inProgress} />
             <Metric label="Encerradas hoje" value={data.conversations.closedToday} />
             <Metric label="Mensagens hoje" value={data.conversations.messagesToday} />
+            <Metric
+              label="1ª resposta (período)"
+              value={data.conversations.avgFirstResponseSeconds == null ? "Sem amostra" : `${Math.round((data.conversations.avgFirstResponseSeconds ?? 0) / 60)} min`}
+              hint={data.conversations.firstResponseSampleSize ? `${data.conversations.firstResponseSampleSize} atendimento(s)` : "Não é zero de desempenho"}
+            />
+            <Metric label="Abertos no período" value={data.conversations.openedInWindow ?? "—"} />
           </div>
+          {data.birthdays?.hasData ? (
+            <p className="text-sm vx-muted">
+              Aniversariantes hoje: {data.birthdays.today.length ? data.birthdays.today.map((p) => p.name).join(", ") : "nenhum"}
+              {" · "}no mês: {data.birthdays.thisMonth.length}
+            </p>
+          ) : null}
           <div className="grid gap-4 lg:grid-cols-2">
             <Block title="Clientes" hasData={data.customers.hasData} emptyText="Sem dados: nenhum cliente cadastrado ainda." href="/customers">
               <p className="text-3xl font-bold">{data.customers.total}</p>
-              <ul className="mt-2 text-sm vx-muted">{Object.entries(data.customers.byStatus).map(([k, v]) => <li key={k}>{k}: {v}</li>)}</ul>
+              <ul className="mt-2 text-sm vx-muted">{Object.entries(data.customers.byStatus).map(([k, v]) => <li key={k}>{statusLabels[k] ?? k}: {v}</li>)}</ul>
             </Block>
             <Block title="Faturas" hasData={data.invoices.hasData} emptyText="Sem dados: nenhuma fatura cadastrada ainda." href="/invoices">
               <p className="text-sm">Vencidas em aberto: <strong>{data.invoices.overdueOpen.count}</strong> ({formatCents(data.invoices.overdueOpen.amountCents)})</p>
@@ -73,7 +92,7 @@ export default function DashboardPage() {
             <Block title="Agentes" hasData={data.aiAgents.hasData} emptyText="Sem dados: nenhum agente configurado." href="/ai-agents">
               <ul className="text-sm vx-muted">{Object.entries(data.aiAgents.byStatus).map(([k, v]) => <li key={k}>{k}: {v}</li>)}</ul>
             </Block>
-            <Block title="Equipe" hasData={data.team.hasData} emptyText="Sem dados: nenhum atendente com permissão de responder." href="/inbox">
+            <Block title="Equipe" hasData={data.team.hasData} emptyText="Sem dados: nenhum atendente com permissão de responder." href="/team">
               <p className="text-sm">Online: <strong>{data.team.online}</strong> · Ausentes: <strong>{data.team.away}</strong> · Offline: <strong>{data.team.offline}</strong></p>
             </Block>
           </div>

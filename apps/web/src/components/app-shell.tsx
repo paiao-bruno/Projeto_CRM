@@ -16,6 +16,10 @@ import {
   Plug,
   Receipt,
   Users,
+  Columns3,
+  Search,
+  UserCog,
+  ScrollText,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -37,6 +41,10 @@ const iconMap: Record<string, LucideIcon> = {
   Megaphone,
   CalendarDays,
   Hash,
+  Columns3,
+  Search,
+  UserCog,
+  ScrollText,
 };
 
 type Presence = "ONLINE" | "AWAY" | "OFFLINE";
@@ -47,16 +55,29 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { user, token, loading, logout } = useRequireAuth();
   const [presence, setPresence] = useState<Presence>("ONLINE");
+  const [presenceReady, setPresenceReady] = useState(false);
   const canChat = Boolean(user?.permissions?.includes("chat.read"));
 
+  // A escolha de presença é do servidor: o reload restaura o que a pessoa escolheu em vez de voltar a ONLINE.
   useEffect(() => {
     if (!token || !canChat) return;
+    let cancelled = false;
+    inboxApi
+      .getPresence(token)
+      .then((state) => { if (!cancelled) setPresence(state.choice); })
+      .catch(() => undefined)
+      .finally(() => { if (!cancelled) setPresenceReady(true); });
+    return () => { cancelled = true; };
+  }, [token, canChat]);
+
+  useEffect(() => {
+    if (!token || !canChat || !presenceReady) return;
     const send = (status: Presence) => void inboxApi.presence(token, status).catch(() => undefined);
     send(presence);
     if (presence === "OFFLINE") return;
     const timer = setInterval(() => send(presence), HEARTBEAT_MS);
     return () => clearInterval(timer);
-  }, [token, canChat, presence]);
+  }, [token, canChat, presence, presenceReady]);
 
   if (loading || !user || !token) {
     return <div className="flex min-h-screen items-center justify-center vx-muted">Carregando...</div>;
@@ -67,7 +88,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const forbidden = Boolean(current?.permission && !user.permissions?.includes(current.permission));
 
   async function signOut() {
-    if (token && canChat) await inboxApi.presence(token, "OFFLINE").catch(() => undefined);
     logout();
   }
 

@@ -14,16 +14,20 @@ describe("frontend routes", () => {
 
     assert.deepEqual(routes, [
       "ai-agents",
+      "audit",
+      "boards",
       "campaigns",
       "contracts",
       "customers",
       "dashboard",
       "flows",
+      "history",
       "inbox",
       "integrations",
       "invoices",
       "sales-funnel",
       "schedule",
+      "team",
       "team-chat",
     ]);
   });

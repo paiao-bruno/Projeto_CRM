@@ -18,7 +18,12 @@ renderizem no tema claro sem reescrever cada classe.
 | `/invoices` | `/api/invoices` (registro local; sem emissão/cobrança) | customers.manage |
 | `/ai-agents` | `/api/ai-agents` | ai_agents.manage |
 | `/integrations` | `/api/channels` (canais, segredo HMAC, entregas) | crm.manage |
-| `/flows`, `/campaigns`, `/schedule`, `/team-chat` | páginas herdadas, sem backend novo | — |
+| `/boards` | `/api/boards` (Quadro Ao Vivo; mover ≠ venda) | chat.read |
+| `/history` | `/api/team/history` | chat.transfer |
+| `/team` | `/api/team/*` (equipe, setores, rodízio) | team.manage |
+| `/audit` | `/api/team/audit` | audit.read |
+| `/forgot-password`, `/reset-password` | `/api/auth/forgot`, `/api/auth/reset` | público |
+| `/flows`, `/campaigns`, `/schedule`, `/team-chat` | páginas herdadas, sem backend novo | flags |
 
 Estados de entrega exibidos na caixa de entrada: PENDING, PROCESSING, ACCEPTED, DELIVERED, FAILED, UNKNOWN.
 Capturas: ver `docs/vertice/evidence/` e artefatos da execução (desktop 1366x800 e mobile 390x844).

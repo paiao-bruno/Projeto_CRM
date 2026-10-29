@@ -8,6 +8,9 @@ export const PRODUCTION_PERMISSIONS = [
   "customers.manage",
   "sales_funnel.read",
   "sales_funnel.manage",
+  "team.manage",
+  "audit.read",
+  "reports.read",
 ];
 
 export const SALES_FUNNEL_PERMISSIONS = ["sales_funnel.read", "sales_funnel.manage"];

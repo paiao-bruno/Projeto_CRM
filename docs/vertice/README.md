@@ -33,6 +33,7 @@ npm run test:sales-funnel-integration
 npm run test:inbox-integration
 npm run test:records-integration
 npm run test:outbox-integration             # outbox, worker, webhook HMAC, SSE
+npm run test:e1-integration                 # sessão, equipe, setores, rodízio, quadro, lote
 npm run test:site-e2e                       # prova de independência (sem SGP/NestJS)
 npm run test:legacy-api                     # API NestJS legada (opt-in)
 ```
@@ -45,3 +46,5 @@ npm run test:legacy-api                     # API NestJS legada (opt-in)
 | [08-sequencias-de-comandos-e-rollback.md](08-sequencias-de-comandos-e-rollback.md) | PowerShell, Linux, rollback |
 | [09-prova-de-independencia.md](09-prova-de-independencia.md) | Como a independência é provada e seus limites |
 | [10-comparacao-de-branches.md](10-comparacao-de-branches.md) | Branches comparadas, sem merge |
+| [12-matriz-evolucao.md](12-matriz-evolucao.md) | Matriz RF01–RF39 |
+| [13-e1-checkpoint.md](13-e1-checkpoint.md) | Estado real da etapa E1 |

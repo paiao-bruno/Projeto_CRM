@@ -72,12 +72,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(() => {
+    if (token) void api.post("/auth/logout", {}, token).catch(() => undefined);
     localStorage.removeItem("isp-crm-token");
     localStorage.removeItem("isp-crm-user");
     setToken(null);
     setUser(null);
     router.push("/login");
-  }, [router]);
+  }, [router, token]);
 
   const value = useMemo(
     () => ({ user, token, loading, login, logout }),

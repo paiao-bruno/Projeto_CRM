@@ -21,4 +21,12 @@ describe("marca e tema centralizados", () => {
   it("nome da marca vem de um unico lugar", () => {
     assert.equal(BRAND.name, "Vértice");
   });
+
+  it("login usa a marca Vértice, não ISP CRM SaaS", () => {
+    const login = readFileSync(join(process.cwd(), "src/app/login/page.tsx"), "utf8");
+    assert.doesNotMatch(login, /ISP CRM SaaS/);
+    assert.match(login, /AuthLayout/);
+    const layout = readFileSync(join(process.cwd(), "src/app/layout.tsx"), "utf8");
+    assert.match(layout, /BRAND\.name/);
+  });
 });

@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import { AuthProvider } from "@/components/auth-provider";
+import { BRAND } from "@/lib/brand";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "ISP CRM SaaS",
-  description: "CRM SaaS para provedores de internet",
+  title: BRAND.name,
+  description: BRAND.tagline,
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -1,5 +1,6 @@
 export type AuthUser = {
   sub: string;
+  sid?: string;
   email: string;
   name: string;
   tenantId: string;

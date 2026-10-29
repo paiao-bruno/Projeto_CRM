@@ -85,9 +85,9 @@ describe("feature-flags", () => {
     const all = ALL_NAV_ITEMS.map((item) => item.href);
     assert.ok(!all.includes("/chat"));
     const agent = buildNavItems({}, ["chat.read", "chat.reply"]).map((item) => item.href);
-    assert.deepEqual(agent, ["/inbox"]);
+    assert.deepEqual(agent, ["/inbox", "/boards"]);
     const admin = buildNavItems({}, ["dashboard.read", "chat.read", "customers.manage", "sales_funnel.read", "ai_agents.manage", "crm.manage"]).map((item) => item.href);
-    assert.deepEqual(admin, ["/dashboard", "/inbox", "/sales-funnel", "/customers", "/contracts", "/invoices", "/ai-agents", "/integrations"]);
+    assert.deepEqual(admin, ["/dashboard", "/inbox", "/sales-funnel", "/customers", "/contracts", "/invoices", "/ai-agents", "/integrations", "/boards"]);
   });
 
   it("destino padrão após login respeita permissões", () => {

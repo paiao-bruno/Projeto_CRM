@@ -42,6 +42,9 @@ export async function GET(request: NextRequest, context: RouteContext) {
           search: params.get("search") ?? undefined,
           page: params.get("page") ? Number(params.get("page")) : undefined,
           limit: params.get("limit") ? Number(params.get("limit")) : undefined,
+          sectorId: params.get("sectorId") ?? undefined,
+          channelId: params.get("channelId") ?? undefined,
+          operatorId: params.get("operatorId") ?? undefined,
         }),
       );
     }
@@ -51,8 +54,15 @@ export async function GET(request: NextRequest, context: RouteContext) {
     if (path.length === 1 && path[0] === "members") {
       return jsonData(await service.listMembers(user));
     }
+    if (path.length === 1 && path[0] === "presence") {
+      return jsonData(await service.getPresence(user));
+    }
     if (path.length === 1 && path[0] === "capabilities") {
       return jsonData({ demoInbound: demoInboundEnabled() });
+    }
+    if (path.length === 1 && path[0] === "close-reasons") {
+      const { CLOSE_REASONS } = await import("@/server/inbox/rules");
+      return jsonData(CLOSE_REASONS);
     }
     throw new HttpError(404, "Rota nao encontrada.");
   } catch (error) {
@@ -72,6 +82,16 @@ export async function POST(request: NextRequest, context: RouteContext) {
       return jsonData(await service.heartbeat(user, String(body.status ?? "")));
     }
 
+    if (path.length === 1 && path[0] === "start") {
+      return jsonData(await service.start(user, {
+        customerId: body.customerId as string | undefined,
+        contactName: body.contactName as string | undefined,
+        contactPhone: body.contactPhone as string | undefined,
+        text: body.text as string | undefined,
+        sectorId: body.sectorId as string | undefined,
+        channelId: body.channelId as string | undefined,
+      }), 201);
+    }
     if (path.length === 1 && path[0] === "demo-inbound") {
       if (!demoInboundEnabled()) throw new HttpError(404, "Rota nao encontrada.");
       requirePermission(user, PERMISSIONS.transfer);
@@ -106,6 +126,14 @@ export async function POST(request: NextRequest, context: RouteContext) {
       switch (path[2]) {
         case "claim":
           return jsonData(await service.claim(user, id));
+        case "assign":
+          return jsonData(
+            await service.assign(user, id, {
+              toMemberId: body.toMemberId,
+              reason: body.reason,
+              expectedVersion: optionalVersion(body.expectedVersion),
+            }),
+          );
         case "transfer":
           return jsonData(
             await service.transfer(user, id, {

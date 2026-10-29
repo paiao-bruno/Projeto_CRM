@@ -96,6 +96,7 @@ export const inboxApi = {
   reply: (token: string, id: string, body: string, internal: boolean, clientMessageId: string) =>
     post<{ id: string }>(`/conversations/${id}/messages`, token, { body, internal, clientMessageId }),
   markRead: (token: string, id: string) => post<{ ok: boolean }>(`/conversations/${id}/read`, token),
+  getPresence: (token: string) => call<{ choice: "ONLINE" | "AWAY" | "OFFLINE"; effective: string; lastSeenAt: string | null }>("/presence", token),
   presence: (token: string, status: "ONLINE" | "AWAY" | "OFFLINE") => post<{ status: string }>("/presence", token, { status }),
   resolveDelivery: (token: string, conversationId: string, messageId: string, action: "retry" | "mark_failed") =>
     post<{ ok: boolean }>(`/conversations/${conversationId}/messages/${messageId}/delivery`, token, { action }),

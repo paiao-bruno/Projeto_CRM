@@ -13,12 +13,25 @@ export type InboxTab = "queue" | "mine" | "all" | "closed";
 
 export const PRESENCE_STALE_AFTER_MS = 90_000;
 export const PRESENCE_STATUSES = ["ONLINE", "AWAY", "OFFLINE"] as const;
+
+/** Motivos de encerramento (desenho próprio). O código é persistido; o rótulo é da interface. */
+export const CLOSE_REASONS = [
+  { code: "resolved", label: "Resolvido" },
+  { code: "no_response", label: "Sem resposta do contato" },
+  { code: "spam", label: "Spam ou inválido" },
+  { code: "other_channel", label: "Encaminhado para outro canal" },
+  { code: "other", label: "Outro" },
+] as const;
 export type PresenceStatus = (typeof PRESENCE_STATUSES)[number];
 
 export type Actor = { memberId: string; permissions: string[] };
 
 export function has(actor: Actor, permission: string) {
   return actor.permissions.includes(permission);
+}
+
+export function actorFrom(user: { memberId: string; permissions?: string[] }): Actor {
+  return { memberId: user.memberId, permissions: user.permissions ?? [] };
 }
 
 /** Quem tem chat.transfer atua como supervisor e enxerga todas as conversas do tenant. */

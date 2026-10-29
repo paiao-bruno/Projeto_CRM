@@ -49,13 +49,14 @@
     "test:harness": "node --test scripts/test-harness.spec.mjs",
     "test:records-integration": "node scripts/test-inbox-integration.mjs src/server/records.integration.ts",
     "test:outbox-integration": "node scripts/test-inbox-integration.mjs src/server/outbox/outbox.integration.ts",
+    "test:e1-integration": "node scripts/test-inbox-integration.mjs src/server/e1.integration.ts",
     "dev:legacy-api": "node scripts/dev.mjs",
     "worker": "node scripts/outbox-worker.mjs",
     "build:legacy-api": "npm run build -w apps/api",
     "start": "npm run start -w apps/web",
     "test:legacy-api": "npm run test -w apps/api",
     "typecheck:legacy-api": "npm run typecheck -w apps/api",
-    "test:all-local": "npm run test && npm run test:harness && npm run prisma:validate:migrations && npm run test:sales-funnel-integration && npm run test:inbox-integration && npm run test:records-integration && npm run test:outbox-integration && npm run test:site-e2e",
+    "test:all-local": "npm run test && npm run test:harness && npm run prisma:validate:migrations && npm run test:sales-funnel-integration && npm run test:inbox-integration && npm run test:records-integration && npm run test:outbox-integration && npm run test:e1-integration && npm run test:site-e2e",
     "test:site-e2e": "node scripts/test-site-e2e.mjs"
   },
   "repository": {

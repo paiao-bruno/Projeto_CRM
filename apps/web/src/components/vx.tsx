@@ -102,5 +102,8 @@ export const statusLabels: Record<string, string> = {
   CANCELED: "Cancelado",
   UNKNOWN: "Indefinido",
   OPEN: "Em aberto",
+  PENDING: "Pendente",
+  SOLVED: "Encerrado",
+  ARCHIVED: "Arquivado",
   PAID: "Paga",
 };

@@ -55,6 +55,8 @@ jobs:
         run: npm run test:records-integration
       - name: Outbox, webhook e SSE (integracao)
         run: npm run test:outbox-integration
+      - name: Etapa E1 (sessao, equipe, setores, rodizio, quadro, lote)
+        run: npm run test:e1-integration
       - name: API legada (opt-in)
         run: npm run test:legacy-api
       - name: Prova de independencia (E2E sem SGP/NestJS)

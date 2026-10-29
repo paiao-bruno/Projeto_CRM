@@ -10,17 +10,37 @@ import { derivePresence } from "./inbox/rules";
 export class DashboardService {
   constructor(private readonly prisma: PrismaClient = getPrisma()) {}
 
-  async overview(user: ServerAuthUser, now: Date = new Date()) {
+  async overview(user: ServerAuthUser, query: URLSearchParams = new URLSearchParams(), now: Date = new Date()) {
     const tenantId = user.tenantId;
+    const timezone = "America/Sao_Paulo";
     const startOfDay = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    const from = query.get("from") ? new Date(query.get("from")!) : new Date(now.getTime() - 7 * 86_400_000);
+    const to = query.get("to") ? new Date(query.get("to")!) : now;
+    const window = { gte: from, lte: to };
+    const sectorId = query.get("sectorId") || undefined;
+    const operatorId = query.get("operatorId") || undefined;
+    const channelId = query.get("channelId") || undefined;
+    const convFilter = {
+      tenantId,
+      ...(sectorId ? { sectorId } : {}),
+      ...(operatorId ? { assignedMemberId: operatorId } : {}),
+      ...(channelId ? { channelIntegrationId: channelId } : {}),
+    };
     const active = { in: ["OPEN", "PENDING"] as ("OPEN" | "PENDING")[] };
 
-    const [queue, inProgress, closedToday, messagesToday, customers, customersByStatus, contractsByStatus, invoiceGroups, overdueOpen, dealsByStatus, agents, presence] =
+    const [queue, inProgress, closedToday, messagesToday, openedInWindow, closedInWindow, firstResponses, customers, customersByStatus, contractsByStatus, invoiceGroups, overdueOpen, dealsByStatus, agents, presence, birthdays] =
       await Promise.all([
-        this.prisma.conversation.count({ where: { tenantId, status: active, assignedMemberId: null } }),
-        this.prisma.conversation.count({ where: { tenantId, status: active, assignedMemberId: { not: null } } }),
-        this.prisma.conversation.count({ where: { tenantId, status: "SOLVED", closedAt: { gte: startOfDay } } }),
+        this.prisma.conversation.count({ where: { ...convFilter, status: active, assignedMemberId: null } }),
+        this.prisma.conversation.count({ where: { ...convFilter, status: active, assignedMemberId: { not: null } } }),
+        this.prisma.conversation.count({ where: { ...convFilter, status: "SOLVED", closedAt: { gte: startOfDay } } }),
         this.prisma.message.count({ where: { tenantId, createdAt: { gte: startOfDay }, direction: { in: ["INBOUND", "OUTBOUND"] } } }),
+        this.prisma.conversation.count({ where: { ...convFilter, createdAt: window } }),
+        this.prisma.conversation.count({ where: { ...convFilter, status: "SOLVED", closedAt: window } }),
+        this.prisma.conversation.findMany({
+          where: { ...convFilter, firstResponseAt: { not: null }, createdAt: window },
+          select: { createdAt: true, firstResponseAt: true },
+          take: 2000,
+        }),
         this.prisma.customer.count({ where: { tenantId, deletedAt: null } }),
         this.prisma.customer.groupBy({ by: ["status"], where: { tenantId, deletedAt: null }, _count: { _all: true } }),
         this.prisma.contract.groupBy({ by: ["status"], where: { tenantId, deletedAt: null }, _count: { _all: true } }),
@@ -36,6 +56,11 @@ export class DashboardService {
           where: { tenantId, status: "ACTIVE", role: { permissions: { some: { permission: { code: "chat.reply" } } } } },
           include: { presence: true },
         }),
+        this.prisma.customer.findMany({
+          where: { tenantId, deletedAt: null },
+          select: { id: true, name: true, metadata: true },
+          take: 2000,
+        }),
       ]);
 
     const tally = (rows: { status: string; _count: { _all: number } }[]) =>
@@ -45,10 +70,50 @@ export class DashboardService {
     const operators = presence.map((member) => derivePresence(member.presence, now));
     const invoiceTotal = invoiceGroups.reduce((acc, g) => acc + g._count._all, 0);
 
+    const firstResponseSamples = firstResponses
+      .map((row) => (row.firstResponseAt!.getTime() - row.createdAt.getTime()) / 1000)
+      .filter((seconds) => seconds >= 0);
+    const avgFirstResponseSeconds = firstResponseSamples.length
+      ? Math.round(firstResponseSamples.reduce((a, b) => a + b, 0) / firstResponseSamples.length)
+      : null;
+    const todayKey = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, month: "2-digit", day: "2-digit" }).format(now);
+    const monthKey = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, month: "2-digit" }).format(now);
+    const birthdayPeople = birthdays
+      .map((row) => {
+        const birthDate = typeof row.metadata === "object" && row.metadata && "birthDate" in row.metadata
+          ? String((row.metadata as { birthDate?: string }).birthDate ?? "")
+          : "";
+        return { id: row.id, name: row.name, birthDate };
+      })
+      .filter((row) => /^\d{4}-\d{2}-\d{2}$/.test(row.birthDate));
+
     return {
       generatedAt: now.toISOString(),
+      timezone,
+      window: { from: from.toISOString(), to: to.toISOString() },
+      definitions: {
+        queue: "Atendimentos OPEN/PENDING sem responsável, no recorte de setor/canal/operador.",
+        closedToday: "Encerrados com closedAt no dia UTC corrente (não confundir com ausência de amostra).",
+        avgFirstResponseSeconds: "Média (s) de createdAt → firstResponseAt no período. Sem amostra = null, não zero.",
+        birthdays: "Somente clientes com metadata.birthDate cadastrado (AAAA-MM-DD). Não inferido de documento.",
+      },
       source: "local",
-      conversations: { queue, inProgress, closedToday, messagesToday, hasData: queue + inProgress + closedToday + messagesToday > 0 },
+      conversations: {
+        queue,
+        inProgress,
+        closedToday,
+        messagesToday,
+        openedInWindow,
+        closedInWindow,
+        avgFirstResponseSeconds,
+        firstResponseSampleSize: firstResponseSamples.length,
+        hasData: queue + inProgress + closedToday + messagesToday + openedInWindow > 0,
+      },
+      birthdays: {
+        today: birthdayPeople.filter((row) => row.birthDate.slice(5) === todayKey),
+        thisMonth: birthdayPeople.filter((row) => row.birthDate.slice(5, 7) === monthKey),
+        hasData: birthdayPeople.length > 0,
+      },
       customers: { total: customers, byStatus: tally(customersByStatus), hasData: customers > 0 },
       contracts: { byStatus: tally(contractsByStatus), hasData: contractsByStatus.length > 0 },
       invoices: {
