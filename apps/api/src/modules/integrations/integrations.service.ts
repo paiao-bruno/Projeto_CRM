@@ -3059,7 +3059,7 @@ export class IntegrationsService {
 
     const toDelete = contracts.filter(
       (contract) =>
-        isSgpManagedMetadata(contract.metadata) && !seenExternalIds.has(contract.externalId),
+        isSgpManagedMetadata(contract.metadata) && !seenExternalIds.has(contract.externalId ?? ""),
     );
 
     let deleted = 0;
@@ -3083,7 +3083,7 @@ export class IntegrationsService {
               tenantId,
               runId,
               entity: IntegrationSyncEntity.CONTRACT,
-              externalId: contract.externalId,
+              externalId: contract.externalId ?? undefined,
               action: "deleted",
               status: IntegrationSyncStatus.COMPLETED,
             });
@@ -3115,7 +3115,7 @@ export class IntegrationsService {
 
     const toDelete = invoices.filter(
       (invoice) =>
-        isSgpManagedMetadata(invoice.metadata) && !seenExternalIds.has(invoice.externalId),
+        isSgpManagedMetadata(invoice.metadata) && !seenExternalIds.has(invoice.externalId ?? ""),
     );
 
     let deleted = 0;
@@ -3139,7 +3139,7 @@ export class IntegrationsService {
               tenantId,
               runId,
               entity: IntegrationSyncEntity.INVOICE,
-              externalId: invoice.externalId,
+              externalId: invoice.externalId ?? undefined,
               action: "deleted",
               status: IntegrationSyncStatus.COMPLETED,
             });
@@ -3173,7 +3173,7 @@ export class IntegrationsService {
 
     const toDelete = contracts.filter(
       (contract) =>
-        isSgpManagedMetadata(contract.metadata) && !seenExternalIds.has(contract.externalId),
+        isSgpManagedMetadata(contract.metadata) && !seenExternalIds.has(contract.externalId ?? ""),
     );
 
     let deleted = 0;
@@ -3197,7 +3197,7 @@ export class IntegrationsService {
               tenantId,
               runId,
               entity: IntegrationSyncEntity.CONTRACT,
-              externalId: contract.externalId,
+              externalId: contract.externalId ?? undefined,
               action: "deleted",
               status: IntegrationSyncStatus.COMPLETED,
             });
@@ -3231,7 +3231,7 @@ export class IntegrationsService {
 
     const toDelete = invoices.filter(
       (invoice) =>
-        isSgpManagedMetadata(invoice.metadata) && !seenExternalIds.has(invoice.externalId),
+        isSgpManagedMetadata(invoice.metadata) && !seenExternalIds.has(invoice.externalId ?? ""),
     );
 
     let deleted = 0;
@@ -3255,7 +3255,7 @@ export class IntegrationsService {
               tenantId,
               runId,
               entity: IntegrationSyncEntity.INVOICE,
-              externalId: invoice.externalId,
+              externalId: invoice.externalId ?? undefined,
               action: "deleted",
               status: IntegrationSyncStatus.COMPLETED,
             });

@@ -8,153 +8,189 @@ import {
   FileText,
   GitBranch,
   Hash,
+  Inbox,
   Kanban,
   LayoutDashboard,
   LogOut,
   Megaphone,
-  MessageCircle,
   Plug,
-  RadioTower,
   Receipt,
-  Search,
   Users,
+  Columns3,
+  Search,
+  UserCog,
+  ScrollText,
   type LucideIcon,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { useEffect, useState } from "react";
 import { useRequireAuth } from "@/components/auth-provider";
-import { Button } from "@/components/ui/button";
-import { buildNavItems } from "@/lib/feature-flags";
-import { cn } from "@/lib/utils";
+import { BRAND } from "@/lib/brand";
+import { buildNavItems, ALL_NAV_ITEMS } from "@/lib/feature-flags";
+import { inboxApi } from "@/lib/inbox-client";
 
 const iconMap: Record<string, LucideIcon> = {
   LayoutDashboard,
-  Bot,
-  GitBranch,
-  Plug,
-  MessageCircle,
-  Hash,
+  Inbox,
   Kanban,
   Users,
   FileText,
   Receipt,
+  Bot,
+  Plug,
+  GitBranch,
   Megaphone,
   CalendarDays,
+  Hash,
+  Columns3,
+  Search,
+  UserCog,
+  ScrollText,
 };
 
+type Presence = "ONLINE" | "AWAY" | "OFFLINE";
+const HEARTBEAT_MS = 30_000;
+
+/** Layout único do site: menu, sessão, organização e presença compartilhados por todas as telas. */
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const { user, loading, logout } = useRequireAuth();
-  const navItems = buildNavItems();
+  const { user, token, loading, logout } = useRequireAuth();
+  const [presence, setPresence] = useState<Presence>("ONLINE");
+  const [presenceReady, setPresenceReady] = useState(false);
+  const canChat = Boolean(user?.permissions?.includes("chat.read"));
 
-  if (loading || !user) {
-    return (
-      <div className="flex min-h-screen items-center justify-center text-slate-300">
-        Carregando aplicacao...
-      </div>
-    );
+  // A escolha de presença é do servidor: o reload restaura o que a pessoa escolheu em vez de voltar a ONLINE.
+  useEffect(() => {
+    if (!token || !canChat) return;
+    let cancelled = false;
+    inboxApi
+      .getPresence(token)
+      .then((state) => { if (!cancelled) setPresence(state.choice); })
+      .catch(() => undefined)
+      .finally(() => { if (!cancelled) setPresenceReady(true); });
+    return () => { cancelled = true; };
+  }, [token, canChat]);
+
+  useEffect(() => {
+    if (!token || !canChat || !presenceReady) return;
+    const send = (status: Presence) => void inboxApi.presence(token, status).catch(() => undefined);
+    send(presence);
+    if (presence === "OFFLINE") return;
+    const timer = setInterval(() => send(presence), HEARTBEAT_MS);
+    return () => clearInterval(timer);
+  }, [token, canChat, presence, presenceReady]);
+
+  if (loading || !user || !token) {
+    return <div className="flex min-h-screen items-center justify-center vx-muted">Carregando...</div>;
   }
 
+  const navItems = buildNavItems(process.env, user.permissions ?? []);
+  const current = ALL_NAV_ITEMS.find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`));
+  const forbidden = Boolean(current?.permission && !user.permissions?.includes(current.permission));
+
+  async function signOut() {
+    logout();
+  }
+
+  const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
+
   return (
-    <div className="min-h-screen lg:grid lg:grid-cols-[280px_1fr]">
-      <aside className="hidden border-r border-slate-800/80 bg-slate-950/70 p-5 lg:flex lg:flex-col">
-        <div className="mb-8 flex items-center gap-3 rounded-2xl">
-          <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-emerald-400 text-slate-950">
-            <RadioTower size={22} />
+    <div className="flex min-h-screen">
+      <aside
+        className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r p-4 md:flex"
+        style={{ borderColor: "var(--vx-border)", background: "var(--vx-surface)" }}
+      >
+        <div className="mb-6 flex items-center gap-3">
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl text-lg font-bold text-white" style={{ background: "var(--vx-primary)", color: "#fff" }}>
+            {BRAND.initial}
           </span>
           <div>
-            <p className="font-bold text-white">ISP CRM</p>
-            <p className="text-xs text-slate-500">SaaS multitenant</p>
+            <p className="font-bold leading-tight">{BRAND.name}</p>
+            <p className="text-xs vx-muted">{BRAND.tagline}</p>
           </div>
         </div>
-
-        <nav className="space-y-2">
+        <nav aria-label="Principal" className="space-y-1 overflow-y-auto">
           {navItems.map((item) => {
-            const active = pathname === item.href;
             const Icon = iconMap[item.icon] ?? LayoutDashboard;
+            const active = isActive(item.href);
             return (
-              <div key={item.href}>
-                <Link
-                  className={cn(
-                    "flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition",
-                    active
-                      ? "bg-emerald-400 text-slate-950"
-                      : "text-slate-400 hover:bg-slate-900 hover:text-white",
-                  )}
-                  href={item.href}
-                >
-                  <Icon size={18} />
-                  <span className="flex-1">{item.label}</span>
-                  {item.badge ? (
-                    <Badge className="border-cyan-200 bg-cyan-50 text-[10px] text-cyan-500">
-                      {item.badge}
-                    </Badge>
-                  ) : null}
-                </Link>
-                {item.children ? (
-                  <div className="mt-1 space-y-1 pl-6">
-                    {item.children.map((child) => {
-                      const ChildIcon = iconMap[child.icon] ?? Hash;
-                      const childActive = pathname === child.href;
-                      return (
-                        <Link
-                          className={cn(
-                            "flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition",
-                            childActive
-                              ? "bg-emerald-400/15 text-emerald-300 ring-1 ring-emerald-400/20"
-                              : "text-slate-500 hover:bg-slate-900 hover:text-white",
-                          )}
-                          href={child.href}
-                          key={child.href}
-                        >
-                          <ChildIcon size={16} />
-                          {child.label}
-                        </Link>
-                      );
-                    })}
-                  </div>
-                ) : null}
-              </div>
+              <Link
+                key={item.href}
+                href={item.href}
+                aria-current={active ? "page" : undefined}
+                className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold"
+                style={active ? { background: "#EAF0FF", color: "var(--vx-primary)" } : { color: "var(--vx-muted)" }}
+              >
+                <Icon size={17} /> {item.label}
+              </Link>
             );
           })}
         </nav>
-
-        <div className="mt-auto rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
-          <div className="flex items-center gap-3">
-            <span className="relative flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-950 text-sm font-bold text-slate-200">
-              {user.name.slice(0, 1).toUpperCase()}
-              <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-white bg-emerald-400" />
-            </span>
-            <div>
-              <p className="text-sm font-semibold text-white">{user.tenantName}</p>
-              <Badge>{user.role}</Badge>
-            </div>
-          </div>
+        <div className="mt-auto text-xs vx-muted">
+          <p className="font-semibold" style={{ color: "var(--vx-text)" }}>{user.tenantName}</p>
+          <p>{user.role}</p>
         </div>
       </aside>
 
-      <main className="min-w-0">
-        <header className="sticky top-0 z-20 border-b border-slate-800/80 bg-slate-950/70 px-4 py-4 backdrop-blur-xl lg:px-8">
-          <div className="flex items-center justify-between gap-4">
-            <div className="hidden items-center gap-3 rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2 text-slate-500 md:flex">
-              <Search size={17} />
-              <span className="text-sm">Buscar conversas, clientes e agentes...</span>
-            </div>
-
-            <div className="ml-auto flex items-center gap-3">
-              <div className="text-right">
-                <p className="text-sm font-semibold text-white">{user.name}</p>
-                <p className="text-xs text-slate-500">{user.email}</p>
-              </div>
-              <Button variant="secondary" size="sm" onClick={logout}>
-                <LogOut size={16} />
-                Sair
-              </Button>
-            </div>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header
+          className="sticky top-0 z-20 flex items-center justify-between gap-3 border-b px-4 py-3"
+          style={{ borderColor: "var(--vx-border)", background: "var(--vx-surface)" }}
+        >
+          <p className="text-sm font-semibold">{user.tenantName}</p>
+          <div className="flex items-center gap-3">
+            {canChat ? (
+              <label className="flex items-center gap-2 text-sm">
+                <span className="vx-muted hidden sm:inline">Presença</span>
+                <select
+                  className="vx-input"
+                  style={{ width: 120 }}
+                  value={presence}
+                  onChange={(event) => setPresence(event.target.value as Presence)}
+                  aria-label="Minha presença"
+                >
+                  <option value="ONLINE">Online</option>
+                  <option value="AWAY">Ausente</option>
+                  <option value="OFFLINE">Offline</option>
+                </select>
+              </label>
+            ) : null}
+            <span className="hidden text-sm sm:inline">{user.name}</span>
+            <button className="vx-btn" onClick={() => void signOut()} type="button">
+              <LogOut size={15} /> Sair
+            </button>
           </div>
         </header>
-
-        <div className="p-4 lg:p-8">{children}</div>
-      </main>
+        <nav
+          aria-label="Principal (mobile)"
+          className="flex gap-1 overflow-x-auto border-b px-2 py-2 md:hidden"
+          style={{ borderColor: "var(--vx-border)", background: "var(--vx-surface)" }}
+        >
+          {navItems.map((item) => {
+            const active = isActive(item.href);
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                aria-current={active ? "page" : undefined}
+                className="whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-semibold"
+                style={active ? { background: "#EAF0FF", color: "var(--vx-primary)" } : { color: "var(--vx-muted)" }}
+              >
+                {item.label}
+              </Link>
+            );
+          })}
+        </nav>
+        <main className="min-h-0 flex-1 p-4 lg:p-6">
+          {forbidden ? (
+            <div className="vx-card mx-auto max-w-xl p-6">
+              <h1 className="text-lg font-bold">Sem permissão</h1>
+              <p className="mt-2 text-sm vx-muted">Seu perfil não tem acesso a esta área. Fale com o administrador da organização.</p>
+            </div>
+          ) : (
+            children
+          )}
+        </main>
+      </div>
     </div>
   );
 }

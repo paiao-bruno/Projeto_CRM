@@ -1,12 +1,12 @@
 import { login } from "@/server/auth";
-import { jsonData, jsonError } from "@/server/http";
+import { publicRoute } from "@/server/route-kit";
 
-export async function POST(request: Request) {
-  try {
-    const body = (await request.json()) as { email?: string; password?: string };
-    const result = await login(body.email ?? "", body.password ?? "");
-    return jsonData(result);
-  } catch (error) {
-    return jsonError(error);
-  }
-}
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+export const POST = publicRoute(({ request, body }) =>
+  login(String(body.email ?? ""), String(body.password ?? ""), {
+    ip: request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null,
+    userAgent: request.headers.get("user-agent"),
+  }),
+);

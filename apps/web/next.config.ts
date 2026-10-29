@@ -10,6 +10,9 @@ const nextConfig: NextConfig = {
   transpilePackages: [],
   serverExternalPackages: ["@prisma/client", "@prisma/adapter-pg", "pg"],
   outputFileTracingRoot: repoRoot,
+  async redirects() {
+    return [{ source: "/chat", destination: "/inbox", permanent: false }];
+  },
 };
 
 export default nextConfig;

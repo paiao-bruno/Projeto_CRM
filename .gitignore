@@ -28,3 +28,4 @@ load-test-report.json
 # Backups sensíveis de integração SGP (sempre fora do repo por padrão)
 ../isp-crm-integration-backups/
 integration-backups/
+apps/web/.secret-box.local

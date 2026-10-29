@@ -1,10 +1,16 @@
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 
-const webRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
-const SECRET_FILE = path.join(webRoot, ".jwt-secret.local");
+function resolveWebRoot() {
+  const cwd = process.cwd();
+  for (const candidate of [cwd, path.join(cwd, "apps", "web")]) {
+    if (existsSync(path.join(candidate, "next.config.ts"))) return candidate;
+  }
+  return cwd;
+}
+
+const SECRET_FILE = path.join(resolveWebRoot(), ".jwt-secret.local");
 const MIN_LENGTH = 32;
 
 function isProduction() {
