@@ -15,7 +15,7 @@ export function AuthLayout({ title, subtitle, children }: { title: string; subti
             <p className="text-sm vx-muted">{BRAND.tagline}</p>
           </div>
         </div>
-        <section className="rounded-2xl border bg-white p-6 shadow-sm" style={{ borderColor: "var(--vx-border)" }}>
+        <section className="rounded-2xl border p-6 shadow-sm" style={{ borderColor: "var(--vx-border)", background: "var(--vx-surface)" }}>
           <h1 className="text-2xl font-semibold">{title}</h1>
           {subtitle ? <p className="mt-1 text-sm vx-muted">{subtitle}</p> : null}
           <div className="mt-5">{children}</div>

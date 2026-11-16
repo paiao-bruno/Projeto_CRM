@@ -410,7 +410,7 @@ function FlowsPageContent() {
                         d={`M ${startX} ${startY} C ${middle} ${startY}, ${middle} ${endY}, ${endX} ${endY}`}
                         fill="none"
                         key={`${connection.from}-${connection.to}`}
-                        stroke="#34d399"
+                        stroke="var(--vx-primary)"
                         strokeOpacity="0.55"
                         strokeWidth="3"
                       />

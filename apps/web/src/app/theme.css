@@ -1,56 +1,80 @@
 :root {
-  --vx-bg: #F5F7FB;
-  --vx-surface: #FFFFFF;
-  --vx-text: #172033;
-  --vx-muted: #64748B;
-  --vx-primary: #365CF5;
-  --vx-secondary: #F28C6F;
-  --vx-border: #E2E8F0;
-  --vx-success: #15803D;
-  --vx-danger: #DC2626;
+  color-scheme: dark;
+  --vx-bg: #1E2024;
+  --vx-sidebar: #15171B;
+  --vx-header: #202328;
+  --vx-page: #25282D;
+  --vx-surface: #32363B;
+  --vx-elevated: #393E44;
+  --vx-input: #4A5967;
+  --vx-hover: #41474E;
+  --vx-selected: #303D50;
+  --vx-text: #F1F3F5;
+  --vx-text-secondary: #C0C6CE;
+  --vx-muted: #A4ADB8;
+  --vx-disabled: #808A96;
+  --vx-primary: #2271B1;
+  --vx-primary-hover: #3582C4;
+  --vx-primary-light: #72B7F2;
+  --vx-secondary: #D4A04D;
+  --vx-border: #454B52;
+  --vx-border-subtle: #383D43;
+  --vx-border-active: #4B86BA;
+  --vx-success: #46A775;
+  --vx-warning: #D4A04D;
+  --vx-danger: #D96B70;
+  --vx-info: #66A7DD;
 }
-*:focus-visible { outline: 2px solid var(--vx-primary); outline-offset: 2px; }
+*:focus-visible { outline: 2px solid var(--vx-primary-light); outline-offset: 2px; }
 .vx-card { background: var(--vx-surface); border: 1px solid var(--vx-border); border-radius: 14px; }
 .vx-muted { color: var(--vx-muted); }
 .vx-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   height: 36px; padding: 0 14px; border-radius: 10px; font-size: 14px; font-weight: 600;
-  border: 1px solid var(--vx-border); background: var(--vx-surface); color: var(--vx-text); cursor: pointer;
+  border: 1px solid var(--vx-border); background: var(--vx-elevated); color: var(--vx-text); cursor: pointer;
 }
-.vx-btn:hover:not(:disabled) { background: var(--vx-bg); }
+.vx-btn:hover:not(:disabled) { background: var(--vx-hover); }
 .vx-btn:disabled { opacity: .5; cursor: not-allowed; }
 .vx-btn-primary { background: var(--vx-primary); border-color: var(--vx-primary); color: #fff; }
-.vx-btn-primary:hover:not(:disabled) { background: #2a4bd6; }
-.vx-btn-accent { background: var(--vx-secondary); border-color: var(--vx-secondary); color: #3a1a10; }
+.vx-btn-primary:hover:not(:disabled) { background: var(--vx-primary-hover); }
+.vx-btn-accent { background: var(--vx-secondary); border-color: var(--vx-secondary); color: #1E2024; }
 .vx-btn-danger { color: var(--vx-danger); }
 .vx-input {
   width: 100%; height: 38px; padding: 0 12px; border-radius: 10px; font-size: 14px;
-  border: 1px solid var(--vx-border); background: var(--vx-surface); color: var(--vx-text);
+  border: 1px solid var(--vx-border); background: var(--vx-input); color: var(--vx-text);
 }
+.vx-input::placeholder { color: var(--vx-disabled); }
+.vx-input option { background: var(--vx-elevated); color: var(--vx-text); }
 textarea.vx-input { height: auto; padding: 10px 12px; resize: vertical; }
 .vx-badge {
   display: inline-flex; align-items: center; border-radius: 999px; padding: 2px 8px;
-  font-size: 11px; font-weight: 700; background: #EAF0FF; color: var(--vx-primary);
+  font-size: 11px; font-weight: 700; background: var(--vx-selected); color: var(--vx-primary-light);
 }
-.vx-badge-coral { background: #FDEEE9; color: #B4472B; }
-.vx-badge-gray { background: #EEF2F7; color: var(--vx-muted); }
+.vx-badge-coral { background: #4a2c2e; color: #D96B70; }
+.vx-badge-gray { background: var(--vx-elevated); color: var(--vx-muted); }
 .vx-tab { padding: 6px 10px; border-radius: 8px; font-size: 13px; font-weight: 600; color: var(--vx-muted); cursor: pointer; border: 0; background: transparent; }
-.vx-tab[aria-selected="true"] { background: #EAF0FF; color: var(--vx-primary); }
+.vx-tab[aria-selected="true"] { background: var(--vx-selected); color: var(--vx-primary-light); }
+aside nav a:hover:not([aria-current="page"]),
+nav[aria-label="Principal (mobile)"] a:hover:not([aria-current="page"]) {
+  background: var(--vx-hover);
+  color: var(--vx-text-secondary);
+}
 .vx-row { display: block; width: 100%; text-align: left; padding: 12px; border: 0; border-bottom: 1px solid var(--vx-border); background: transparent; cursor: pointer; }
-.vx-row:hover { background: var(--vx-bg); }
-.vx-row[aria-current="true"] { background: #EAF0FF; }
+.vx-row:hover { background: var(--vx-hover); }
+.vx-row[aria-current="true"] { background: var(--vx-selected); }
 .vx-bubble { max-width: 78%; padding: 8px 12px; border-radius: 12px; font-size: 14px; line-height: 1.4; white-space: pre-wrap; word-break: break-word; }
-.vx-bubble-in { background: #EEF2F7; align-self: flex-start; }
+.vx-bubble-in { background: var(--vx-elevated); color: var(--vx-text); align-self: flex-start; }
 .vx-bubble-out { background: var(--vx-primary); color: #fff; align-self: flex-end; }
-.vx-bubble-note { background: #FFF6E5; border: 1px dashed #E5B84B; align-self: flex-end; }
-.vx-alert { border-radius: 10px; padding: 10px 12px; font-size: 13px; border: 1px solid var(--vx-border); background: #FFF8F5; }
-.vx-alert-error { background: #FEF2F2; border-color: #FECACA; color: #991B1B; }
+.vx-bubble-note { background: #3a3224; border: 1px dashed var(--vx-secondary); color: var(--vx-text-secondary); align-self: flex-end; }
+.vx-alert { border-radius: 10px; padding: 10px 12px; font-size: 13px; border: 1px solid var(--vx-border); background: var(--vx-elevated); }
+.vx-alert-error { background: #3a2728; border-color: var(--vx-danger); color: #F1F3F5; }
 
 .vx-page-title { font-size: 22px; font-weight: 700; }
 .vx-table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .vx-table th { text-align: left; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--vx-muted); padding: 10px 12px; border-bottom: 1px solid var(--vx-border); }
 .vx-table td { padding: 10px 12px; border-bottom: 1px solid var(--vx-border); vertical-align: middle; }
 .vx-table tr:last-child td { border-bottom: 0; }
+.vx-table tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.02); }
 .vx-label { display: block; font-size: 12px; font-weight: 600; color: var(--vx-muted); margin-bottom: 4px; }
 .vx-empty { padding: 28px 16px; text-align: center; color: var(--vx-muted); font-size: 14px; }
-.vx-alert-ok { background: #F0FDF4; border-color: #BBF7D0; color: #166534; }
+.vx-alert-ok { background: #24352c; border-color: var(--vx-success); color: #F1F3F5; }

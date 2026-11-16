@@ -2,47 +2,51 @@
 @import "./theme.css";
 
 /*
- * Paleta única (Vértice, tema claro). As telas herdadas usam utilitários slate/emerald/white
- * pensados para fundo escuro; a escala é invertida aqui para que todas as telas compartilhem
- * o mesmo tema sem reescrever cada componente. `text-white` vira o texto principal e
- * `text-slate-950` (texto sobre botão primário) vira branco.
+ * Paleta única (Vértice, tema escuro). Utilitários slate/emerald/white das telas herdadas
+ * apontam para os tokens grafite/azul da referência cromática, sem reescrever cada componente.
  */
 @theme {
-  --color-white: #172033;
-  --color-slate-50: #0f172a;
-  --color-slate-100: #172033;
-  --color-slate-200: #263449;
-  --color-slate-300: #3b4a60;
-  --color-slate-400: #5b6b82;
-  --color-slate-500: #64748b;
-  --color-slate-600: #94a3b8;
-  --color-slate-700: #cbd5e1;
-  --color-slate-800: #e2e8f0;
-  --color-slate-900: #f1f5f9;
-  --color-slate-950: #ffffff;
+  --color-white: #F1F3F5;
+  --color-slate-50: #1E2024;
+  --color-slate-100: #202328;
+  --color-slate-200: #C0C6CE;
+  --color-slate-300: #C0C6CE;
+  --color-slate-400: #A4ADB8;
+  --color-slate-500: #808A96;
+  --color-slate-600: #454B52;
+  --color-slate-700: #454B52;
+  --color-slate-800: #383D43;
+  --color-slate-900: #25282D;
+  --color-slate-950: #15171B;
 
-  --color-emerald-50: #eaf0ff;
-  --color-emerald-100: #dbe5ff;
-  --color-emerald-200: #1e3a8a;
-  --color-emerald-300: #2a4bd6;
-  --color-emerald-400: #365cf5;
-  --color-emerald-500: #2a4bd6;
-  --color-emerald-600: #2340b8;
+  --color-emerald-50: #303D50;
+  --color-emerald-100: #303D50;
+  --color-emerald-200: #4B86BA;
+  --color-emerald-300: #72B7F2;
+  --color-emerald-400: #2271B1;
+  --color-emerald-500: #2271B1;
+  --color-emerald-600: #1b5a8c;
 
-  --color-amber-100: #7a4a05;
-  --color-amber-200: #8a5a08;
-  --color-amber-300: #9a6208;
-  --color-red-100: #7f1d1d;
-  --color-red-200: #991b1b;
-  --color-red-300: #b91c1c;
-  --color-sky-300: #0369a1;
-  --color-sky-400: #0284c7;
-  --color-violet-300: #6d28d9;
-  --color-violet-400: #7c3aed;
+  --color-amber-100: #3a3224;
+  --color-amber-200: #3a3224;
+  --color-amber-300: #D4A04D;
+  --color-amber-400: #D4A04D;
+  --color-red-50: #3a2728;
+  --color-red-100: #3a2728;
+  --color-red-200: #D96B70;
+  --color-red-300: #D96B70;
+  --color-red-400: #D96B70;
+  --color-red-500: #D96B70;
+  --color-red-700: #F1F3F5;
+  --color-sky-300: #72B7F2;
+  --color-sky-400: #66A7DD;
+  --color-violet-300: #72B7F2;
+  --color-violet-400: #4B86BA;
 }
 
 * {
   box-sizing: border-box;
+  scrollbar-color: var(--vx-border) var(--vx-bg);
 }
 
 html,
@@ -65,11 +69,18 @@ textarea {
 }
 
 ::selection {
-  background: rgba(54, 92, 245, 0.25);
+  background: rgba(34, 113, 177, 0.35);
 }
 
 .glass-card {
   background: var(--vx-surface);
   border: 1px solid var(--vx-border);
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--vx-bg);
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--vx-border);
 }

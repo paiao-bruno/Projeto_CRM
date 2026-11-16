@@ -97,7 +97,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-screen">
       <aside
         className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r p-4 md:flex"
-        style={{ borderColor: "var(--vx-border)", background: "var(--vx-surface)" }}
+        style={{ borderColor: "var(--vx-border)", background: "var(--vx-sidebar)" }}
       >
         <div className="mb-6 flex items-center gap-3">
           <span className="flex h-10 w-10 items-center justify-center rounded-xl text-lg font-bold text-white" style={{ background: "var(--vx-primary)", color: "#fff" }}>
@@ -118,7 +118,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 href={item.href}
                 aria-current={active ? "page" : undefined}
                 className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold"
-                style={active ? { background: "#EAF0FF", color: "var(--vx-primary)" } : { color: "var(--vx-muted)" }}
+                style={active ? { background: "var(--vx-selected)", color: "var(--vx-primary-light)" } : { color: "var(--vx-muted)" }}
               >
                 <Icon size={17} /> {item.label}
               </Link>
@@ -134,7 +134,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="flex min-w-0 flex-1 flex-col">
         <header
           className="sticky top-0 z-20 flex items-center justify-between gap-3 border-b px-4 py-3"
-          style={{ borderColor: "var(--vx-border)", background: "var(--vx-surface)" }}
+          style={{ borderColor: "var(--vx-border)", background: "var(--vx-header)" }}
         >
           <p className="text-sm font-semibold">{user.tenantName}</p>
           <div className="flex items-center gap-3">
@@ -163,7 +163,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <nav
           aria-label="Principal (mobile)"
           className="flex gap-1 overflow-x-auto border-b px-2 py-2 md:hidden"
-          style={{ borderColor: "var(--vx-border)", background: "var(--vx-surface)" }}
+          style={{ borderColor: "var(--vx-border)", background: "var(--vx-header)" }}
         >
           {navItems.map((item) => {
             const active = isActive(item.href);
@@ -173,14 +173,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 href={item.href}
                 aria-current={active ? "page" : undefined}
                 className="whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-semibold"
-                style={active ? { background: "#EAF0FF", color: "var(--vx-primary)" } : { color: "var(--vx-muted)" }}
+                style={active ? { background: "var(--vx-selected)", color: "var(--vx-primary-light)" } : { color: "var(--vx-muted)" }}
               >
                 {item.label}
               </Link>
             );
           })}
         </nav>
-        <main className="min-h-0 flex-1 p-4 lg:p-6">
+        <main className="min-h-0 flex-1 p-4 lg:p-6" style={{ background: "var(--vx-page)" }}>
           {forbidden ? (
             <div className="vx-card mx-auto max-w-xl p-6">
               <h1 className="text-lg font-bold">Sem permissão</h1>

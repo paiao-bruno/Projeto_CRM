@@ -439,8 +439,8 @@ function DemoInbound({ token, onSent }: { token: string; onSent: () => void }) {
   }
 
   return (
-    <form className="space-y-2 border-t p-3" style={{ borderColor: "var(--vx-border)", background: "#FFF8F5" }} onSubmit={submit}>
-      <p className="text-xs font-bold" style={{ color: "#B4472B" }}>
+    <form className="space-y-2 border-t p-3" style={{ borderColor: "var(--vx-border)", background: "var(--vx-elevated)" }} onSubmit={submit}>
+      <p className="text-xs font-bold" style={{ color: "var(--vx-secondary)" }}>
         Simulador de entrada (somente desenvolvimento; nenhum canal real)
       </p>
       <input className="vx-input" value={name} onChange={(e) => setName(e.target.value)} aria-label="Nome do contato simulado" />

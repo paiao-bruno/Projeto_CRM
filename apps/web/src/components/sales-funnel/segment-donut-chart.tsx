@@ -3,7 +3,7 @@
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
-const COLORS = ["#34d399", "#38bdf8", "#f59e0b", "#a78bfa", "#fb7185", "#94a3b8"];
+const COLORS = ["#2271B1", "#66A7DD", "#D4A04D", "#4B86BA", "#D96B70", "#A4ADB8"];
 
 type SegmentDonutChartProps = {
   title: string;
@@ -43,9 +43,10 @@ export function SegmentDonutChart({ title, items }: SegmentDonutChartProps) {
                   </Pie>
                   <Tooltip
                     contentStyle={{
-                      background: "#020617",
-                      border: "1px solid #1e293b",
+                      background: "var(--vx-surface)",
+                      border: "1px solid var(--vx-border)",
                       borderRadius: 12,
+                      color: "var(--vx-text)",
                     }}
                   />
                 </PieChart>
