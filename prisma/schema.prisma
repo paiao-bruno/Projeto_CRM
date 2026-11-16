@@ -312,14 +312,18 @@ enum IntegrationSyncEntity {
 }
 
 model Tenant {
-  id        String       @id @default(uuid()) @db.Uuid
-  name      String
-  slug      String       @unique
-  document  String?
-  status    TenantStatus @default(TRIAL)
-  settings  Json?
-  createdAt DateTime     @default(now())
-  updatedAt DateTime     @updatedAt
+  sectorCategories   SectorCategory[]
+  sectors            Sector[]
+  conversationBoards ConversationBoard[]
+  roundRobinRules    RoundRobinRule[]
+  id                 String              @id @default(uuid()) @db.Uuid
+  name               String
+  slug               String              @unique
+  document           String?
+  status             TenantStatus        @default(TRIAL)
+  settings           Json?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
 
   members             TenantMember[]
   roles               Role[]
@@ -333,6 +337,10 @@ model Tenant {
   teamRooms           TeamRoom[]
   teamMessages        TeamMessage[]
   teamPresence        TeamPresence[]
+  inboundEvents       InboundEvent[]
+  conversationEvents  ConversationEvent[]
+  tenantCounters      TenantCounter[]
+  outboundDeliveries  OutboundDelivery[]
   aiAgents            AiAgent[]
   agentMemories       AgentMemory[]
   memoryHistory       MemoryHistory[]
@@ -372,42 +380,42 @@ model Tenant {
 }
 
 model IntegrationSyncRun {
-  id            String                @id @default(uuid()) @db.Uuid
-  tenantId      String                @db.Uuid
-  integrationId String?               @db.Uuid
-  triggeredById String?               @db.Uuid
-  operation     String
-  status        IntegrationSyncStatus @default(RUNNING)
-  syncMode      String?
-  trigger       String?
-  startedAt     DateTime              @default(now())
-  finishedAt    DateTime?
-  durationMs    Int?
-  processed     Int                   @default(0)
-  created       Int                   @default(0)
-  updated       Int                   @default(0)
-  ignored       Int                   @default(0)
-  errorsCount   Int                   @default(0)
-  customersProcessed Int              @default(0)
-  customersCreated   Int              @default(0)
-  customersUpdated   Int              @default(0)
-  customersDeleted   Int              @default(0)
-  customersIgnored   Int              @default(0)
-  contractsProcessed Int              @default(0)
-  contractsCreated   Int              @default(0)
-  contractsUpdated   Int              @default(0)
-  contractsDeleted   Int              @default(0)
-  contractsIgnored   Int              @default(0)
-  invoicesProcessed  Int              @default(0)
-  invoicesCreated    Int              @default(0)
-  invoicesUpdated    Int              @default(0)
-  invoicesDeleted    Int              @default(0)
-  invoicesIgnored    Int              @default(0)
-  errors        Json?
-  stackTrace    String?               @db.Text
-  cursor        Json?
-  errorMessage  String?
-  metadata      Json?
+  id                 String                @id @default(uuid()) @db.Uuid
+  tenantId           String                @db.Uuid
+  integrationId      String?               @db.Uuid
+  triggeredById      String?               @db.Uuid
+  operation          String
+  status             IntegrationSyncStatus @default(RUNNING)
+  syncMode           String?
+  trigger            String?
+  startedAt          DateTime              @default(now())
+  finishedAt         DateTime?
+  durationMs         Int?
+  processed          Int                   @default(0)
+  created            Int                   @default(0)
+  updated            Int                   @default(0)
+  ignored            Int                   @default(0)
+  errorsCount        Int                   @default(0)
+  customersProcessed Int                   @default(0)
+  customersCreated   Int                   @default(0)
+  customersUpdated   Int                   @default(0)
+  customersDeleted   Int                   @default(0)
+  customersIgnored   Int                   @default(0)
+  contractsProcessed Int                   @default(0)
+  contractsCreated   Int                   @default(0)
+  contractsUpdated   Int                   @default(0)
+  contractsDeleted   Int                   @default(0)
+  contractsIgnored   Int                   @default(0)
+  invoicesProcessed  Int                   @default(0)
+  invoicesCreated    Int                   @default(0)
+  invoicesUpdated    Int                   @default(0)
+  invoicesDeleted    Int                   @default(0)
+  invoicesIgnored    Int                   @default(0)
+  errors             Json?
+  stackTrace         String?               @db.Text
+  cursor             Json?
+  errorMessage       String?
+  metadata           Json?
 
   tenant      Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   integration Integration?         @relation(fields: [integrationId], references: [id], onDelete: SetNull)
@@ -452,14 +460,30 @@ model User {
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
-  memberships TenantMember[]
-  sessions    AuthSession[]
+  memberships         TenantMember[]
+  sessions            AuthSession[]
+  passwordResetTokens PasswordResetToken[]
+}
+
+/// Recuperação de acesso: token de uso único, guardado só como hash, com validade curta.
+model PasswordResetToken {
+  id               String    @id @default(uuid()) @db.Uuid
+  userId           String    @db.Uuid
+  tokenHash        String    @unique
+  expiresAt        DateTime
+  usedAt           DateTime?
+  issuedByMemberId String?   @db.Uuid
+  createdAt        DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
 }
 
 model AuthSession {
   id               String    @id @default(uuid()) @db.Uuid
   userId           String    @db.Uuid
-  refreshTokenHash String
+  refreshTokenHash String?
   currentTenantId  String?   @db.Uuid
   ipAddress        String?
   userAgent        String?
@@ -474,42 +498,45 @@ model AuthSession {
 }
 
 model TenantMember {
-  id          String       @id @default(uuid()) @db.Uuid
-  tenantId    String       @db.Uuid
-  userId      String       @db.Uuid
-  roleId      String?      @db.Uuid
-  displayName String?
-  jobTitle    String?
-  status      MemberStatus @default(INVITED)
-  lastSeenAt  DateTime?
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  id                     String       @id @default(uuid()) @db.Uuid
+  tenantId               String       @db.Uuid
+  userId                 String       @db.Uuid
+  roleId                 String?      @db.Uuid
+  displayName            String?
+  jobTitle               String?
+  status                 MemberStatus @default(INVITED)
+  maxActiveConversations Int?
+  lastSeenAt             DateTime?
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
 
-  tenant                Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user                  User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  role                  Role?                 @relation(fields: [roleId], references: [id], onDelete: SetNull)
-  assignedConversations Conversation[]        @relation("AssignedConversations")
-  sentMessages          Message[]             @relation("MemberMessages")
-  requestedHandoffs     ConversationHandoff[] @relation("RequestedHandoffs")
-  fromMemberHandoffs    ConversationHandoff[] @relation("FromMemberHandoffs")
-  toMemberHandoffs      ConversationHandoff[] @relation("ToMemberHandoffs")
+  tenant                Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user                  User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role                  Role?                   @relation(fields: [roleId], references: [id], onDelete: SetNull)
+  assignedConversations Conversation[]          @relation("AssignedConversations")
+  sentMessages          Message[]               @relation("MemberMessages")
+  requestedHandoffs     ConversationHandoff[]   @relation("RequestedHandoffs")
+  fromMemberHandoffs    ConversationHandoff[]   @relation("FromMemberHandoffs")
+  toMemberHandoffs      ConversationHandoff[]   @relation("ToMemberHandoffs")
   roomMemberships       TeamRoomMember[]
   teamMessages          TeamMessage[]
   presence              TeamPresence?
-  ownedCustomers        Customer[]            @relation("CustomerOwner")
-  ownedLeads            Lead[]                @relation("LeadOwner")
-  ownedDeals            Deal[]                @relation("DealOwner")
-  createdDeals          Deal[]                @relation("DealCreatedBy")
-  updatedDeals          Deal[]                @relation("DealUpdatedBy")
-  lostDeals             Deal[]                @relation("DealLostBy")
-  archivedDeals         Deal[]                @relation("DealArchivedBy")
+  ownedCustomers        Customer[]              @relation("CustomerOwner")
+  ownedLeads            Lead[]                  @relation("LeadOwner")
+  ownedDeals            Deal[]                  @relation("DealOwner")
+  createdDeals          Deal[]                  @relation("DealCreatedBy")
+  updatedDeals          Deal[]                  @relation("DealUpdatedBy")
+  lostDeals             Deal[]                  @relation("DealLostBy")
+  archivedDeals         Deal[]                  @relation("DealArchivedBy")
   dealHistory           DealHistory[]
-  assignedEvents        ScheduleEvent[]       @relation("EventAssignee")
-  assignedTasks         Task[]                @relation("TaskAssignee")
+  assignedEvents        ScheduleEvent[]         @relation("EventAssignee")
+  assignedTasks         Task[]                  @relation("TaskAssignee")
   integrationSyncRuns   IntegrationSyncRun[]
-  uploadedFiles         FileAsset[]           @relation("FileUploader")
+  uploadedFiles         FileAsset[]             @relation("FileUploader")
   notifications         Notification[]
   auditLogs             AuditLog[]
+  sectorLinks           SectorMember[]
+  roundRobinSlots       RoundRobinParticipant[]
 
   @@unique([tenantId, userId])
   @@index([tenantId, status])
@@ -567,11 +594,12 @@ model Integration {
   createdAt        DateTime            @default(now())
   updatedAt        DateTime            @updatedAt
 
-  tenant           Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  webhookEndpoints WebhookEndpoint[]
-  conversations    Conversation[]
-  campaigns        Campaign[]
-  syncRuns         IntegrationSyncRun[]
+  tenant             Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  webhookEndpoints   WebhookEndpoint[]
+  conversations      Conversation[]
+  campaigns          Campaign[]
+  syncRuns           IntegrationSyncRun[]
+  outboundDeliveries OutboundDelivery[]
 
   @@unique([tenantId, provider, name])
   @@index([tenantId, status])
@@ -651,10 +679,20 @@ model Conversation {
   priority             ConversationPriority @default(NORMAL)
   lastMessageAt        DateTime?
   closedAt             DateTime?
+  protocol             String?
+  version              Int                  @default(1)
+  unreadCount          Int                  @default(0)
+  claimedAt            DateTime?
+  sectorId             String?              @db.Uuid
+  closeReason          String?
+  closedByMemberId     String?              @db.Uuid
+  firstResponseAt      DateTime?
   metadata             Json?
   createdAt            DateTime             @default(now())
   updatedAt            DateTime             @updatedAt
 
+  sector             Sector?               @relation(fields: [sectorId], references: [id], onDelete: SetNull)
+  boardCards         BoardCard[]
   tenant             Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   customer           Customer?             @relation(fields: [customerId], references: [id], onDelete: SetNull)
   channelIntegration Integration?          @relation(fields: [channelIntegrationId], references: [id], onDelete: SetNull)
@@ -666,12 +704,17 @@ model Conversation {
   flowExecutions     FlowExecution[]
   scheduleEvents     ScheduleEvent[]
   tasks              Task[]
+  events             ConversationEvent[]
 
   @@unique([tenantId, externalId])
+  @@unique([tenantId, protocol])
   @@index([tenantId, status, lastMessageAt])
   @@index([tenantId, assignedMemberId])
   @@index([tenantId, customerId])
   @@index([tenantId, activeAiAgentId, status])
+  @@index([tenantId, sectorId, status])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, closedAt])
 }
 
 model Message {
@@ -693,12 +736,13 @@ model Message {
   readAt           DateTime?
   createdAt        DateTime           @default(now())
 
-  tenant         Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  conversation   Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  senderMember   TenantMember? @relation("MemberMessages", fields: [senderMemberId], references: [id], onDelete: SetNull)
-  senderCustomer Customer?     @relation("CustomerMessages", fields: [senderCustomerId], references: [id], onDelete: SetNull)
-  senderAiAgent  AiAgent?      @relation("AiAgentMessages", fields: [senderAiAgentId], references: [id], onDelete: SetNull)
-  fileAsset      FileAsset?    @relation(fields: [fileAssetId], references: [id], onDelete: SetNull)
+  tenant         Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation   Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderMember   TenantMember?     @relation("MemberMessages", fields: [senderMemberId], references: [id], onDelete: SetNull)
+  senderCustomer Customer?         @relation("CustomerMessages", fields: [senderCustomerId], references: [id], onDelete: SetNull)
+  senderAiAgent  AiAgent?          @relation("AiAgentMessages", fields: [senderAiAgentId], references: [id], onDelete: SetNull)
+  fileAsset      FileAsset?        @relation(fields: [fileAssetId], references: [id], onDelete: SetNull)
+  delivery       OutboundDelivery?
 
   @@unique([tenantId, externalId])
   @@index([tenantId, conversationId, createdAt])
@@ -1128,11 +1172,12 @@ model Contract {
   id           String         @id @default(uuid()) @db.Uuid
   tenantId     String         @db.Uuid
   customerId   String         @db.Uuid
-  externalId   String
+  externalId   String?
   status       ContractStatus @default(UNKNOWN)
   planName     String?
   serviceLogin String?
   address      Json?
+  origin       String?
   metadata     Json?
   deletedAt    DateTime?
   startedAt    DateTime?
@@ -1157,11 +1202,12 @@ model Invoice {
   tenantId    String        @db.Uuid
   customerId  String        @db.Uuid
   contractId  String?       @db.Uuid
-  externalId  String
+  externalId  String?
   status      InvoiceStatus @default(UNKNOWN)
   amountCents Int?
   dueDate     DateTime?
   paidAt      DateTime?
+  origin      String?
   metadata    Json?
   deletedAt   DateTime?
   createdAt   DateTime      @default(now())
@@ -1290,53 +1336,53 @@ model PipelineStage {
 }
 
 model Deal {
-  id                String       @id @default(uuid()) @db.Uuid
-  tenantId          String       @db.Uuid
-  pipelineId        String       @db.Uuid
-  stageId           String       @db.Uuid
-  customerId        String?      @db.Uuid
-  leadId            String?      @db.Uuid
-  ownerMemberId     String?      @db.Uuid
-  createdByMemberId String?      @db.Uuid
-  updatedByMemberId String?      @db.Uuid
-  lostByMemberId    String?      @db.Uuid
-  archivedByMemberId String?     @db.Uuid
-  title             String
-  phone             String?
-  email             String?
-  clientType        String?
-  entrySource       String?
-  contactType       String?
-  city              String?
-  neighborhood      String?
-  priority          DealPriority @default(MEDIUM)
-  valueCents        Int          @default(0)
-  currency          String       @default("BRL")
-  status            DealStatus   @default(OPEN)
-  position          Int          @default(0)
-  nextAction        String?
-  nextActionAt      DateTime?
-  notes             String?      @db.Text
-  lossReason        String?
-  expectedCloseAt   DateTime?
-  wonAt             DateTime?
-  lostAt            DateTime?
-  archivedAt        DateTime?
-  version           Int          @default(1)
-  metadata          Json?
-  createdAt         DateTime     @default(now())
-  updatedAt         DateTime     @updatedAt
+  id                 String       @id @default(uuid()) @db.Uuid
+  tenantId           String       @db.Uuid
+  pipelineId         String       @db.Uuid
+  stageId            String       @db.Uuid
+  customerId         String?      @db.Uuid
+  leadId             String?      @db.Uuid
+  ownerMemberId      String?      @db.Uuid
+  createdByMemberId  String?      @db.Uuid
+  updatedByMemberId  String?      @db.Uuid
+  lostByMemberId     String?      @db.Uuid
+  archivedByMemberId String?      @db.Uuid
+  title              String
+  phone              String?
+  email              String?
+  clientType         String?
+  entrySource        String?
+  contactType        String?
+  city               String?
+  neighborhood       String?
+  priority           DealPriority @default(MEDIUM)
+  valueCents         Int          @default(0)
+  currency           String       @default("BRL")
+  status             DealStatus   @default(OPEN)
+  position           Int          @default(0)
+  nextAction         String?
+  nextActionAt       DateTime?
+  notes              String?      @db.Text
+  lossReason         String?
+  expectedCloseAt    DateTime?
+  wonAt              DateTime?
+  lostAt             DateTime?
+  archivedAt         DateTime?
+  version            Int          @default(1)
+  metadata           Json?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
 
-  tenant           Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  pipeline         Pipeline       @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
-  stage            PipelineStage  @relation(fields: [stageId], references: [id], onDelete: Cascade)
-  customer         Customer?      @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  lead             Lead?          @relation(fields: [leadId], references: [id], onDelete: SetNull)
-  ownerMember      TenantMember?  @relation("DealOwner", fields: [ownerMemberId], references: [id], onDelete: SetNull)
-  createdByMember  TenantMember?  @relation("DealCreatedBy", fields: [createdByMemberId], references: [id], onDelete: SetNull)
-  updatedByMember  TenantMember?  @relation("DealUpdatedBy", fields: [updatedByMemberId], references: [id], onDelete: SetNull)
-  lostByMember     TenantMember?  @relation("DealLostBy", fields: [lostByMemberId], references: [id], onDelete: SetNull)
-  archivedByMember TenantMember?  @relation("DealArchivedBy", fields: [archivedByMemberId], references: [id], onDelete: SetNull)
+  tenant           Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  pipeline         Pipeline      @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  stage            PipelineStage @relation(fields: [stageId], references: [id], onDelete: Cascade)
+  customer         Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  lead             Lead?         @relation(fields: [leadId], references: [id], onDelete: SetNull)
+  ownerMember      TenantMember? @relation("DealOwner", fields: [ownerMemberId], references: [id], onDelete: SetNull)
+  createdByMember  TenantMember? @relation("DealCreatedBy", fields: [createdByMemberId], references: [id], onDelete: SetNull)
+  updatedByMember  TenantMember? @relation("DealUpdatedBy", fields: [updatedByMemberId], references: [id], onDelete: SetNull)
+  lostByMember     TenantMember? @relation("DealLostBy", fields: [lostByMemberId], references: [id], onDelete: SetNull)
+  archivedByMember TenantMember? @relation("DealArchivedBy", fields: [archivedByMemberId], references: [id], onDelete: SetNull)
   history          DealHistory[]
 
   @@index([tenantId, status])
@@ -1544,4 +1590,220 @@ model AuditLog {
 
   @@index([tenantId, entityType, entityId])
   @@index([tenantId, createdAt])
+}
+
+model InboundEvent {
+  id              String   @id @default(uuid()) @db.Uuid
+  tenantId        String   @db.Uuid
+  provider        String
+  providerEventId String
+  payloadHash     String
+  conversationId  String?  @db.Uuid
+  receivedAt      DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, provider, providerEventId])
+  @@index([tenantId, receivedAt])
+}
+
+model ConversationEvent {
+  id             String   @id @default(uuid()) @db.Uuid
+  tenantId       String   @db.Uuid
+  conversationId String   @db.Uuid
+  type           String
+  actorMemberId  String?  @db.Uuid
+  data           Json?
+  createdAt      DateTime @default(now())
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, conversationId, createdAt])
+}
+
+model TenantCounter {
+  tenantId String @db.Uuid
+  key      String
+  value    Int    @default(0)
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, key])
+}
+
+/// Caixa de saída transacional: criada na mesma transação da mensagem; processada pelo worker dedicado.
+model OutboundDelivery {
+  id                String    @id @default(uuid()) @db.Uuid
+  tenantId          String    @db.Uuid
+  messageId         String    @unique @db.Uuid
+  conversationId    String    @db.Uuid
+  integrationId     String?   @db.Uuid
+  status            String    @default("PENDING")
+  attempts          Int       @default(0)
+  maxAttempts       Int       @default(5)
+  nextAttemptAt     DateTime  @default(now())
+  leaseToken        String?
+  leaseExpiresAt    DateTime?
+  providerMessageId String?
+  lastError         String?
+  acceptedAt        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  message     Message      @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  integration Integration? @relation(fields: [integrationId], references: [id], onDelete: SetNull)
+
+  @@index([status, nextAttemptAt])
+  @@index([tenantId, status])
+  @@index([integrationId, providerMessageId])
+}
+
+model WorkerHeartbeat {
+  name       String   @id
+  lastSeenAt DateTime @default(now())
+  info       Json?
+}
+
+model SectorCategory {
+  id         String    @id @default(uuid()) @db.Uuid
+  tenantId   String    @db.Uuid
+  name       String
+  color      String    @default("#64748b")
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sectors Sector[]
+
+  @@unique([tenantId, name])
+}
+
+model Sector {
+  id                 String    @id @default(uuid()) @db.Uuid
+  tenantId           String    @db.Uuid
+  categoryId         String?   @db.Uuid
+  name               String
+  color              String    @default("#3b5bfd")
+  position           Int       @default(0)
+  active             Boolean   @default(true)
+  timezone           String    @default("America/Sao_Paulo")
+  /// { "mon": [["08:00","18:00"]], ... } validado no servidor; vazio = sem restrição de expediente.
+  workingHours       Json?
+  greeting           String?
+  outOfHoursMessage  String?
+  requireCloseReason Boolean   @default(false)
+  archivedAt         DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  tenant        Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  category      SectorCategory?  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  members       SectorMember[]
+  conversations Conversation[]
+  rules         RoundRobinRule[] @relation("RuleSector")
+  fallbackFor   RoundRobinRule[] @relation("RuleFallback")
+
+  @@unique([tenantId, name])
+  @@index([tenantId, active, position])
+}
+
+model SectorMember {
+  sectorId  String   @db.Uuid
+  memberId  String   @db.Uuid
+  tenantId  String   @db.Uuid
+  createdAt DateTime @default(now())
+
+  sector Sector       @relation(fields: [sectorId], references: [id], onDelete: Cascade)
+  member TenantMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@id([sectorId, memberId])
+  @@index([tenantId, memberId])
+}
+
+/// Rodízio: quota por participante dentro de um ciclo de 100 atribuições (percentual = quota).
+model RoundRobinRule {
+  id               String   @id @default(uuid()) @db.Uuid
+  tenantId         String   @db.Uuid
+  name             String
+  sectorId         String   @db.Uuid
+  fallbackSectorId String?  @db.Uuid
+  active           Boolean  @default(true)
+  cycleNumber      Int      @default(1)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  tenant       Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sector       Sector                  @relation("RuleSector", fields: [sectorId], references: [id], onDelete: Cascade)
+  fallback     Sector?                 @relation("RuleFallback", fields: [fallbackSectorId], references: [id], onDelete: SetNull)
+  participants RoundRobinParticipant[]
+
+  @@index([tenantId, sectorId, active])
+}
+
+model RoundRobinParticipant {
+  ruleId          String @db.Uuid
+  memberId        String @db.Uuid
+  percent         Int
+  assignedInCycle Int    @default(0)
+  totalAssigned   Int    @default(0)
+
+  rule   RoundRobinRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  member TenantMember   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@id([ruleId, memberId])
+}
+
+/// Quadro Ao Vivo: organização manual de atendimentos; independente de tags, setor e funil comercial.
+model ConversationBoard {
+  id         String    @id @default(uuid()) @db.Uuid
+  tenantId   String    @db.Uuid
+  name       String
+  position   Int       @default(0)
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  tenant  Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  columns BoardColumn[]
+  cards   BoardCard[]
+
+  @@unique([tenantId, name])
+}
+
+model BoardColumn {
+  id        String   @id @default(uuid()) @db.Uuid
+  boardId   String   @db.Uuid
+  tenantId  String   @db.Uuid
+  name      String
+  color     String   @default("#64748b")
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  board ConversationBoard @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  cards BoardCard[]
+
+  @@index([boardId, position])
+}
+
+model BoardCard {
+  id             String   @id @default(uuid()) @db.Uuid
+  boardId        String   @db.Uuid
+  columnId       String   @db.Uuid
+  tenantId       String   @db.Uuid
+  conversationId String   @db.Uuid
+  position       Int      @default(0)
+  version        Int      @default(1)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  board        ConversationBoard @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  column       BoardColumn       @relation(fields: [columnId], references: [id], onDelete: Cascade)
+  conversation Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([boardId, conversationId])
+  @@index([columnId, position])
+  @@index([tenantId, conversationId])
 }

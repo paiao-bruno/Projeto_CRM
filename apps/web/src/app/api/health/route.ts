@@ -1,9 +1,15 @@
 import { jsonData } from "@/server/http";
+import { getPrisma } from "@/server/prisma";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function GET() {
-  return jsonData({
-    status: "ok",
-    mode: process.env.NEXT_PUBLIC_WEB_ONLY_MODE === "true" ? "web-only" : "legacy",
-    apiBaseUrl: process.env.NEXT_PUBLIC_API_URL ?? null,
-  });
+  let database: "ok" | "unavailable" = "ok";
+  try {
+    await getPrisma().$queryRaw`SELECT 1`;
+  } catch {
+    database = "unavailable";
+  }
+  return jsonData({ status: database === "ok" ? "ok" : "degraded", mode: "single-site", database });
 }

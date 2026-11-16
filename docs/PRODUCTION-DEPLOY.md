@@ -1,3 +1,5 @@
+> **Atualização (site único):** o fluxo padrão não usa SGP nem NestJS. As seções de SGP abaixo valem apenas para o modo legado opt-in (`LEGACY_API_ENABLED=true`, `SGP_LEGACY_SYNC_ENABLED=true`). Ver `docs/vertice/07-desacoplamento-sgp-inventario.md`.
+
 # Checklist de Deploy em Produção — ISP CRM SaaS
 
 Este documento descreve a ordem correta para o **primeiro deploy** em produção.

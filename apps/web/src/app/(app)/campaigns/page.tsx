@@ -207,7 +207,7 @@ function CampaignsPageContent() {
               className={cn(
                 "flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold transition",
                 activeTab === tab
-                  ? "bg-emerald-400 text-slate-950"
+                  ? "bg-emerald-400 text-white"
                   : "text-slate-400 hover:bg-slate-900 hover:text-white",
               )}
               key={tab}

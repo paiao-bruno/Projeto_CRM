@@ -1,19 +1,52 @@
 @import "tailwindcss";
+@import "./theme.css";
 
-:root {
-  --background: #07111f;
-  --foreground: #e5eefb;
-  --card: rgba(15, 23, 42, 0.78);
-  --card-border: rgba(148, 163, 184, 0.18);
-  --muted: #94a3b8;
-  --primary: #22c55e;
-  --primary-foreground: #03140a;
-  --accent: #38bdf8;
-  --danger: #ef4444;
+/*
+ * Paleta única (Vértice, tema escuro). Utilitários slate/emerald/white das telas herdadas
+ * apontam para os tokens grafite/azul da referência cromática, sem reescrever cada componente.
+ */
+@theme {
+  --color-white: #F1F3F5;
+  --color-slate-50: #1E2024;
+  --color-slate-100: #202328;
+  --color-slate-200: #C0C6CE;
+  --color-slate-300: #C0C6CE;
+  --color-slate-400: #A4ADB8;
+  --color-slate-500: #808A96;
+  --color-slate-600: #454B52;
+  --color-slate-700: #454B52;
+  --color-slate-800: #383D43;
+  --color-slate-900: #25282D;
+  --color-slate-950: #15171B;
+
+  --color-emerald-50: #303D50;
+  --color-emerald-100: #303D50;
+  --color-emerald-200: #4B86BA;
+  --color-emerald-300: #72B7F2;
+  --color-emerald-400: #2271B1;
+  --color-emerald-500: #2271B1;
+  --color-emerald-600: #1b5a8c;
+
+  --color-amber-100: #3a3224;
+  --color-amber-200: #3a3224;
+  --color-amber-300: #D4A04D;
+  --color-amber-400: #D4A04D;
+  --color-red-50: #3a2728;
+  --color-red-100: #3a2728;
+  --color-red-200: #D96B70;
+  --color-red-300: #D96B70;
+  --color-red-400: #D96B70;
+  --color-red-500: #D96B70;
+  --color-red-700: #F1F3F5;
+  --color-sky-300: #72B7F2;
+  --color-sky-400: #66A7DD;
+  --color-violet-300: #72B7F2;
+  --color-violet-400: #4B86BA;
 }
 
 * {
   box-sizing: border-box;
+  scrollbar-color: var(--vx-border) var(--vx-bg);
 }
 
 html,
@@ -23,12 +56,9 @@ body {
 
 body {
   margin: 0;
-  background:
-    radial-gradient(circle at top left, rgba(34, 197, 94, 0.18), transparent 32rem),
-    radial-gradient(circle at top right, rgba(56, 189, 248, 0.16), transparent 28rem),
-    var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--vx-bg);
+  color: var(--vx-text);
+  font-family: Inter, "Segoe UI", system-ui, -apple-system, Arial, sans-serif;
 }
 
 button,
@@ -39,12 +69,18 @@ textarea {
 }
 
 ::selection {
-  background: rgba(34, 197, 94, 0.35);
+  background: rgba(34, 113, 177, 0.35);
 }
 
 .glass-card {
-  background: var(--card);
-  border: 1px solid var(--card-border);
-  box-shadow: 0 24px 80px rgba(2, 6, 23, 0.24);
-  backdrop-filter: blur(18px);
+  background: var(--vx-surface);
+  border: 1px solid var(--vx-border);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--vx-bg);
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--vx-border);
 }

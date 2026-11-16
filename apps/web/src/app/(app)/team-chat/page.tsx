@@ -203,7 +203,7 @@ function TeamChatPageContent() {
                 <div className="max-w-md rounded-2xl border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
                   {selectedConversation.lastMessage}
                 </div>
-                <div className="ml-auto max-w-md rounded-2xl bg-emerald-400 p-4 text-sm text-slate-950">
+                <div className="ml-auto max-w-md rounded-2xl bg-emerald-400 p-4 text-sm text-white">
                   Recebido. Vou acompanhar por aqui e atualizar o time.
                 </div>
               </div>

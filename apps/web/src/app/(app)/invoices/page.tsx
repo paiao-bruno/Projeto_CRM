@@ -1,113 +1,148 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Receipt } from "lucide-react";
-import { useAuth } from "@/components/auth-provider";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Pencil, Plus, Trash2 } from "lucide-react";
+import { FormEvent, useState } from "react";
 import { api } from "@/lib/api";
-import { isWebOnlyMode, LEGACY_API_UNAVAILABLE_MESSAGE } from "@/lib/runtime-config";
-import { Invoice, PaginatedResponse } from "@/lib/types";
+import type { Customer, PaginatedResponse } from "@/lib/types";
+import { ErrorAlert, Field, Modal, PageHeader, formatCents, formatDate, statusLabels, toDateInput, useResource } from "@/components/vx";
 
-function formatCurrency(cents?: number | null) {
-  return new Intl.NumberFormat("pt-BR", {
-    currency: "BRL",
-    style: "currency",
-  }).format((cents ?? 0) / 100);
-}
+type InvoiceRow = {
+  id: string;
+  customerId: string;
+  contractId: string | null;
+  status: string;
+  amountCents: number | null;
+  dueDate: string | null;
+  paidAt: string | null;
+  origin: string | null;
+  customer: { id: string; name: string };
+};
+type ContractOption = { id: string; planName: string | null; customerId: string };
+const STATUSES = ["OPEN", "PAID", "OVERDUE", "CANCELED"] as const;
+type Draft = { customerId: string; contractId: string; amount: string; dueDate: string; status: string };
+const emptyDraft: Draft = { customerId: "", contractId: "", amount: "", dueDate: "", status: "OPEN" };
 
 export default function InvoicesPage() {
-  const { token } = useAuth();
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
-  const [error, setError] = useState("");
-  const [page, setPage] = useState(1);
-  const [total, setTotal] = useState(0);
-  const [totalPages, setTotalPages] = useState(1);
+  const [status, setStatus] = useState("");
+  const { data, error, loading, reload, token } = useResource<PaginatedResponse<InvoiceRow>>(`/invoices?limit=100${status ? `&status=${status}` : ""}`);
+  const customers = useResource<PaginatedResponse<Customer>>("/customers?limit=200");
+  const contracts = useResource<PaginatedResponse<ContractOption>>("/contracts?limit=200");
+  const [editing, setEditing] = useState<{ id: string | null; draft: Draft } | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    if (!token) return;
-    if (isWebOnlyMode()) {
-      setError(LEGACY_API_UNAVAILABLE_MESSAGE);
-      return;
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    if (!editing || !token) return;
+    setBusy(true);
+    setFormError(null);
+    try {
+      const { customerId, contractId, amount, dueDate, status: nextStatus } = editing.draft;
+      const body = { amount, dueDate: dueDate || null, status: nextStatus, contractId: contractId || null };
+      if (editing.id) await api.patch(`/invoices/${editing.id}`, body, token);
+      else await api.post("/invoices", { ...body, customerId }, token);
+      setEditing(null);
+      await reload();
+    } catch (cause) {
+      setFormError(cause instanceof Error ? cause.message : "Falha ao salvar.");
+    } finally {
+      setBusy(false);
     }
-    api
-      .get<PaginatedResponse<Invoice>>(`/invoices?page=${page}&limit=100`, token)
-      .then((response) => {
-        setInvoices(response.data);
-        setTotal(response.total);
-        setTotalPages(response.totalPages);
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : "Erro ao carregar faturas."));
-  }, [token, page]);
+  }
+
+  async function remove(row: InvoiceRow) {
+    if (!token || !window.confirm("Excluir esta fatura do cadastro local? Nenhuma cobrança externa é alterada.")) return;
+    try {
+      await api.delete(`/invoices/${row.id}`, token);
+      await reload();
+    } catch (cause) {
+      window.alert(cause instanceof Error ? cause.message : "Falha ao excluir.");
+    }
+  }
+
+  const set = (field: keyof Draft) => (event: { target: { value: string } }) =>
+    setEditing((current) => (current ? { ...current, draft: { ...current.draft, [field]: event.target.value, ...(field === "customerId" ? { contractId: "" } : {}) } } : current));
+  const customerContracts = (contracts.data?.data ?? []).filter((c) => c.customerId === editing?.draft.customerId);
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-semibold text-white">Faturas</h1>
-        <p className="mt-1 text-slate-400">Títulos e faturas sincronizados do SGP.</p>
+    <div>
+      <PageHeader
+        title="Faturas"
+        subtitle="Registro local de faturas. Não emite cobranças nem registra pagamentos em sistemas externos."
+        actions={
+          <button className="vx-btn vx-btn-primary" onClick={() => { setFormError(null); setEditing({ id: null, draft: emptyDraft }); }} type="button">
+            <Plus size={15} /> Nova fatura
+          </button>
+        }
+      />
+      <div className="mb-3 max-w-xs">
+        <select className="vx-input" value={status} onChange={(e) => setStatus(e.target.value)} aria-label="Filtrar por status">
+          <option value="">Todos os status</option>
+          {STATUSES.map((s) => <option key={s} value={s}>{statusLabels[s] ?? s}</option>)}
+        </select>
+      </div>
+      <ErrorAlert message={error} />
+      <div className="vx-card overflow-x-auto">
+        {loading ? (
+          <p className="vx-empty">Carregando...</p>
+        ) : !data || data.data.length === 0 ? (
+          <p className="vx-empty">{error ? "Não foi possível carregar as faturas." : "Nenhuma fatura cadastrada ainda."}</p>
+        ) : (
+          <table className="vx-table">
+            <thead>
+              <tr><th>Cliente</th><th>Valor</th><th>Vencimento</th><th>Status</th><th>Origem</th><th aria-label="Ações" /></tr>
+            </thead>
+            <tbody>
+              {data.data.map((row) => (
+                <tr key={row.id}>
+                  <td className="font-semibold">{row.customer.name}</td>
+                  <td>{formatCents(row.amountCents)}</td>
+                  <td>{formatDate(row.dueDate)}</td>
+                  <td><span className="vx-badge">{statusLabels[row.status] ?? row.status}</span></td>
+                  <td><span className="vx-badge vx-badge-gray">{row.origin === "LOCAL" ? "Local" : "Importada"}</span></td>
+                  <td className="whitespace-nowrap text-right">
+                    <button className="vx-btn" aria-label="Editar fatura" onClick={() => { setFormError(null); setEditing({ id: row.id, draft: { customerId: row.customerId, contractId: row.contractId ?? "", amount: ((row.amountCents ?? 0) / 100).toFixed(2).replace(".", ","), dueDate: toDateInput(row.dueDate), status: row.status } }); }} type="button"><Pencil size={14} /></button>{" "}
+                    <button className="vx-btn vx-btn-danger" aria-label="Excluir fatura" onClick={() => void remove(row)} type="button"><Trash2 size={14} /></button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
 
-      {error ? <div className="rounded-2xl bg-red-500/10 p-4 text-red-200">{error}</div> : null}
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Receipt className="text-emerald-300" size={20} />
-            Base financeira
-          </CardTitle>
-          <p className="text-sm text-slate-400">
-            {total} registros · página {page} de {totalPages}
-          </p>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {invoices.map((invoice) => (
-            <div className="rounded-2xl border border-slate-800 bg-slate-950/50 p-4" key={invoice.id}>
-              <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
-                <div>
-                  <p className="font-semibold text-white">Fatura SGP {invoice.externalId}</p>
-                  <p className="text-sm text-slate-400">{formatCurrency(invoice.amountCents)}</p>
-                  <p className="text-xs text-slate-500">
-                    Vencimento: {invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString("pt-BR") : "-"}
-                  </p>
-                </div>
-                <Badge variant={invoice.status === "PAID" ? "green" : invoice.status === "OVERDUE" ? "red" : "amber"}>
-                  {invoice.status}
-                </Badge>
-              </div>
+      {editing ? (
+        <Modal title={editing.id ? "Editar fatura" : "Nova fatura"} onClose={() => setEditing(null)}>
+          <form className="space-y-3" onSubmit={save}>
+            <ErrorAlert message={formError} />
+            <Field label="Cliente *">
+              <select className="vx-input" required disabled={Boolean(editing.id)} value={editing.draft.customerId} onChange={set("customerId")}>
+                <option value="">Selecione...</option>
+                {(customers.data?.data ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </Field>
+            <Field label="Contrato">
+              <select className="vx-input" value={editing.draft.contractId} onChange={set("contractId")}>
+                <option value="">Sem contrato</option>
+                {customerContracts.map((c) => <option key={c.id} value={c.id}>{c.planName ?? c.id.slice(0, 8)}</option>)}
+              </select>
+            </Field>
+            <div className="grid grid-cols-3 gap-3">
+              <Field label="Valor (R$) *"><input className="vx-input" required inputMode="decimal" placeholder="129,90" value={editing.draft.amount} onChange={set("amount")} /></Field>
+              <Field label="Vencimento"><input className="vx-input" type="date" value={editing.draft.dueDate} onChange={set("dueDate")} /></Field>
+              <Field label="Status">
+                <select className="vx-input" value={editing.draft.status} onChange={set("status")}>
+                  {STATUSES.map((s) => <option key={s} value={s}>{statusLabels[s] ?? s}</option>)}
+                </select>
+              </Field>
             </div>
-          ))}
-          <div className="flex flex-wrap items-center justify-between gap-3 pt-3">
-            <Button
-              disabled={page <= 1}
-              type="button"
-              variant="secondary"
-              onClick={() => setPage((current) => Math.max(1, current - 1))}
-            >
-              Anterior
-            </Button>
-            <select
-              className="h-10 rounded-xl border border-slate-700 bg-slate-950/60 px-3 text-sm text-slate-100"
-              value={page}
-              onChange={(event) => setPage(Number(event.target.value))}
-            >
-              {Array.from({ length: totalPages }).map((_, index) => (
-                <option key={index + 1} value={index + 1}>
-                  Página {index + 1}
-                </option>
-              ))}
-            </select>
-            <Button
-              disabled={page >= totalPages}
-              type="button"
-              variant="secondary"
-              onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
-            >
-              Próxima
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+            <div className="flex justify-end gap-2 pt-2">
+              <button className="vx-btn" type="button" onClick={() => setEditing(null)}>Cancelar</button>
+              <button className="vx-btn vx-btn-primary" disabled={busy} type="submit">{busy ? "Salvando..." : "Salvar"}</button>
+            </div>
+          </form>
+        </Modal>
+      ) : null}
     </div>
   );
 }

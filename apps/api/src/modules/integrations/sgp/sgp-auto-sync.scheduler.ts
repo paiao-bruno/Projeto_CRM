@@ -16,6 +16,10 @@ export class SgpAutoSyncScheduler implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit() {
+    if (process.env.SGP_LEGACY_SYNC_ENABLED !== "true") {
+      this.logger.log("Sincronização SGP descontinuada: agendador inativo (exige SGP_LEGACY_SYNC_ENABLED=true).");
+      return;
+    }
     const defaults = readEnvAutoSyncDefaults(process.env);
     if (!defaults.enabled) {
       this.logger.log("Sincronização automática SGP desabilitada via ambiente.");

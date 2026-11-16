@@ -20,16 +20,13 @@ export function syncWebOnlyEnv() {
     env: { ...process.env, NODE_ENV: "development" },
   });
 
-  const contents = `# Gerado automaticamente por dev:web:funnel (nao commitar)
-NEXT_PUBLIC_API_URL=/api
-NEXT_PUBLIC_WEB_ONLY_MODE=true
-SGP_AUTO_SYNC_ENABLED=false
+  const contents = `# Gerado automaticamente por npm run dev (nao commitar)
 DATABASE_URL=${databaseUrl}
 JWT_ACCESS_SECRET=${jwtSecret}
 `;
 
   writeFileSync(WEB_ENV_PATH, contents, "utf8");
-  console.log(`[dev:web:funnel] Env web-only gravado em apps/web/.env.development.local`);
+  console.log(`[dev] Env local gravado em apps/web/.env.development.local`);
   return WEB_ENV_PATH;
 }
 

@@ -1,0 +1,32 @@
+# baseline antes da correção — 2026-10-28T12:57:19Z — HEAD 56da9c89bcb4ee8a06b3c12fb3a02d38dbd31032 — node v22.23.4 — ambiente limpo (sem DATABASE_URL/SHADOW_DATABASE_URL)
+
+## 1) npm run test:sales-funnel-integration
+
+> isp-crm-saas@1.0.0 test:sales-funnel-integration
+> ALLOW_DISPOSABLE_DB=true node scripts/test-sales-funnel-integration.mjs
+
+file:///workspace/scripts/test-sales-funnel-integration.mjs:135
+    data: { stageId: activation!.id, status: DealStatus.WON, version: { increment: 1 } },
+                               ^
+
+SyntaxError: Unexpected token '!'
+    at compileSourceTextModule (node:internal/modules/esm/utils:346:16)
+exit code: 1
+
+## 2a) npm run prisma:validate:migrations (sem DATABASE_URL)
+Prisma schema loaded from prisma/schema.prisma.
+The schema at prisma/schema.prisma is valid 🚀
+DATABASE_URL não definido; diff de migrations ignorado.
+[prisma:validate:migrations] OK
+exit code: 0
+
+## 2b) idem com DATABASE_URL apontando para outra porta (54329); shadow vem de prisma.config.ts
+Loaded Prisma config from prisma.config.ts.
+
+Error: P1001
+
+Can't reach database server at `localhost:5432`
+
+Please make sure your database server is running at `localhost:5432`.
+
+exit code: 1
