@@ -212,9 +212,23 @@ export class SalesFunnelService {
     const position = Math.max(0, dto.position ?? 0);
     const previousStageId = deal.stageId;
     const previousPosition = deal.position;
-    const activationStage = pipeline.stages.find(
-      (stage) => stage.code === SALES_FUNNEL_STAGE_CODES.ATIVACAO,
-    );
+    const currentStage = pipeline.stages.find((stage) => stage.id === deal.stageId);
+    if (
+      targetStage.code === SALES_FUNNEL_STAGE_CODES.SUCESSO &&
+      currentStage?.code !== SALES_FUNNEL_STAGE_CODES.SUCESSO
+    ) {
+      const confirmation = await this.prisma.dealPaymentConfirmation.findFirst({
+        where: { tenantId: user.tenantId, dealId, reversedAt: null },
+      });
+      if (currentStage?.code !== SALES_FUNNEL_STAGE_CODES.ATIVACAO || !confirmation) {
+        throw new BadRequestException(
+          "Sucesso exige a oportunidade em Ativação e um pagamento qualificável confirmado.",
+        );
+      }
+    }
+    const wonStage =
+      targetStage.code === SALES_FUNNEL_STAGE_CODES.ATIVACAO ||
+      targetStage.code === SALES_FUNNEL_STAGE_CODES.SUCESSO;
 
     await this.prisma.$transaction(async (tx) => {
       if (targetStage.id === previousStageId) {
@@ -231,12 +245,8 @@ export class SalesFunnelService {
           position,
           updatedByMemberId: user.memberId,
           version: { increment: 1 },
-          status:
-            activationStage && targetStage.id === activationStage.id
-              ? DealStatus.WON
-              : DealStatus.OPEN,
-          wonAt:
-            activationStage && targetStage.id === activationStage.id ? new Date() : deal.wonAt,
+          status: wonStage ? DealStatus.WON : DealStatus.OPEN,
+          wonAt: wonStage ? deal.wonAt ?? new Date() : deal.wonAt,
         },
       });
     });
@@ -382,15 +392,34 @@ export class SalesFunnelService {
     pipelineId: string,
     stages: Array<{ id: string; code: string | null; name: string; position: number }>,
   ) {
+    const owned = [...stages];
+    const pipeline = await this.prisma.pipeline.findUnique({ where: { id: pipelineId }, select: { tenantId: true } });
+    if (!pipeline) return;
     for (const definition of SALES_FUNNEL_STAGES) {
       const stage =
-        stages.find((item) => item.code === definition.code) ??
-        stages.find((item) => item.name === definition.name);
+        owned.find((item) => item.code === definition.code) ??
+        owned.find((item) => item.name === definition.name);
       if (stage && !stage.code) {
         await this.prisma.pipelineStage.update({
           where: { id: stage.id },
           data: { code: definition.code, color: definition.color },
         });
+        stage.code = definition.code;
+      }
+      if (!owned.some((item) => item.code === definition.code || item.name === definition.name)) {
+        let position = definition.position;
+        while (owned.some((item) => item.position === position)) position += 1;
+        const created = await this.prisma.pipelineStage.create({
+          data: {
+            tenantId: pipeline.tenantId,
+            pipelineId,
+            name: definition.name,
+            code: definition.code,
+            position,
+            color: definition.color,
+          },
+        });
+        owned.push(created);
       }
     }
   }

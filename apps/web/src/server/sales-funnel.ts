@@ -5,6 +5,7 @@ import {
   SALES_FUNNEL_STAGES,
   SALES_FUNNEL_STAGE_CODES,
 } from "../../../../shared/sales-funnel.constants";
+import { isQualifyingPaidInvoice, successEntryBlockers } from "../lib/payment-qualification";
 import type { ServerAuthUser } from "./auth";
 import { HttpError } from "./http";
 import { getPrisma } from "./prisma";
@@ -81,6 +82,10 @@ class SalesFunnelService {
       where: { id: dealId, tenantId: user.tenantId },
       include: {
         ...this.dealInclude(),
+        paymentConfirmations: {
+          orderBy: { createdAt: "desc" },
+          take: 20,
+        },
         history: {
           orderBy: { createdAt: "desc" },
           take: 100,
@@ -98,6 +103,12 @@ class SalesFunnelService {
 
   async createDeal(user: ServerAuthUser, dto: Record<string, any>) {
     const pipeline = await this.ensureDefaultPipeline(user.tenantId);
+    if (dto.stageCode === SALES_FUNNEL_STAGE_CODES.SUCESSO) {
+      throw new HttpError(
+        422,
+        "Não é possível criar uma oportunidade já em Sucesso. Crie em Ativação e confirme o primeiro pagamento qualificável.",
+      );
+    }
     const stage =
       pipeline.stages.find((item) => item.code === dto.stageCode) ?? pipeline.stages[0];
     if (!stage) throw new HttpError(400, "Etapa inicial do funil não encontrada.");
@@ -205,9 +216,38 @@ class SalesFunnelService {
     const position = Math.max(0, dto.position ?? 0);
     const previousStageId = deal.stageId;
     const previousPosition = deal.position;
-    const activationStage = pipeline.stages.find(
-      (stage) => stage.code === SALES_FUNNEL_STAGE_CODES.ATIVACAO,
-    );
+    const currentStage = pipeline.stages.find((stage) => stage.id === deal.stageId);
+
+    if (targetStage.code === SALES_FUNNEL_STAGE_CODES.SUCESSO && currentStage?.code !== SALES_FUNNEL_STAGE_CODES.SUCESSO) {
+      await this.assertCanEnterSuccess(user.tenantId, deal);
+      const active = await this.findActiveConfirmation(user.tenantId, dealId);
+      if (!active && deal.customerId) {
+        const invoices = await this.prisma.invoice.findMany({
+          where: { tenantId: user.tenantId, customerId: deal.customerId, deletedAt: null, status: "PAID" },
+          orderBy: { paidAt: "asc" },
+        });
+        const qualifying = invoices.find((item) => isQualifyingPaidInvoice(item));
+        if (qualifying) {
+          await this.prisma.dealPaymentConfirmation.create({
+            data: {
+              tenantId: user.tenantId,
+              dealId,
+              invoiceId: qualifying.id,
+              source: "INVOICE",
+              amountCents: qualifying.amountCents ?? 0,
+              paidAt: qualifying.paidAt ?? new Date(),
+              reference: qualifying.externalId ?? qualifying.id,
+              notes: `Confirmação a partir da fatura local ${qualifying.id}.`,
+              actorMemberId: user.memberId,
+            },
+          });
+        }
+      }
+    }
+
+    const wonStage =
+      targetStage.code === SALES_FUNNEL_STAGE_CODES.ATIVACAO ||
+      targetStage.code === SALES_FUNNEL_STAGE_CODES.SUCESSO;
 
     await this.prisma.$transaction(async (tx) => {
       if (targetStage.id === previousStageId) {
@@ -224,12 +264,8 @@ class SalesFunnelService {
           position,
           updatedByMemberId: user.memberId,
           version: { increment: 1 },
-          status:
-            activationStage && targetStage.id === activationStage.id
-              ? DealStatus.WON
-              : DealStatus.OPEN,
-          wonAt:
-            activationStage && targetStage.id === activationStage.id ? new Date() : deal.wonAt,
+          status: wonStage ? DealStatus.WON : DealStatus.OPEN,
+          wonAt: wonStage ? deal.wonAt ?? new Date() : deal.wonAt,
         },
       });
     });
@@ -243,6 +279,13 @@ class SalesFunnelService {
       previousValue: { stageId: previousStageId, position: previousPosition },
       newValue: { stageId: targetStage.id, position, stageCode: targetStage.code },
     });
+
+    if (
+      targetStage.code === SALES_FUNNEL_STAGE_CODES.ATIVACAO &&
+      currentStage?.code !== SALES_FUNNEL_STAGE_CODES.SUCESSO
+    ) {
+      await this.tryAutoEnterSuccess(user, dealId).catch(() => undefined);
+    }
     return this.getDeal(user, dealId);
   }
 
@@ -326,6 +369,169 @@ class SalesFunnelService {
     return this.getDeal(user, dealId);
   }
 
+  async confirmPayment(user: ServerAuthUser, dealId: string, dto: Record<string, any>) {
+    const deal = await this.requireDeal(user.tenantId, dealId);
+    this.assertEditable(deal);
+    const pipeline = await this.ensureDefaultPipeline(user.tenantId);
+    const currentStage = pipeline.stages.find((stage) => stage.id === deal.stageId);
+
+    const invoiceId = typeof dto.invoiceId === "string" && dto.invoiceId ? dto.invoiceId : undefined;
+    const amountCents = Number(dto.amountCents);
+    const paidAt = dto.paidAt ? new Date(dto.paidAt) : new Date();
+    const reference = typeof dto.reference === "string" ? dto.reference.trim() : "";
+    const notes = typeof dto.notes === "string" ? dto.notes.trim() : "";
+
+    let invoice = null;
+    if (invoiceId) {
+      invoice = await this.prisma.invoice.findFirst({
+        where: { id: invoiceId, tenantId: user.tenantId, deletedAt: null },
+      });
+      if (!invoice) throw new HttpError(404, "Fatura não encontrada nesta organização.");
+      if (deal.customerId && invoice.customerId !== deal.customerId) {
+        throw new HttpError(422, "A fatura pertence a outro cliente; não pode confirmar esta oportunidade.");
+      }
+      if (!isQualifyingPaidInvoice(invoice)) {
+        throw new HttpError(422, "A fatura não é um pagamento qualificável (precisa estar paga, com valor e sem ser taxa de instalação).");
+      }
+    } else {
+      if (!Number.isFinite(amountCents) || amountCents <= 0) {
+        throw new HttpError(422, "Informe o valor do pagamento qualificável em centavos.");
+      }
+      if (!reference) throw new HttpError(422, "Informe a referência da confirmação manual (documento, protocolo ou recibo).");
+      if (Number.isNaN(paidAt.getTime())) throw new HttpError(422, "Data de pagamento inválida.");
+    }
+
+    const existing = await this.findActiveConfirmation(user.tenantId, dealId);
+    if (existing) {
+      if (invoice && existing.invoiceId === invoice.id) return this.getDeal(user, dealId);
+      if (!invoice && existing.source === "MANUAL" && existing.reference === reference && existing.amountCents === amountCents) {
+        return this.getDeal(user, dealId);
+      }
+      throw new HttpError(409, "Já existe uma confirmação válida nesta oportunidade. Estorne-a antes de registrar outra.");
+    }
+
+    const source = invoice ? "INVOICE" : "MANUAL";
+    await this.prisma.dealPaymentConfirmation.create({
+      data: {
+        tenantId: user.tenantId,
+        dealId,
+        invoiceId: invoice?.id,
+        source,
+        amountCents: invoice?.amountCents ?? amountCents,
+        paidAt: invoice?.paidAt ?? paidAt,
+        reference: invoice ? invoice.externalId ?? invoice.id : reference,
+        notes: invoice
+          ? `Confirmação a partir da fatura local ${invoice.id}.`
+          : `Confirmação manual autorizada. ${notes}`.trim(),
+        actorMemberId: user.memberId,
+      },
+    });
+    await this.recordHistory({
+      tenantId: user.tenantId,
+      dealId,
+      action: "payment_confirmed",
+      actorMemberId: user.memberId,
+      newValue: { source, invoiceId: invoice?.id ?? null, amountCents: invoice?.amountCents ?? amountCents },
+    });
+
+    if (currentStage?.code === SALES_FUNNEL_STAGE_CODES.ATIVACAO) {
+      const successStage = pipeline.stages.find((stage) => stage.code === SALES_FUNNEL_STAGE_CODES.SUCESSO);
+      if (successStage) {
+        const latest = await this.requireDeal(user.tenantId, dealId);
+        await this.moveDeal(user, dealId, {
+          stageId: successStage.id,
+          position: 0,
+          version: latest.version,
+        });
+      }
+    }
+    return this.getDeal(user, dealId);
+  }
+
+  async reverseSuccess(user: ServerAuthUser, dealId: string, dto: Record<string, any>) {
+    const deal = await this.requireDeal(user.tenantId, dealId);
+    const reason = typeof dto.reason === "string" ? dto.reason.trim() : "";
+    if (!reason) throw new HttpError(422, "Informe o motivo da correção ou estorno da confirmação.");
+
+    const active = await this.findActiveConfirmation(user.tenantId, dealId);
+    if (!active) throw new HttpError(404, "Não há confirmação válida para reverter.");
+
+    await this.prisma.dealPaymentConfirmation.update({
+      where: { id: active.id },
+      data: {
+        reversedAt: new Date(),
+        reversedByMemberId: user.memberId,
+        reverseReason: reason,
+      },
+    });
+    await this.recordHistory({
+      tenantId: user.tenantId,
+      dealId,
+      action: "payment_reversed",
+      actorMemberId: user.memberId,
+      previousValue: { confirmationId: active.id, source: active.source },
+      newValue: { reason },
+    });
+
+    const pipeline = await this.ensureDefaultPipeline(user.tenantId);
+    const current = pipeline.stages.find((stage) => stage.id === deal.stageId);
+    const activation = pipeline.stages.find((stage) => stage.code === SALES_FUNNEL_STAGE_CODES.ATIVACAO);
+    if (current?.code === SALES_FUNNEL_STAGE_CODES.SUCESSO && activation) {
+      const latest = await this.requireDeal(user.tenantId, dealId);
+      await this.moveDeal(user, dealId, {
+        stageId: activation.id,
+        position: 0,
+        version: latest.version,
+      });
+    }
+    return this.getDeal(user, dealId);
+  }
+
+  async tryAdvanceFromPaidInvoice(user: ServerAuthUser, invoice: {
+    id: string;
+    customerId: string;
+    status: string;
+    paidAt: Date | null;
+    amountCents: number | null;
+    origin?: string | null;
+    metadata?: unknown;
+    deletedAt?: Date | null;
+  }) {
+    if (!isQualifyingPaidInvoice(invoice)) return { advanced: 0, pendingReview: 0 };
+    const pipeline = await this.ensureDefaultPipeline(user.tenantId);
+    const activation = pipeline.stages.find((stage) => stage.code === SALES_FUNNEL_STAGE_CODES.ATIVACAO);
+    if (!activation) return { advanced: 0, pendingReview: 0 };
+
+    const candidates = await this.prisma.deal.findMany({
+      where: {
+        tenantId: user.tenantId,
+        customerId: invoice.customerId,
+        stageId: activation.id,
+        archivedAt: null,
+        status: { not: DealStatus.LOST },
+      },
+    });
+    if (candidates.length === 0) return { advanced: 0, pendingReview: 0 };
+    if (candidates.length > 1) {
+      await this.recordHistory({
+        tenantId: user.tenantId,
+        dealId: candidates[0].id,
+        action: "payment_reconciliation_pending",
+        actorMemberId: user.memberId,
+        newValue: { invoiceId: invoice.id, candidateDealIds: candidates.map((item) => item.id) },
+      });
+      return { advanced: 0, pendingReview: candidates.length };
+    }
+
+    const deal = candidates[0];
+    try {
+      await this.confirmPayment(user, deal.id, { invoiceId: invoice.id });
+      return { advanced: 1, pendingReview: 0 };
+    } catch {
+      return { advanced: 0, pendingReview: 0 };
+    }
+  }
+
   async listMembers(tenantId: string) {
     return this.prisma.tenantMember.findMany({
       where: { tenantId, status: "ACTIVE" },
@@ -374,19 +580,98 @@ class SalesFunnelService {
 
   private async ensureStageCodes(
     pipelineId: string,
-    stages: Array<{ id: string; code: string | null; name: string; position: number }>,
+    stages: Array<{ id: string; tenantId?: string; code: string | null; name: string; position: number }>,
   ) {
+    const owned = [...stages];
+    const tenantId = owned[0]
+      ? ((owned[0] as { tenantId?: string }).tenantId ??
+        (await this.prisma.pipeline.findUnique({ where: { id: pipelineId }, select: { tenantId: true } }))?.tenantId)
+      : (await this.prisma.pipeline.findUnique({ where: { id: pipelineId }, select: { tenantId: true } }))?.tenantId;
+    if (!tenantId) return;
+
     for (const definition of SALES_FUNNEL_STAGES) {
       const stage =
-        stages.find((item) => item.code === definition.code) ??
-        stages.find((item) => item.name === definition.name);
+        owned.find((item) => item.code === definition.code) ??
+        owned.find((item) => item.name === definition.name);
       if (stage && !stage.code) {
         await this.prisma.pipelineStage.update({
           where: { id: stage.id },
           data: { code: definition.code, color: definition.color },
         });
+        stage.code = definition.code;
+      }
+      if (!owned.some((item) => item.code === definition.code || item.name === definition.name)) {
+        let position = definition.position;
+        while (owned.some((item) => item.position === position)) position += 1;
+        const created = await this.prisma.pipelineStage.create({
+          data: {
+            tenantId,
+            pipelineId,
+            name: definition.name,
+            code: definition.code,
+            position,
+            color: definition.color,
+          },
+        });
+        owned.push(created);
       }
     }
+  }
+
+  private async findActiveConfirmation(tenantId: string, dealId: string) {
+    return this.prisma.dealPaymentConfirmation.findFirst({
+      where: { tenantId, dealId, reversedAt: null },
+      orderBy: { createdAt: "desc" },
+    });
+  }
+
+  private async hasActivationEvidence(tenantId: string, dealId: string, currentCode: string | null | undefined) {
+    if (currentCode === SALES_FUNNEL_STAGE_CODES.ATIVACAO || currentCode === SALES_FUNNEL_STAGE_CODES.SUCESSO) {
+      return true;
+    }
+    const history = await this.prisma.dealHistory.findFirst({
+      where: {
+        tenantId,
+        dealId,
+        action: "stage_changed",
+        newValue: { path: ["stageCode"], equals: SALES_FUNNEL_STAGE_CODES.ATIVACAO },
+      },
+    });
+    return Boolean(history);
+  }
+
+  private async assertCanEnterSuccess(
+    tenantId: string,
+    deal: { id: string; customerId: string | null; stageId: string },
+  ) {
+    const pipeline = await this.ensureDefaultPipeline(tenantId);
+    const current = pipeline.stages.find((stage) => stage.id === deal.stageId);
+    const confirmation = await this.findActiveConfirmation(tenantId, deal.id);
+    let invoiceOk = false;
+    if (deal.customerId) {
+      const invoices = await this.prisma.invoice.findMany({
+        where: { tenantId, customerId: deal.customerId, deletedAt: null, status: "PAID" },
+      });
+      invoiceOk = invoices.some((item) => isQualifyingPaidInvoice(item));
+    }
+    const blockers = successEntryBlockers({
+      currentStageCode: current?.code,
+      hasActivationEvidence: await this.hasActivationEvidence(tenantId, deal.id, current?.code),
+      hasQualifyingPayment: Boolean(confirmation) || invoiceOk,
+    });
+    if (blockers.length) throw new HttpError(422, blockers);
+  }
+
+  private async tryAutoEnterSuccess(user: ServerAuthUser, dealId: string) {
+    const deal = await this.requireDeal(user.tenantId, dealId);
+    if (!deal.customerId) return;
+    const invoices = await this.prisma.invoice.findMany({
+      where: { tenantId: user.tenantId, customerId: deal.customerId, deletedAt: null, status: "PAID" },
+      orderBy: { paidAt: "asc" },
+    });
+    const qualifying = invoices.find((item) => isQualifyingPaidInvoice(item));
+    if (!qualifying) return;
+    await this.confirmPayment(user, dealId, { invoiceId: qualifying.id });
   }
 
   private buildDealWhere(tenantId: string, filters: DealFilters): Prisma.DealWhereInput {
@@ -427,6 +712,11 @@ class SalesFunnelService {
       stage: { select: { id: true, name: true, code: true, color: true, position: true } },
       ownerMember: {
         select: { id: true, displayName: true, user: { select: { name: true } } },
+      },
+      paymentConfirmations: {
+        where: { reversedAt: null },
+        orderBy: { createdAt: "desc" },
+        take: 1,
       },
     } satisfies Prisma.DealInclude;
   }
@@ -595,20 +885,43 @@ class SalesFunnelMetricsService {
     });
 
     const createdInPeriod = await this.prisma.deal.count({ where: baseWhere });
-    const activatedInPeriod = await this.prisma.dealHistory.count({
-      where: {
-        tenantId,
-        action: "stage_changed",
-        createdAt: {
-          ...(createdFrom ? { gte: createdFrom } : {}),
-          ...(createdTo ? { lte: createdTo } : {}),
-        },
-        newValue: {
-          path: ["stageCode"],
-          equals: SALES_FUNNEL_STAGE_CODES.ATIVACAO,
-        },
+    const historyWindow = {
+      tenantId,
+      action: "stage_changed" as const,
+      createdAt: {
+        ...(createdFrom ? { gte: createdFrom } : {}),
+        ...(createdTo ? { lte: createdTo } : {}),
       },
-    });
+    };
+    const [activatedInPeriod, successInPeriod, receivedRevenue] = await Promise.all([
+      this.prisma.dealHistory.findMany({
+        where: {
+          ...historyWindow,
+          newValue: { path: ["stageCode"], equals: SALES_FUNNEL_STAGE_CODES.ATIVACAO },
+        },
+        distinct: ["dealId"],
+        select: { dealId: true },
+      }).then((rows) => rows.length),
+      this.prisma.dealHistory.findMany({
+        where: {
+          ...historyWindow,
+          newValue: { path: ["stageCode"], equals: SALES_FUNNEL_STAGE_CODES.SUCESSO },
+        },
+        distinct: ["dealId"],
+        select: { dealId: true },
+      }).then((rows) => rows.length),
+      this.prisma.dealPaymentConfirmation.aggregate({
+        where: {
+          tenantId,
+          reversedAt: null,
+          paidAt: {
+            ...(createdFrom ? { gte: createdFrom } : {}),
+            ...(createdTo ? { lte: createdTo } : {}),
+          },
+        },
+        _sum: { amountCents: true },
+      }),
+    ]);
 
     const stageCounts = SALES_FUNNEL_STAGES.map((definition) => {
       const stage = stages.find((item) => item.code === definition.code);
@@ -639,11 +952,17 @@ class SalesFunnelMetricsService {
         lost: lostCount,
         createdInPeriod,
         activatedInPeriod,
+        successInPeriod,
         overdueNextAction,
         withoutOwner,
         estimatedValueCents: estimatedValue._sum.valueCents ?? 0,
+        receivedRevenueCents: receivedRevenue._sum.amountCents ?? 0,
         overallConversionRate:
           createdInPeriod > 0 ? activatedInPeriod / createdInPeriod : null,
+        successConversionRate:
+          createdInPeriod > 0 ? successInPeriod / createdInPeriod : null,
+        paymentAmongActivatedRate:
+          activatedInPeriod > 0 ? successInPeriod / activatedInPeriod : null,
       },
       byStage: stageCounts,
       stageConversion,

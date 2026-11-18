@@ -21,6 +21,7 @@ const requiredCodes = [
   "CONTRATO",
   "AGENDAMENTO",
   "ATIVACAO",
+  "SUCESSO",
 ];
 
 for (const code of requiredCodes) {

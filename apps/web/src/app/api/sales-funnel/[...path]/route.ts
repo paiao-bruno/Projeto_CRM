@@ -84,6 +84,14 @@ export async function POST(request: NextRequest, context: RouteContext) {
       return jsonData(await salesFunnelService.restoreDeal(user, path[1]));
     }
 
+    if (path.length === 3 && path[0] === "deals" && path[2] === "confirm-payment") {
+      return jsonData(await salesFunnelService.confirmPayment(user, path[1], body));
+    }
+
+    if (path.length === 3 && path[0] === "deals" && path[2] === "reverse-success") {
+      return jsonData(await salesFunnelService.reverseSuccess(user, path[1], body));
+    }
+
     throw new HttpError(404, "Rota não encontrada.");
   } catch (error) {
     return jsonError(error);

@@ -88,6 +88,10 @@ function createService() {
               isDefault: true,
             };
       },
+      async findUnique({ where }: { where: { id: string } }) {
+        if (where.id !== "pipeline-1") return null;
+        return { id: "pipeline-1", tenantId };
+      },
       async findFirstOrThrow({ where, include }: { where: { id: string }; include?: { stages: boolean } }) {
         return {
           id: where.id,
@@ -110,6 +114,16 @@ function createService() {
     pipelineStage: {
       async update() {
         return stages[0];
+      },
+      async create({ data }: { data: Record<string, unknown> }) {
+        const created = { id: `stage-${stages.length + 1}`, ...data };
+        stages.push(created as never);
+        return created;
+      },
+    },
+    dealPaymentConfirmation: {
+      async findFirst() {
+        return null;
       },
     },
     deal: {

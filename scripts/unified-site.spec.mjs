@@ -18,6 +18,7 @@ function walk(dir, acc = []) {
 
 const files = walk(src);
 const read = (path) => readFileSync(path, "utf8");
+const posixPath = (file) => relative(root, file).replaceAll("\\", "/");
 
 describe("site único (verificação estática)", () => {
   it("existe um único layout autenticado e nenhum grupo de rotas paralelo", () => {
@@ -34,14 +35,14 @@ describe("site único (verificação estática)", () => {
 
   it("nenhum arquivo do web depende do NestJS, da porta 4000, do modo web-only ou de iframe", () => {
     const forbidden = /localhost:4000|NEXT_PUBLIC_API_URL|NEXT_PUBLIC_WEB_ONLY_MODE|isWebOnlyMode|apps\/api|NestJS|<iframe|API desativada|Voltar aos módulos/i;
-    const offenders = files.filter((file) => forbidden.test(read(file))).map((file) => relative(root, file));
+    const offenders = files.filter((file) => forbidden.test(read(file))).map(posixPath);
     assert.deepEqual(offenders, []);
   });
 
   it("SGP só aparece como aviso de descontinuação na tela de Integrações", () => {
     const offenders = files
       .filter((file) => /\bSGP\b/i.test(read(file)))
-      .map((file) => relative(root, file))
+      .map(posixPath)
       .filter((file) => file !== "apps/web/src/app/(app)/integrations/page.tsx");
     assert.deepEqual(offenders, []);
   });

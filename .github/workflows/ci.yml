@@ -37,6 +37,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Prisma Client
+        run: npm run prisma:generate
       - name: Typecheck (web)
         run: npm run typecheck
       - name: Typecheck (API legado)
@@ -77,6 +79,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Prisma Client
+        run: npm run prisma:generate
       - name: Typecheck (web)
         run: npm run typecheck
       - name: Testes unitarios web e site unico

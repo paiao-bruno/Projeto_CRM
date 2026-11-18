@@ -9,15 +9,15 @@ export const BRAND = {
 } as const;
 
 export const THEME = {
-  background: "#1E2024",
-  surface: "#32363B",
-  text: "#F1F3F5",
-  textMuted: "#A4ADB8",
-  primary: "#2271B1",
-  secondary: "#D4A04D",
-  border: "#454B52",
-  success: "#46A775",
-  danger: "#D96B70",
+  background: "#081C2F",
+  surface: "#102A43",
+  text: "#F8F5E6",
+  textMuted: "#C4BFA8",
+  primary: "#D4AF37",
+  secondary: "#243B53",
+  border: "#243B53",
+  success: "#3D7A5A",
+  danger: "#C45B5B",
 } as const;
 
 export type ThemeToken = keyof typeof THEME;
