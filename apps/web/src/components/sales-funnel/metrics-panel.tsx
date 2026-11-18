@@ -2,13 +2,15 @@
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SalesFunnelMetrics } from "@/lib/types";
-import { formatCurrency, formatPercent } from "@/lib/sales-funnel-utils";
+import { formatCurrency } from "@/lib/sales-funnel-utils";
+import { formatConversion } from "@/lib/payment-qualification";
 import { FunnelVisualization } from "./funnel-visualization";
 import { SegmentDonutChart } from "./segment-donut-chart";
 
 type MetricsPanelProps = {
   metrics: SalesFunnelMetrics | null;
   loading?: boolean;
+  onSelectStage?: (stageCode: string) => void;
 };
 
 function MetricCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
@@ -25,7 +27,7 @@ function MetricCard({ label, value, hint }: { label: string; value: string; hint
   );
 }
 
-export function MetricsPanel({ metrics, loading = false }: MetricsPanelProps) {
+export function MetricsPanel({ metrics, loading = false, onSelectStage }: MetricsPanelProps) {
   if (loading) {
     return <p className="text-sm text-slate-400">Carregando indicadores...</p>;
   }
@@ -42,12 +44,26 @@ export function MetricsPanel({ metrics, loading = false }: MetricsPanelProps) {
     <div className="space-y-6">
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="Oportunidades abertas" value={String(metrics.totals.open)} />
-        <MetricCard label="Ativadas" value={String(metrics.totals.won)} />
+        <MetricCard label="Ativadas (status ganho)" value={String(metrics.totals.won)} />
         <MetricCard label="Perdidas" value={String(metrics.totals.lost)} />
         <MetricCard
-          label="Conversão geral"
-          value={formatPercent(metrics.totals.overallConversionRate)}
+          label="Conversão em ativação"
+          value={formatConversion(metrics.totals.overallConversionRate)}
           hint={metrics.definitions.overallConversion}
+        />
+        <MetricCard
+          label="Conversão em sucesso"
+          value={formatConversion(metrics.totals.successConversionRate)}
+          hint={metrics.definitions.successConversion}
+        />
+        <MetricCard
+          label="Pagamento entre ativados"
+          value={formatConversion(metrics.totals.paymentAmongActivatedRate)}
+          hint={metrics.definitions.paymentAmongActivated}
+        />
+        <MetricCard
+          label="Receita recebida (confirmações válidas)"
+          value={formatCurrency(metrics.totals.receivedRevenueCents ?? 0)}
         />
         <MetricCard
           label="Valor estimado total"
@@ -67,7 +83,7 @@ export function MetricsPanel({ metrics, loading = false }: MetricsPanelProps) {
         />
       </div>
 
-      <FunnelVisualization metrics={metrics} />
+      <FunnelVisualization metrics={metrics} onSelectStage={onSelectStage} />
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <SegmentDonutChart title="Meio de entrada" items={metrics.segments.entrySource} />

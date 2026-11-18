@@ -115,6 +115,8 @@ export default function SalesFunnelPage() {
   const [lostDeal, setLostDeal] = useState<DealSummary | null>(null);
   const [lostError, setLostError] = useState("");
   const [lostSaving, setLostSaving] = useState(false);
+  const [paymentError, setPaymentError] = useState("");
+  const [paymentSaving, setPaymentSaving] = useState(false);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -123,7 +125,8 @@ export default function SalesFunnelPage() {
 
   const defaultStageCode = useMemo(() => {
     if (!defaultStageId || !board) return undefined;
-    return board.stages.find((stage) => stage.id === defaultStageId)?.code ?? undefined;
+    const code = board.stages.find((stage) => stage.id === defaultStageId)?.code ?? undefined;
+    return code === "SUCESSO" ? "ATIVACAO" : code;
   }, [board, defaultStageId]);
 
   const loadBoard = useCallback(async () => {
@@ -390,8 +393,9 @@ export default function SalesFunnelPage() {
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           {[
             { label: "Abertas", value: String(metrics.totals.open) },
-            { label: "Ativadas", value: String(metrics.totals.won) },
-            { label: "Conversão", value: formatPercent(metrics.totals.overallConversionRate) },
+            { label: "Ativadas", value: String(metrics.totals.activatedInPeriod) },
+            { label: "Sucessos", value: String(metrics.totals.successInPeriod ?? 0) },
+            { label: "Conversão em ativação", value: formatPercent(metrics.totals.overallConversionRate) === "—" ? "sem base" : formatPercent(metrics.totals.overallConversionRate) },
             { label: "Valor estimado", value: formatCurrency(metrics.totals.estimatedValueCents) },
           ].map((item) => (
             <div
@@ -406,7 +410,14 @@ export default function SalesFunnelPage() {
       ) : null}
 
       {view === "metrics" ? (
-        <MetricsPanel metrics={metrics} loading={metricsLoading} />
+        <MetricsPanel
+          metrics={metrics}
+          loading={metricsLoading}
+          onSelectStage={(stageCode) => {
+            setFilters((current) => ({ ...current, stageCode }));
+            setView("board");
+          }}
+        />
       ) : loading ? (
         <p className="text-sm text-slate-400">Carregando quadro...</p>
       ) : !board || board.stages.every((stage) => stage.deals.length === 0) ? (
@@ -484,6 +495,46 @@ export default function SalesFunnelPage() {
         onClose={() => setDetailOpen(false)}
         onEdit={openEdit}
         onRestore={(deal) => void handleRestore(deal)}
+        paymentError={paymentError}
+        paymentSaving={paymentSaving}
+        onConfirmPayment={async (payload) => {
+          if (!token || !detailDeal) return;
+          setPaymentSaving(true);
+          setPaymentError("");
+          try {
+            const updated = await api.post<DealDetail>(
+              `/sales-funnel/deals/${detailDeal.id}/confirm-payment`,
+              payload,
+              token,
+            );
+            setDetailDeal(updated);
+            await Promise.all([loadBoard(), loadMetrics()]);
+          } catch (err) {
+            setPaymentError(err instanceof Error ? err.message : "Não foi possível confirmar o pagamento.");
+            throw err;
+          } finally {
+            setPaymentSaving(false);
+          }
+        }}
+        onReverseSuccess={async (reason) => {
+          if (!token || !detailDeal) return;
+          setPaymentSaving(true);
+          setPaymentError("");
+          try {
+            const updated = await api.post<DealDetail>(
+              `/sales-funnel/deals/${detailDeal.id}/reverse-success`,
+              { reason },
+              token,
+            );
+            setDetailDeal(updated);
+            await Promise.all([loadBoard(), loadMetrics()]);
+          } catch (err) {
+            setPaymentError(err instanceof Error ? err.message : "Não foi possível reverter o sucesso.");
+            throw err;
+          } finally {
+            setPaymentSaving(false);
+          }
+        }}
       />
 
       <MarkLostDialog

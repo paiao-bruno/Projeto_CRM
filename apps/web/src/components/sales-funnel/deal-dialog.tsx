@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { DealDetail, DealPriority, DealSummary, TenantMemberSummary } from "@/lib/types";
-import { SALES_FUNNEL_STAGES } from "@/lib/sales-funnel.constants";
+import { SALES_FUNNEL_STAGE_CODES, SALES_FUNNEL_STAGES } from "@/lib/sales-funnel.constants";
 import { ownerLabel, priorityLabels } from "@/lib/sales-funnel-utils";
 
 export type DealFormValues = {
@@ -264,7 +264,7 @@ export function DealFormDialog({
                   value={form.stageCode}
                   onChange={(event) => setForm({ ...form, stageCode: event.target.value })}
                 >
-                  {SALES_FUNNEL_STAGES.map((stage) => (
+                  {SALES_FUNNEL_STAGES.filter((stage) => stage.code !== SALES_FUNNEL_STAGE_CODES.SUCESSO).map((stage) => (
                     <option key={stage.code} value={stage.code}>
                       {stage.name}
                     </option>
@@ -322,6 +322,15 @@ type DealDetailDialogProps = {
   onClose: () => void;
   onEdit: (deal: DealSummary) => void;
   onRestore?: (deal: DealSummary) => void;
+  onConfirmPayment?: (payload: {
+    amountCents: number;
+    paidAt: string;
+    reference: string;
+    notes: string;
+  }) => Promise<void>;
+  onReverseSuccess?: (reason: string) => Promise<void>;
+  paymentError?: string;
+  paymentSaving?: boolean;
 };
 
 export function DealDetailDialog({
@@ -331,7 +340,28 @@ export function DealDetailDialog({
   onClose,
   onEdit,
   onRestore,
+  onConfirmPayment,
+  onReverseSuccess,
+  paymentError = "",
+  paymentSaving = false,
 }: DealDetailDialogProps) {
+  const [amount, setAmount] = useState("");
+  const [paidAt, setPaidAt] = useState("");
+  const [reference, setReference] = useState("");
+  const [notes, setNotes] = useState("");
+  const [reverseReason, setReverseReason] = useState("");
+
+  useEffect(() => {
+    if (open) {
+      setAmount("");
+      setPaidAt("");
+      setReference("");
+      setNotes("");
+      setReverseReason("");
+    }
+  }, [open, deal?.id]);
+
+  const activePayment = deal?.paymentConfirmations?.find((item) => !item.reversedAt);
   return (
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
       <DialogContent className="max-w-3xl">
@@ -370,6 +400,72 @@ export function DealDetailDialog({
                 <p className="whitespace-pre-wrap text-sm text-slate-300">{deal.notes}</p>
               </div>
             ) : null}
+
+            <div className="rounded-2xl border border-slate-800 p-4">
+              <h3 className="mb-2 text-sm font-semibold text-white">Sucesso — primeiro pagamento confirmado</h3>
+              <p className="mb-3 text-xs text-slate-400">
+                Confirmação local e auditável. Não consulta banco nem liquida cobrança externa. Taxa de instalação não qualifica.
+              </p>
+              {activePayment ? (
+                <div className="space-y-2 text-sm">
+                  <p>Origem: {activePayment.source === "MANUAL" ? "manual autorizada" : "fatura paga"}</p>
+                  <p>Valor: {(activePayment.amountCents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</p>
+                  <p>Pago em: {new Date(activePayment.paidAt).toLocaleString("pt-BR")}</p>
+                  <p>Referência: {activePayment.reference ?? "—"}</p>
+                  {onReverseSuccess ? (
+                    <form
+                      className="space-y-2 pt-2"
+                      onSubmit={async (event) => {
+                        event.preventDefault();
+                        await onReverseSuccess(reverseReason.trim());
+                      }}
+                    >
+                      <Label htmlFor="reverseReason">Motivo da correção/estorno</Label>
+                      <Textarea id="reverseReason" value={reverseReason} onChange={(event) => setReverseReason(event.target.value)} />
+                      <Button type="submit" variant="secondary" disabled={paymentSaving || !reverseReason.trim()}>
+                        Retirar condição atual de sucesso
+                      </Button>
+                    </form>
+                  ) : null}
+                </div>
+              ) : onConfirmPayment ? (
+                <form
+                  className="grid gap-3 md:grid-cols-2"
+                  onSubmit={async (event) => {
+                    event.preventDefault();
+                    await onConfirmPayment({
+                      amountCents: Math.round(Number(amount.replace(",", ".")) * 100),
+                      paidAt: paidAt ? new Date(paidAt).toISOString() : new Date().toISOString(),
+                      reference,
+                      notes,
+                    });
+                  }}
+                >
+                  <div>
+                    <Label htmlFor="payAmount">Valor pago (R$)</Label>
+                    <Input id="payAmount" required inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} />
+                  </div>
+                  <div>
+                    <Label htmlFor="payAt">Data do pagamento</Label>
+                    <Input id="payAt" type="datetime-local" value={paidAt} onChange={(event) => setPaidAt(event.target.value)} />
+                  </div>
+                  <div className="md:col-span-2">
+                    <Label htmlFor="payRef">Referência (protocolo, recibo ou documento)</Label>
+                    <Input id="payRef" required value={reference} onChange={(event) => setReference(event.target.value)} />
+                  </div>
+                  <div className="md:col-span-2">
+                    <Label htmlFor="payNotes">Observação da verificação</Label>
+                    <Textarea id="payNotes" value={notes} onChange={(event) => setNotes(event.target.value)} />
+                  </div>
+                  <div className="md:col-span-2">
+                    <Button type="submit" disabled={paymentSaving}>
+                      {paymentSaving ? "Registrando..." : "Registrar confirmação manual"}
+                    </Button>
+                  </div>
+                </form>
+              ) : null}
+              {paymentError ? <p className="mt-2 text-sm text-red-400">{paymentError}</p> : null}
+            </div>
 
             {deal.history && deal.history.length > 0 ? (
               <div>

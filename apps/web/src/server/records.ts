@@ -291,6 +291,12 @@ export class RecordsService {
       });
       await recordAudit(tx, user, "invoice.created", "Invoice", invoice.id, { customerId, amountCents });
       return invoice;
+    }).then(async (invoice) => {
+      if (invoice.status === "PAID") {
+        const { createSalesFunnelService } = await import("./sales-funnel");
+        await createSalesFunnelService().tryAdvanceFromPaidInvoice(user, invoice).catch(() => undefined);
+      }
+      return invoice;
     });
   }
 
@@ -310,6 +316,12 @@ export class RecordsService {
     return this.prisma.$transaction(async (tx) => {
       const updated = await tx.invoice.update({ where: { id }, data });
       await recordAudit(tx, user, "invoice.updated", "Invoice", id, { fields: Object.keys(data) });
+      return updated;
+    }).then(async (updated) => {
+      if (updated.status === "PAID") {
+        const { createSalesFunnelService } = await import("./sales-funnel");
+        await createSalesFunnelService().tryAdvanceFromPaidInvoice(user, updated).catch(() => undefined);
+      }
       return updated;
     });
   }

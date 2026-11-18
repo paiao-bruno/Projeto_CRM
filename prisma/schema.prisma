@@ -367,6 +367,7 @@ model Tenant {
   pipelineStages      PipelineStage[]
   deals               Deal[]
   dealHistory         DealHistory[]
+  dealPaymentConfirmations DealPaymentConfirmation[]
   campaigns           Campaign[]
   campaignRecipients  CampaignRecipient[]
   campaignEvents      CampaignEvent[]
@@ -529,6 +530,8 @@ model TenantMember {
   lostDeals             Deal[]                  @relation("DealLostBy")
   archivedDeals         Deal[]                  @relation("DealArchivedBy")
   dealHistory           DealHistory[]
+  paymentConfirmations  DealPaymentConfirmation[] @relation("PaymentConfirmedBy")
+  paymentReversals      DealPaymentConfirmation[] @relation("PaymentReversedBy")
   assignedEvents        ScheduleEvent[]         @relation("EventAssignee")
   assignedTasks         Task[]                  @relation("TaskAssignee")
   integrationSyncRuns   IntegrationSyncRun[]
@@ -1216,6 +1219,7 @@ model Invoice {
   tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   customer Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
   contract Contract? @relation(fields: [contractId], references: [id], onDelete: SetNull)
+  paymentConfirmations DealPaymentConfirmation[]
 
   @@unique([tenantId, externalId])
   @@index([tenantId, customerId])
@@ -1384,6 +1388,7 @@ model Deal {
   lostByMember     TenantMember? @relation("DealLostBy", fields: [lostByMemberId], references: [id], onDelete: SetNull)
   archivedByMember TenantMember? @relation("DealArchivedBy", fields: [archivedByMemberId], references: [id], onDelete: SetNull)
   history          DealHistory[]
+  paymentConfirmations DealPaymentConfirmation[]
 
   @@index([tenantId, status])
   @@index([tenantId, stageId])
@@ -1414,6 +1419,33 @@ model DealHistory {
 
   @@index([tenantId, dealId, createdAt])
   @@index([tenantId, action, createdAt])
+}
+
+model DealPaymentConfirmation {
+  id                 String    @id @default(uuid()) @db.Uuid
+  tenantId           String    @db.Uuid
+  dealId             String    @db.Uuid
+  invoiceId          String?   @db.Uuid
+  source             String
+  amountCents        Int
+  paidAt             DateTime
+  reference          String?
+  notes              String?   @db.Text
+  actorMemberId      String?   @db.Uuid
+  reversedAt         DateTime?
+  reversedByMemberId String?   @db.Uuid
+  reverseReason      String?
+  createdAt          DateTime  @default(now())
+
+  tenant     Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  deal       Deal          @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  invoice    Invoice?      @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  actor      TenantMember? @relation("PaymentConfirmedBy", fields: [actorMemberId], references: [id], onDelete: SetNull)
+  reversedBy TenantMember? @relation("PaymentReversedBy", fields: [reversedByMemberId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, dealId, createdAt])
+  @@index([tenantId, invoiceId])
+  @@index([dealId, reversedAt])
 }
 
 model Campaign {

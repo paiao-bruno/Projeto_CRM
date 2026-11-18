@@ -172,8 +172,23 @@ export type DealHistoryEntry = {
   } | null;
 };
 
+export type DealPaymentConfirmation = {
+  id: string;
+  source: string;
+  amountCents: number;
+  paidAt: string;
+  reference?: string | null;
+  notes?: string | null;
+  reversedAt?: string | null;
+  reverseReason?: string | null;
+  invoiceId?: string | null;
+  createdAt: string;
+};
+
 export type DealDetail = DealSummary & {
   history?: DealHistoryEntry[];
+  paymentConfirmations?: DealPaymentConfirmation[];
+  customerId?: string | null;
 };
 
 export type SalesFunnelBoard = {
@@ -184,7 +199,10 @@ export type SalesFunnelBoard = {
 export type SalesFunnelMetrics = {
   definitions: {
     overallConversion: string;
+    successConversion?: string;
+    paymentAmongActivated?: string;
     stageConversion: string;
+    funnelGeometry?: string;
   };
   totals: {
     open: number;
@@ -192,10 +210,14 @@ export type SalesFunnelMetrics = {
     lost: number;
     createdInPeriod: number;
     activatedInPeriod: number;
+    successInPeriod?: number;
     overdueNextAction: number;
     withoutOwner: number;
     estimatedValueCents: number;
+    receivedRevenueCents?: number;
     overallConversionRate: number | null;
+    successConversionRate?: number | null;
+    paymentAmongActivatedRate?: number | null;
   };
   byStage: Array<{ code: string; name: string; count: number }>;
   stageConversion: Array<{ from: string; to: string; rate: number | null }>;

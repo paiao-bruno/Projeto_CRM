@@ -118,7 +118,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 href={item.href}
                 aria-current={active ? "page" : undefined}
                 className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold"
-                style={active ? { background: "var(--vx-selected)", color: "var(--vx-primary-light)" } : { color: "var(--vx-muted)" }}
+                style={active ? { background: "var(--vx-selected)", color: "var(--vx-primary)" } : { color: "var(--vx-muted)" }}
               >
                 <Icon size={17} /> {item.label}
               </Link>
@@ -173,7 +173,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 href={item.href}
                 aria-current={active ? "page" : undefined}
                 className="whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-semibold"
-                style={active ? { background: "var(--vx-selected)", color: "var(--vx-primary-light)" } : { color: "var(--vx-muted)" }}
+                style={active ? { background: "var(--vx-selected)", color: "var(--vx-primary)" } : { color: "var(--vx-muted)" }}
               >
                 {item.label}
               </Link>
