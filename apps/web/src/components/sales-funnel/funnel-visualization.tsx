@@ -3,6 +3,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SalesFunnelMetrics } from "@/lib/types";
 import { SALES_FUNNEL_METRICS_DOC, SALES_FUNNEL_STAGES } from "@/lib/sales-funnel.constants";
+import { salesFunnelStageSurface } from "@/lib/sales-funnel-stage-surfaces";
 import { formatConversion } from "@/lib/payment-qualification";
 import { formatPercent } from "@/lib/sales-funnel-utils";
 
@@ -57,13 +58,17 @@ export function FunnelVisualization({ metrics, onSelectStage }: FunnelVisualizat
                   `${toX(bottomX)},${y + BAND_HEIGHT}`,
                 ].join(" ");
                 const label = `${definition.name}${definition.description ? ` — ${definition.description}` : ""}`;
+                const surface = salesFunnelStageSurface(definition.code);
+                const fill = surface?.fill ?? definition.color;
+                const stroke = surface?.stroke ?? definition.color;
+                const labelFill = surface?.text ?? "var(--vx-text)";
 
                 return (
                   <g key={definition.code}>
                     <polygon
                       points={points}
-                      fill={`${definition.color}55`}
-                      stroke={definition.color}
+                      fill={fill}
+                      stroke={stroke}
                       strokeWidth="1.5"
                       className={onSelectStage ? "cursor-pointer" : undefined}
                       onClick={() => onSelectStage?.(definition.code)}
@@ -72,7 +77,7 @@ export function FunnelVisualization({ metrics, onSelectStage }: FunnelVisualizat
                       x={viewWidth / 2}
                       y={y + BAND_HEIGHT / 2 + 4}
                       textAnchor="middle"
-                      fill="var(--vx-text)"
+                      fill={labelFill}
                       fontSize={index >= 5 ? 12 : 14}
                       fontWeight={700}
                       className={onSelectStage ? "cursor-pointer" : undefined}
