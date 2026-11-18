@@ -23,6 +23,7 @@
     "db:migrate:status": "prisma migrate status --schema prisma/schema.prisma",
     "db:migrate:reset": "prisma migrate reset --schema prisma/schema.prisma --force",
     "prisma:generate": "prisma generate --schema prisma/schema.prisma",
+    "postinstall": "prisma generate --schema prisma/schema.prisma",
     "prisma:validate": "prisma validate --schema prisma/schema.prisma",
     "prisma:validate:migrations": "node scripts/validate-prisma.mjs",
     "prisma:format": "prisma format --schema prisma/schema.prisma",
