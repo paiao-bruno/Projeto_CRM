@@ -4,7 +4,8 @@ import {
 } from "./sales-funnel.constants";
 
 /**
- * Paleta de apresentação da jornada comercial (gráfico + cartões do funil).
+ * Paleta de apresentação da jornada comercial.
+ * O gráfico usa `fill`/`text`. Cartões e a linha superior da coluna usam `stroke`.
  * Não persiste no banco e não substitui os tokens globais do tema.
  */
 export const SALES_FUNNEL_STAGE_FILL = {
