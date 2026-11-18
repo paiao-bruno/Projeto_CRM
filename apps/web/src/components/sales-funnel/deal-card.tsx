@@ -13,7 +13,7 @@ import {
   priorityLabels,
   priorityVariant,
 } from "@/lib/sales-funnel-utils";
-import { salesFunnelStageSurface } from "@/lib/sales-funnel-stage-surfaces";
+import { salesFunnelStageAccent } from "@/lib/sales-funnel-stage-surfaces";
 import { cn } from "@/lib/utils";
 
 type DealCardProps = {
@@ -44,7 +44,7 @@ export function DealCard({
   };
 
   const overdue = isOverdue(deal);
-  const stageAccent = salesFunnelStageSurface(deal.stage.code)?.stroke;
+  const stageAccent = salesFunnelStageAccent(deal.stage.code, deal.stage.name);
 
   return (
     <article
@@ -54,13 +54,15 @@ export function DealCard({
         ...(stageAccent
           ? {
               backgroundColor: "var(--vx-page)",
+              borderWidth: 1,
+              borderStyle: "solid",
               borderColor: stageAccent,
             }
           : {}),
       }}
       className={cn(
         "rounded-2xl border p-3 shadow-sm transition",
-        stageAccent ? "border-solid" : "border-slate-800 bg-slate-900/80",
+        stageAccent ? undefined : "border-slate-800 bg-slate-900/80",
         (isDragging || dragging) && "opacity-60 ring-2 ring-emerald-400/40",
       )}
       data-deal-id={deal.id}

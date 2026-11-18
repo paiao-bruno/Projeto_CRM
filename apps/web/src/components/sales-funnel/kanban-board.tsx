@@ -8,7 +8,7 @@ import {
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DealSummary, DealStage } from "@/lib/types";
-import { salesFunnelStageSurface } from "@/lib/sales-funnel-stage-surfaces";
+import { salesFunnelStageAccent } from "@/lib/sales-funnel-stage-surfaces";
 import { DealCard } from "./deal-card";
 
 type KanbanColumnProps = {
@@ -34,6 +34,7 @@ function KanbanColumn({
     id: stage.id,
     data: { type: "stage", stage },
   });
+  const stageAccent = salesFunnelStageAccent(stage.code, stage.name);
 
   return (
     <section
@@ -45,10 +46,13 @@ function KanbanColumn({
     >
       <header
         className="flex items-center justify-between gap-2 border-b border-slate-800 px-4 py-3"
-        style={{
-          borderTopColor: salesFunnelStageSurface(stage.code)?.stroke ?? stage.color ?? undefined,
-          borderTopWidth: 3,
-        }}
+        style={
+          stageAccent
+            ? { borderTop: `3px solid ${stageAccent}` }
+            : stage.color
+              ? { borderTop: `3px solid ${stage.color}` }
+              : undefined
+        }
       >
         <div>
           <h2 className="font-semibold text-white">{stage.name}</h2>

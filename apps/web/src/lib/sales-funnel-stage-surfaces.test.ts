@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import { SALES_FUNNEL_STAGE_CODES, SALES_FUNNEL_STAGES } from "./sales-funnel.constants";
 import {
   SALES_FUNNEL_STAGE_FILL,
+  salesFunnelStageAccent,
   salesFunnelStageSurface,
 } from "./sales-funnel-stage-surfaces";
 
@@ -47,6 +48,10 @@ describe("superfícies visuais das etapas do funil", () => {
     assert.equal(salesFunnelStageSurface("Prospecção"), null);
     assert.equal(salesFunnelStageSurface("QUALIFICACAO"), null);
     assert.equal(salesFunnelStageSurface(null), null);
+    assert.equal(
+      salesFunnelStageAccent(null, "Prospecção"),
+      SALES_FUNNEL_STAGE_FILL[SALES_FUNNEL_STAGE_CODES.PROSPECCAO],
+    );
   });
 
   it("mantém contraste mínimo de 4,5:1 entre preenchimento e texto", () => {

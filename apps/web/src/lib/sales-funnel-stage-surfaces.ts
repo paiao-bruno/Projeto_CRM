@@ -1,11 +1,13 @@
 import {
   SALES_FUNNEL_STAGE_CODES,
+  SALES_FUNNEL_STAGES,
   type SalesFunnelStageCode,
 } from "./sales-funnel.constants";
 
 /**
  * Paleta de apresentação da jornada comercial.
- * O gráfico usa `fill`/`text`. Cartões e a linha superior da coluna usam `stroke`.
+ * Um hexadecimal por código estável alimenta três aplicações independentes:
+ * preenchimento da faixa, borda do cartão e linha superior da coluna.
  * Não persiste no banco e não substitui os tokens globais do tema.
  */
 export const SALES_FUNNEL_STAGE_FILL = {
@@ -34,11 +36,29 @@ const TEXT_ON_FILL = {
   [SALES_FUNNEL_STAGE_CODES.SUCESSO]: "#000000",
 } as const satisfies Record<SalesFunnelStageCode, SalesFunnelStageSurface["text"]>;
 
-export function salesFunnelStageSurface(
-  code: string | null | undefined,
-): SalesFunnelStageSurface | null {
-  if (!code || !(code in SALES_FUNNEL_STAGE_FILL)) return null;
-  const stageCode = code as SalesFunnelStageCode;
+function surfaceFor(stageCode: SalesFunnelStageCode): SalesFunnelStageSurface {
   const fill = SALES_FUNNEL_STAGE_FILL[stageCode];
   return { fill, text: TEXT_ON_FILL[stageCode], stroke: fill };
+}
+
+export function salesFunnelStageSurface(
+  code: string | null | undefined,
+  canonicalName?: string | null,
+): SalesFunnelStageSurface | null {
+  if (code && code in SALES_FUNNEL_STAGE_FILL) {
+    return surfaceFor(code as SalesFunnelStageCode);
+  }
+  if (canonicalName) {
+    const match = SALES_FUNNEL_STAGES.find((stage) => stage.name === canonicalName);
+    if (match) return surfaceFor(match.code);
+  }
+  return null;
+}
+
+/** Hexadecimal da etapa para borda do cartão, linha da coluna ou preenchimento da faixa. */
+export function salesFunnelStageAccent(
+  code?: string | null,
+  canonicalName?: string | null,
+): SalesFunnelStageSurface["stroke"] | null {
+  return salesFunnelStageSurface(code, canonicalName)?.stroke ?? null;
 }
