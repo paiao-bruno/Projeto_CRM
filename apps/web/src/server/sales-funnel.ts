@@ -5,7 +5,7 @@ import {
   SALES_FUNNEL_STAGES,
   SALES_FUNNEL_STAGE_CODES,
 } from "../../../../shared/sales-funnel.constants";
-import { isQualifyingPaidInvoice, successEntryBlockers } from "@/lib/payment-qualification";
+import { isQualifyingPaidInvoice, successEntryBlockers } from "../lib/payment-qualification";
 import type { ServerAuthUser } from "./auth";
 import { HttpError } from "./http";
 import { getPrisma } from "./prisma";
