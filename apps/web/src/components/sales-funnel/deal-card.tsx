@@ -13,7 +13,7 @@ import {
   priorityLabels,
   priorityVariant,
 } from "@/lib/sales-funnel-utils";
-import { salesFunnelStageSurface } from "@/lib/sales-funnel-stage-surfaces";
+import { salesFunnelStageAccent } from "@/lib/sales-funnel-stage-surfaces";
 import { cn } from "@/lib/utils";
 
 type DealCardProps = {
@@ -44,38 +44,33 @@ export function DealCard({
   };
 
   const overdue = isOverdue(deal);
-  const surface = salesFunnelStageSurface(deal.stage.code);
+  const stageAccent = salesFunnelStageAccent(deal.stage.code, deal.stage.name);
 
   return (
     <article
       ref={setNodeRef}
       style={{
         ...style,
-        ...(surface
+        ...(stageAccent
           ? {
-              backgroundColor: surface.fill,
-              borderColor: overdue ? "#B45309" : surface.stroke,
-              color: surface.text,
+              backgroundColor: "var(--vx-page)",
+              borderWidth: 1,
+              borderStyle: "solid",
+              borderColor: stageAccent,
             }
           : {}),
       }}
       className={cn(
         "rounded-2xl border p-3 shadow-sm transition",
-        surface ? "border-black/10" : "border-slate-800 bg-slate-900/80",
-        (isDragging || dragging) && (surface ? "opacity-80 ring-2 ring-current" : "opacity-60 ring-2 ring-emerald-400/40"),
-        overdue && !surface && "border-amber-500/40",
+        stageAccent ? undefined : "border-slate-800 bg-slate-900/80",
+        (isDragging || dragging) && "opacity-60 ring-2 ring-emerald-400/40",
       )}
       data-deal-id={deal.id}
     >
       <div className="mb-2 flex items-start gap-2">
         <button
           type="button"
-          className={cn(
-            "mt-0.5 rounded p-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2",
-            surface
-              ? "text-current hover:bg-black/10 focus-visible:outline-current"
-              : "text-slate-500 hover:bg-slate-800 hover:text-slate-300",
-          )}
+          className="mt-0.5 rounded p-1 text-slate-500 hover:bg-slate-800 hover:text-slate-300"
           aria-label="Arrastar oportunidade"
           {...attributes}
           {...listeners}
@@ -84,23 +79,14 @@ export function DealCard({
         </button>
         <button
           type="button"
-          className="flex-1 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-current"
+          className="flex-1 text-left"
           onClick={() => onOpen(deal)}
         >
-          <h3 className={cn("font-semibold", surface ? "text-current" : "text-white")}>{deal.title}</h3>
-          <p className={cn("mt-1 text-xs", surface ? "text-current" : "text-slate-400")}>
-            {ownerLabel(deal)}
-          </p>
+          <h3 className="font-semibold text-white">{deal.title}</h3>
+          <p className="mt-1 text-xs text-slate-400">{ownerLabel(deal)}</p>
         </button>
         <details className="relative">
-          <summary
-            className={cn(
-              "list-none cursor-pointer rounded p-1 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2",
-              surface
-                ? "text-current hover:bg-black/10 focus-visible:outline-current"
-                : "text-slate-500 hover:bg-slate-800 hover:text-white",
-            )}
-          >
+          <summary className="list-none cursor-pointer rounded p-1 text-slate-500 hover:bg-slate-800 hover:text-white">
             <MoreHorizontal size={16} />
           </summary>
           <div className="absolute right-0 z-20 mt-1 min-w-44 rounded-xl border border-slate-800 bg-slate-950 p-1 shadow-xl">
@@ -143,17 +129,10 @@ export function DealCard({
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant={priorityVariant[deal.priority]}>{priorityLabels[deal.priority]}</Badge>
         {deal.entrySource ? (
-          <span className={cn("text-xs", surface ? "text-current" : "text-slate-500")}>
-            {deal.entrySource}
-          </span>
+          <span className="text-xs text-slate-500">{deal.entrySource}</span>
         ) : null}
         {deal.valueCents > 0 ? (
-          <span
-            className={cn(
-              "text-xs font-medium",
-              surface ? "text-current" : "text-emerald-300",
-            )}
-          >
+          <span className="text-xs font-medium text-emerald-300">
             {formatCurrency(deal.valueCents)}
           </span>
         ) : null}
@@ -179,12 +158,7 @@ export function DealCard({
       ) : null}
 
       <div className="mt-3 flex justify-end">
-        <Button
-          size="sm"
-          variant="ghost"
-          className={cn("h-7 px-2 text-xs", surface && "text-current hover:bg-black/10 hover:text-current")}
-          onClick={() => onOpen(deal)}
-        >
+        <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" onClick={() => onOpen(deal)}>
           Abrir
         </Button>
       </div>

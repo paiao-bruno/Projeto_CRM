@@ -58,9 +58,9 @@ export function FunnelVisualization({ metrics, onSelectStage }: FunnelVisualizat
                   `${toX(bottomX)},${y + BAND_HEIGHT}`,
                 ].join(" ");
                 const label = `${definition.name}${definition.description ? ` — ${definition.description}` : ""}`;
-                const surface = salesFunnelStageSurface(definition.code);
+                const surface = salesFunnelStageSurface(definition.code, definition.name);
                 const fill = surface?.fill ?? definition.color;
-                const stroke = surface?.stroke ?? definition.color;
+                const stroke = surface?.stroke ?? fill;
                 const labelFill = surface?.text ?? "var(--vx-text)";
 
                 return (
@@ -68,7 +68,9 @@ export function FunnelVisualization({ metrics, onSelectStage }: FunnelVisualizat
                     <polygon
                       points={points}
                       fill={fill}
+                      fillOpacity={1}
                       stroke={stroke}
+                      strokeOpacity={1}
                       strokeWidth="1.5"
                       className={onSelectStage ? "cursor-pointer" : undefined}
                       onClick={() => onSelectStage?.(definition.code)}
