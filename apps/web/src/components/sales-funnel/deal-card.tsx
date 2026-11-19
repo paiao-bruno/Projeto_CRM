@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { CalendarClock, GripVertical, MoreHorizontal } from "lucide-react";
@@ -15,6 +16,8 @@ import {
 } from "@/lib/sales-funnel-utils";
 import { salesFunnelStageAccent } from "@/lib/sales-funnel-stage-surfaces";
 import { cn } from "@/lib/utils";
+import { CampaignSelect } from "@/components/campaigns/campaign-select";
+import { useAuth } from "@/components/auth-provider";
 
 type DealCardProps = {
   deal: DealSummary;
@@ -23,6 +26,8 @@ type DealCardProps = {
   onMoveToStage: (deal: DealSummary, stageId: string) => void;
   onMarkLost: (deal: DealSummary) => void;
   onArchive: (deal: DealSummary) => void;
+  onChangeCampaign?: (deal: DealSummary, campaignId: string | null) => Promise<void>;
+  campaignSaving?: boolean;
   dragging?: boolean;
 };
 
@@ -33,8 +38,13 @@ export function DealCard({
   onMoveToStage,
   onMarkLost,
   onArchive,
+  onChangeCampaign,
+  campaignSaving = false,
   dragging = false,
 }: DealCardProps) {
+  const { token } = useAuth();
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [localError, setLocalError] = useState("");
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: deal.id, data: { type: "deal", deal } });
 
@@ -135,6 +145,52 @@ export function DealCard({
           <span className="text-xs font-medium text-emerald-300">
             {formatCurrency(deal.valueCents)}
           </span>
+        ) : null}
+      </div>
+
+      <div
+        className="mt-3"
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <p className="truncate text-xs text-slate-500">
+          Campanha:{" "}
+          <span className="text-slate-300">{deal.campaign?.name ?? "Sem campanha"}</span>
+        </p>
+        {onChangeCampaign ? (
+          <div className="mt-1">
+            <button
+              type="button"
+              className="text-xs font-semibold text-amber-300 underline-offset-2 hover:underline disabled:opacity-50"
+              aria-expanded={pickerOpen}
+              aria-label="Alterar campanha da oportunidade"
+              disabled={campaignSaving}
+              onClick={() => setPickerOpen((open) => !open)}
+            >
+              {campaignSaving ? "Salvando campanha..." : pickerOpen ? "Fechar seletor" : "Alterar campanha"}
+            </button>
+            {pickerOpen ? (
+              <div className="mt-2 rounded-xl border border-slate-800 bg-slate-950 p-2">
+                <CampaignSelect
+                  token={token}
+                  compact
+                  value={deal.campaignId ?? deal.campaign?.id ?? ""}
+                  selected={deal.campaign ?? null}
+                  disabled={campaignSaving}
+                  onChange={async (campaignId) => {
+                    setLocalError("");
+                    try {
+                      await onChangeCampaign(deal, campaignId || null);
+                      setPickerOpen(false);
+                    } catch (err) {
+                      setLocalError(err instanceof Error ? err.message : "Não foi possível salvar a campanha.");
+                    }
+                  }}
+                />
+              </div>
+            ) : null}
+            {localError ? <p className="mt-1 text-xs text-red-400">{localError}</p> : null}
+          </div>
         ) : null}
       </div>
 

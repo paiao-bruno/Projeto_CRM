@@ -46,6 +46,13 @@ export function requireUuid(value: unknown, field = "id"): string {
   return value;
 }
 
+/** `undefined` omite o campo; `null` ou string vazia remove o vínculo; UUID valida o identificador. */
+export function optionalUuidOrNull(body: Body, field: string): string | null | undefined {
+  if (!(field in body) || body[field] === undefined) return undefined;
+  if (body[field] === null || body[field] === "") return null;
+  return requireUuid(body[field], field);
+}
+
 export function parsePaging(query: URLSearchParams, defaultLimit = 50, maxLimit = 200) {
   const page = Math.max(1, Math.floor(Number(query.get("page"))) || 1);
   const rawLimit = Math.floor(Number(query.get("limit")));

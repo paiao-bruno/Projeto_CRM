@@ -117,6 +117,7 @@ export default function SalesFunnelPage() {
   const [lostSaving, setLostSaving] = useState(false);
   const [paymentError, setPaymentError] = useState("");
   const [paymentSaving, setPaymentSaving] = useState(false);
+  const [campaignSavingId, setCampaignSavingId] = useState<string | null>(null);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -451,6 +452,54 @@ export default function SalesFunnelPage() {
               setLostOpen(true);
             }}
             onArchive={(deal) => void handleArchive(deal)}
+            campaignSavingId={campaignSavingId}
+            onChangeCampaign={async (deal, campaignId) => {
+              if (!token) return;
+              const snapshot = cloneBoard(board);
+              setCampaignSavingId(deal.id);
+              setError("");
+              setBoard((current) => {
+                if (!current) return current;
+                const next = cloneBoard(current);
+                for (const stage of next.stages) {
+                  const index = stage.deals.findIndex((item) => item.id === deal.id);
+                  if (index >= 0) {
+                    stage.deals[index] = {
+                      ...stage.deals[index],
+                      campaignId,
+                      campaign: campaignId ? stage.deals[index].campaign : null,
+                    };
+                    break;
+                  }
+                }
+                return next;
+              });
+              try {
+                const updated = await api.patch<DealSummary>(
+                  `/sales-funnel/deals/${deal.id}`,
+                  { campaignId, version: deal.version },
+                  token,
+                );
+                setBoard((current) => {
+                  if (!current) return current;
+                  const next = cloneBoard(current);
+                  for (const stage of next.stages) {
+                    const index = stage.deals.findIndex((item) => item.id === deal.id);
+                    if (index >= 0) {
+                      stage.deals[index] = { ...stage.deals[index], ...updated };
+                      break;
+                    }
+                  }
+                  return next;
+                });
+              } catch (err) {
+                setBoard(snapshot);
+                setError(err instanceof Error ? err.message : "Não foi possível salvar a campanha.");
+                throw err;
+              } finally {
+                setCampaignSavingId(null);
+              }
+            }}
           />
           <DragOverlay>
             {activeDeal ? (
