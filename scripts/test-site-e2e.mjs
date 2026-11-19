@@ -150,7 +150,7 @@ await runCli(async () => {
       const tokenA = await login(adminA);
       const tokenB = await login(adminB);
 
-      for (const route of ["/login", "/dashboard", "/inbox", "/sales-funnel", "/customers", "/contracts", "/invoices", "/ai-agents", "/integrations"]) {
+      for (const route of ["/login", "/dashboard", "/inbox", "/sales-funnel", "/customers", "/contracts", "/invoices", "/campaigns", "/ai-agents", "/integrations"]) {
         const page = await http(route, { headers: { Accept: "text/html" } });
         assert.equal(page.status, 200, `rota ${route} deve responder 200`);
       }
@@ -286,7 +286,104 @@ await runCli(async () => {
       assert.equal(board.status, 200);
       const deal = await http("/api/sales-funnel/deals", { token: tokenA, method: "POST", body: { title: "Negócio E2E", stageCode: board.json.stages[0].code, priority: "HIGH" } });
       assert.ok([200, 201].includes(deal.status), `deal: ${deal.status}`);
+      assert.equal(deal.json.campaignId ?? null, null);
       step("funil de vendas operacional no mesmo site");
+
+      const campaignPage = await http("/campaigns", { headers: { Accept: "text/html" } });
+      assert.equal(campaignPage.status, 200);
+      const localCampaign = await http("/api/campaigns", {
+        token: tokenA,
+        method: "POST",
+        body: { name: "Campanha Local E2E", channel: "LOCAL", description: "Rascunho sem WhatsApp" },
+      });
+      assert.equal(localCampaign.status, 201, `campanha: ${localCampaign.status} ${JSON.stringify(localCampaign.json)}`);
+      assert.equal(localCampaign.json.status, "DRAFT");
+      const paused = await http(`/api/campaigns/${localCampaign.json.id}`, {
+        token: tokenA,
+        method: "PATCH",
+        body: { status: "PAUSED" },
+      });
+      assert.equal(paused.json.status, "PAUSED");
+      const otherCampaign = await http("/api/campaigns", {
+        token: tokenB,
+        method: "POST",
+        body: { name: "Campanha Local E2E", channel: "WHATSAPP" },
+      });
+      assert.equal(otherCampaign.status, 201);
+      assert.equal((await http(`/api/campaigns/${localCampaign.json.id}`, { token: tokenB })).status, 404);
+      const sendBlocked = await http(`/api/campaigns/${localCampaign.json.id}/send`, { token: tokenA, method: "POST", body: {} });
+      assert.equal(sendBlocked.status, 422);
+      const overview = await http("/api/campaigns/whatsapp/overview?period=7d", { token: tokenA });
+      assert.equal(overview.status, 200);
+      assert.equal(overview.json.integrationAvailable, false);
+      assert.equal(overview.json.messagingLimit, null);
+      assert.equal(overview.json.quality, null);
+
+      const origins = await http("/api/sale-origins?includeInactive=true", { token: tokenA });
+      assert.equal(origins.status, 200);
+      assert.ok(origins.json.some((item) => item.name === "Site" && item.active));
+      const dupOrigin = await http("/api/sale-origins", { token: tokenA, method: "POST", body: { name: "  site " } });
+      assert.equal(dupOrigin.status, 409);
+      const googleAdsOrigin = await http("/api/sale-origins", { token: tokenA, method: "POST", body: { name: "Google Ads Pesquisa" } });
+      assert.equal(googleAdsOrigin.status, 201);
+
+      const linked = await http("/api/sales-funnel/deals", {
+        token: tokenA,
+        method: "POST",
+        body: {
+          title: "Lead com campanha",
+          stageCode: board.json.stages[0].code,
+          campaignId: localCampaign.json.id,
+          phone: "11999990000",
+        },
+      });
+      assert.ok([200, 201].includes(linked.status), `linked deal: ${linked.status} ${JSON.stringify(linked.json)}`);
+      assert.equal(linked.json.campaignId, localCampaign.json.id);
+      assert.equal(linked.json.campaign.name, "Campanha Local E2E");
+      const sibling = await http("/api/sales-funnel/deals", {
+        token: tokenA,
+        method: "POST",
+        body: { title: "Mesmo cliente outra campanha", stageCode: board.json.stages[0].code, campaignId: localCampaign.json.id },
+      });
+      assert.ok([200, 201].includes(sibling.status));
+      const foreignLink = await http("/api/sales-funnel/deals", {
+        token: tokenA,
+        method: "POST",
+        body: { title: "Campanha alheia", stageCode: board.json.stages[0].code, campaignId: otherCampaign.json.id },
+      });
+      assert.equal(foreignLink.status, 422);
+      const moved = await http(`/api/sales-funnel/deals/${linked.json.id}/move`, {
+        token: tokenA,
+        method: "POST",
+        body: { stageId: board.json.stages[1].id, position: 0, version: linked.json.version },
+      });
+      assert.ok([200, 201].includes(moved.status), `move: ${moved.status}`);
+      assert.equal(moved.json.campaignId, localCampaign.json.id);
+      const notesOnly = await http(`/api/sales-funnel/deals/${linked.json.id}`, {
+        token: tokenA,
+        method: "PATCH",
+        body: { notes: "só observação", version: moved.json.version },
+      });
+      assert.equal(notesOnly.json.campaignId, localCampaign.json.id);
+      const renamed = await http(`/api/campaigns/${localCampaign.json.id}`, {
+        token: tokenA,
+        method: "PATCH",
+        body: { name: "Campanha Local Renomeada" },
+      });
+      assert.equal(renamed.json.name, "Campanha Local Renomeada");
+      const reloaded = await http(`/api/sales-funnel/deals/${linked.json.id}`, { token: tokenA });
+      assert.equal(reloaded.json.campaign.name, "Campanha Local Renomeada");
+      const cleared = await http(`/api/sales-funnel/deals/${linked.json.id}`, {
+        token: tokenA,
+        method: "PATCH",
+        body: { campaignId: null, version: reloaded.json.version },
+      });
+      assert.equal(cleared.json.campaignId, null);
+      const archived = await http(`/api/campaigns/${localCampaign.json.id}/archive`, { token: tokenA, method: "POST", body: {} });
+      assert.ok(archived.json.archivedAt);
+      const stillLinked = await http(`/api/sales-funnel/deals/${sibling.json.id}`, { token: tokenA });
+      assert.equal(stillLinked.json.campaignId, localCampaign.json.id);
+      step("campanhas locais, origens e vínculo no funil sem envio WhatsApp");
 
       // Persistência após reinício do servidor.
       await reader2.cancel().catch(() => undefined);

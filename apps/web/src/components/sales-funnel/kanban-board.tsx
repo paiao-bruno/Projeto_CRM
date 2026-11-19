@@ -19,6 +19,8 @@ type KanbanColumnProps = {
   onMoveToStage: (deal: DealSummary, stageId: string) => void;
   onMarkLost: (deal: DealSummary) => void;
   onArchive: (deal: DealSummary) => void;
+  onChangeCampaign?: (deal: DealSummary, campaignId: string | null) => Promise<void>;
+  campaignSavingId?: string | null;
 };
 
 function KanbanColumn({
@@ -29,6 +31,8 @@ function KanbanColumn({
   onMoveToStage,
   onMarkLost,
   onArchive,
+  onChangeCampaign,
+  campaignSavingId,
 }: KanbanColumnProps) {
   const { setNodeRef, isOver } = useDroppable({
     id: stage.id,
@@ -87,6 +91,8 @@ function KanbanColumn({
                 onMoveToStage={onMoveToStage}
                 onMarkLost={onMarkLost}
                 onArchive={onArchive}
+                onChangeCampaign={onChangeCampaign}
+                campaignSaving={campaignSavingId === deal.id}
               />
             ))
           )}
@@ -114,6 +120,8 @@ type KanbanBoardProps = {
   onMoveToStage: (deal: DealSummary, stageId: string) => void;
   onMarkLost: (deal: DealSummary) => void;
   onArchive: (deal: DealSummary) => void;
+  onChangeCampaign?: (deal: DealSummary, campaignId: string | null) => Promise<void>;
+  campaignSavingId?: string | null;
 };
 
 export function KanbanBoard({
@@ -123,6 +131,8 @@ export function KanbanBoard({
   onMoveToStage,
   onMarkLost,
   onArchive,
+  onChangeCampaign,
+  campaignSavingId,
 }: KanbanBoardProps) {
   const allStages = stages.map(({ deals: _deals, count: _count, ...stage }) => stage);
 
@@ -139,6 +149,8 @@ export function KanbanBoard({
             onMoveToStage={onMoveToStage}
             onMarkLost={onMarkLost}
             onArchive={onArchive}
+            onChangeCampaign={onChangeCampaign}
+            campaignSavingId={campaignSavingId}
           />
         ))}
       </div>

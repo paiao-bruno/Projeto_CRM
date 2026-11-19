@@ -1,7 +1,6 @@
-export type FeatureFlagKey = "campaigns" | "flows" | "schedule" | "teamChat";
+export type FeatureFlagKey = "flows" | "schedule" | "teamChat";
 
 const FEATURE_ENV: Record<FeatureFlagKey, string> = {
-  campaigns: "NEXT_PUBLIC_ENABLE_CAMPAIGNS",
   flows: "NEXT_PUBLIC_ENABLE_FLOWS",
   schedule: "NEXT_PUBLIC_ENABLE_SCHEDULE",
   teamChat: "NEXT_PUBLIC_ENABLE_TEAM_CHAT",
@@ -30,6 +29,7 @@ export const ALL_NAV_ITEMS: NavItem[] = [
   { href: "/customers", label: "CRM / Clientes", icon: "Users", permission: "customers.manage" },
   { href: "/contracts", label: "Contratos", icon: "FileText", permission: "customers.manage" },
   { href: "/invoices", label: "Faturas", icon: "Receipt", permission: "customers.manage" },
+  { href: "/campaigns", label: "Campanhas", icon: "Megaphone", permission: "sales_funnel.read" },
   { href: "/ai-agents", label: "Agentes", icon: "Bot", permission: "ai_agents.manage" },
   { href: "/integrations", label: "Integrações", icon: "Plug", permission: "crm.manage" },
   { href: "/boards", label: "Quadro ao vivo", icon: "Columns3", permission: "chat.read" },
@@ -37,7 +37,6 @@ export const ALL_NAV_ITEMS: NavItem[] = [
   { href: "/team", label: "Equipe e setores", icon: "UserCog", permission: "team.manage" },
   { href: "/audit", label: "Auditoria", icon: "ScrollText", permission: "audit.read" },
   { href: "/flows", label: "Flows", icon: "GitBranch", feature: "flows" },
-  { href: "/campaigns", label: "Campanhas", icon: "Megaphone", feature: "campaigns" },
   { href: "/schedule", label: "Agenda", icon: "CalendarDays", feature: "schedule" },
   { href: "/team-chat", label: "Chat interno", icon: "Hash", feature: "teamChat" },
 ];
@@ -61,7 +60,6 @@ export function defaultLandingPath(permissions: readonly string[] | undefined): 
 }
 
 export const MOCK_FEATURE_ROUTES: Record<FeatureFlagKey, string> = {
-  campaigns: "/campaigns",
   flows: "/flows",
   schedule: "/schedule",
   teamChat: "/team-chat",
