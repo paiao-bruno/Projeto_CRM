@@ -8,6 +8,7 @@ import {
 } from "../../../../shared/sales-funnel.constants";
 import { isQualifyingPaidInvoice, successEntryBlockers } from "../lib/payment-qualification";
 import type { ServerAuthUser } from "./auth";
+import { recordDealConversion } from "./funnel-commercial-events";
 import { HttpError } from "./http";
 import { getPrisma } from "./prisma";
 
@@ -291,6 +292,13 @@ class SalesFunnelService {
           wonAt: wonStage ? deal.wonAt ?? new Date() : deal.wonAt,
         },
       });
+      if (targetStage.code === SALES_FUNNEL_STAGE_CODES.SUCESSO) {
+        await recordDealConversion(tx, {
+          tenantId: user.tenantId,
+          dealId,
+          customerId: deal.customerId,
+        });
+      }
     });
 
     await this.recordHistory({

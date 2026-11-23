@@ -5,6 +5,7 @@
 import { Prisma, type PrismaClient } from "@prisma/client";
 import type { ServerAuthUser } from "./auth";
 import { recordAudit } from "./audit";
+import { recordCustomerCancellation } from "./funnel-commercial-events";
 import { HttpError } from "./http";
 import { getPrisma } from "./prisma";
 import {
@@ -110,8 +111,12 @@ export class RecordsService {
     });
     try {
       return await this.prisma.$transaction(async (tx) => {
+        const previous = await tx.customer.findFirst({ where: { id, tenantId: user.tenantId } });
         const updated = await tx.customer.update({ where: { id }, data });
         await recordAudit(tx, user, "customer.updated", "Customer", id, { fields: Object.keys(data) });
+        if (previous && previous.status !== "CHURNED" && updated.status === "CHURNED") {
+          await recordCustomerCancellation(tx, { tenantId: user.tenantId, customerId: id });
+        }
         return updated;
       });
     } catch (error) {
