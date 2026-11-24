@@ -131,6 +131,20 @@ export function defaultMonthToDate(now: Date, timeZone: string) {
   return inclusiveRange(startOfMonthYmd(today), today, timeZone, "month_to_date");
 }
 
+export function lastClosedMonthEnd(referenceYmd: string) {
+  const year = Number(referenceYmd.slice(0, 4));
+  const month = Number(referenceYmd.slice(5, 7));
+  const prevMonth = month === 1 ? 12 : month - 1;
+  const prevYear = month === 1 ? year - 1 : year;
+  const start = `${prevYear}-${pad(prevMonth)}-01`;
+  return lastYmdOfMonth(start);
+}
+
+export function defaultTwelveClosedMonths(nowYmd: string, timeZone: string) {
+  const end = lastClosedMonthEnd(nowYmd);
+  return { ...horizonRange("annual", end, timeZone), preset: "last_12_closed_months" };
+}
+
 export function parseDashboardPeriod(
   query: { from?: string | null; to?: string | null; preset?: string | null },
   now = new Date(),
@@ -141,9 +155,15 @@ export function parseDashboardPeriod(
   if (query.from && query.to) {
     return inclusiveRange(query.from, query.to > today ? today : query.to, timeZone, "custom");
   }
-  if (preset === "7d") return inclusiveRange(addDaysYmd(today, -6), today, timeZone, "7d");
+  if (preset === "7d" || preset === "weekly") return inclusiveRange(addDaysYmd(today, -6), today, timeZone, "7d");
+  if (preset === "15d" || preset === "biweekly") return inclusiveRange(addDaysYmd(today, -14), today, timeZone, "15d");
   if (preset === "30d") return inclusiveRange(addDaysYmd(today, -29), today, timeZone, "30d");
   if (preset === "90d") return inclusiveRange(addDaysYmd(today, -89), today, timeZone, "90d");
+  if (preset === "monthly") return horizonRange("monthly", today, timeZone);
+  if (preset === "quarterly") return horizonRange("quarterly", today, timeZone);
+  if (preset === "semiannual") return horizonRange("semiannual", today, timeZone);
+  if (preset === "annual") return horizonRange("annual", today, timeZone);
+  if (preset === "last_12_closed_months") return defaultTwelveClosedMonths(today, timeZone);
   return defaultMonthToDate(now, timeZone);
 }
 
