@@ -1,4 +1,5 @@
 import {
+  assertSgpClientesPayload,
   extractContractsFromClientesPayload,
   paginationFromPayload,
   redactSgpLog,
@@ -86,7 +87,16 @@ async function postPage(
     if (text.trim().toLowerCase().startsWith("<!doctype") || text.trim().toLowerCase().startsWith("<html")) {
       throw new SgpReadError("O SGP devolveu HTML em vez de JSON.", "invalid");
     }
-    return text ? JSON.parse(text) : {};
+    const parsed = text ? JSON.parse(text) : {};
+    try {
+      assertSgpClientesPayload(parsed);
+    } catch (error) {
+      if (error instanceof Error && error.message === "auth_payload") {
+        throw new SgpReadError("Autenticação recusada pelo SGP (app/token).", "auth");
+      }
+      throw new SgpReadError("O SGP devolveu um resultado de negócio inválido.", "invalid");
+    }
+    return parsed;
   } catch (error) {
     if (error instanceof SgpReadError) throw error;
     if (error instanceof Error && error.name === "AbortError") {

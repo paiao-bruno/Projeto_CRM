@@ -53,6 +53,15 @@ describe("cliente SGP de cancelamentos", () => {
     assert.equal(JSON.stringify(result.logSafe).includes("super-secret"), false);
   });
 
+  it("HTTP 200 com erro de token não conta como autenticado", async () => {
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify({ erro: "Token inválido" }), { status: 200 })) as typeof fetch;
+    await assert.rejects(
+      () => listSgpContractsByStatus({ apiUrl: "https://webmais.example.net", app: "a", token: "t" }, 3, fetchImpl),
+      (error: unknown) => error instanceof SgpReadError && error.code === "auth",
+    );
+  });
+
   it("falha de autenticação não vira zero silencioso", async () => {
     const fetchImpl = (async () => new Response("{}", { status: 401 })) as typeof fetch;
     await assert.rejects(

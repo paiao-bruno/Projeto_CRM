@@ -1,3 +1,4 @@
+import { tickSgpChurn } from "../dashboard-churn";
 import { OutboxService, newWorkerId } from "./service";
 
 export type WorkerHandle = { stop: () => Promise<void>; id: string };
@@ -13,6 +14,8 @@ export function startOutboxWorker(
   const id = newWorkerId();
   let stopping = false;
   let lastBeat = 0;
+  let lastChurn = 0;
+  let churnBusy = false;
   let wake: (() => void) | null = null;
 
   const loop = (async () => {
@@ -24,6 +27,15 @@ export function startOutboxWorker(
           lastBeat = Date.now();
         }
         const { claimed } = await service.runOnce(batch);
+        if (!churnBusy && Date.now() - lastChurn > 60_000) {
+          lastChurn = Date.now();
+          churnBusy = true;
+          void tickSgpChurn()
+            .catch((error) => log(`[sgp-churn] ${error instanceof Error ? error.message : "falha"}`))
+            .finally(() => {
+              churnBusy = false;
+            });
+        }
         if (claimed >= batch) continue;
       } catch (error) {
         log(`[outbox] erro no ciclo: ${error instanceof Error ? error.message : "desconhecido"}`);

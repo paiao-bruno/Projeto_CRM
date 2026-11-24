@@ -158,6 +158,8 @@ export function extractContractsFromClientesPayload(body: unknown): NormalizedSg
   return out;
 }
 
+export { assertSgpClientesPayload } from "./sgp-list-payload";
+
 export function paginationFromPayload(body: unknown) {
   const root = asRecord(body);
   const nested = asRecord(root?.paginacao) ?? root ?? {};

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import {
   Area,
   CartesianGrid,
@@ -29,13 +29,15 @@ type ChurnResponse = {
   period: { fromYmd: string; toYmdInclusive: string; preset: string; comparisonLabel: string };
   source: {
     name: string;
-    endpoint: string;
-    method: string;
     configured: boolean;
+    tokenConfigured: boolean;
     apiHost: string | null;
     lastSyncAt: string | null;
     coverage: string;
     snapshotStatus: string;
+    lifecycle: string;
+    stale?: boolean;
+    lastError?: string | null;
   };
   cards: Array<{
     kind: string;
@@ -45,16 +47,16 @@ type ChurnResponse = {
     targetLabel: string;
     realized: number | null;
     status: string;
-    cancellations: number;
+    cancellations: number | null;
     partialMonth?: boolean;
     coverage: string;
     formula: string;
   }>;
   evolution: Array<{ label: string; churn: number | null; meta: number | null; lost: number | null }>;
-  reasons: { total: number; unit: string; slices: Array<{ name: string; count: number; share: number }> };
+  reasons: { total: number | null; unit: string; slices: Array<{ name: string; count: number; share: number }> };
   indicators: {
-    activeCustomers: { value: number; label: string; at: string | null };
-    cancellations: { value: number; change: { kind: "pct" | "none"; value: number | null } };
+    activeCustomers: { value: number | null; label: string; at: string | null };
+    cancellations: { value: number | null; change: { kind: "pct" | "none"; value: number | null } };
     churn: { value: number | null };
   };
   insights: Array<{ id: string; text: string; kind: "fact" | "recommendation" }>;
@@ -70,15 +72,26 @@ function statusLabel(status: string) {
   return "Indisponível";
 }
 
+function lifecycleCopy(lifecycle: string) {
+  if (lifecycle === "ready") return "Dados atualizados.";
+  if (lifecycle === "stale") return "Dados desatualizados. A sincronização automática já foi solicitada.";
+  if (lifecycle === "syncing" || lifecycle === "validating") return "Sincronizando dados da leitura SGP.";
+  if (lifecycle === "auth_denied") return "Integração indisponível: o SGP recusou a autenticação. Quantidades não são zero.";
+  if (lifecycle === "needs_config") return "Configuração necessária: um administrador provisiona App e Token uma vez em Integrações.";
+  if (lifecycle === "unavailable") return "Integração indisponível no momento. A última fotografia válida, se existir, permanece visível.";
+  return "Validando conexão.";
+}
+
+function formatCount(value: number | null | undefined) {
+  return value == null ? "Indisponível" : value.toLocaleString("pt-BR");
+}
+
 export function CancellationsDashboard() {
   const { token, user } = useAuth();
   const canManage = Boolean(user?.permissions?.includes("customers.manage"));
   const [preset, setPreset] = useState("last_12_closed_months");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const [apiUrl, setApiUrl] = useState("");
-  const [app, setApp] = useState("");
-  const [sgpToken, setSgpToken] = useState("");
   const [goalKind, setGoalKind] = useState("annual");
   const [goalPercent, setGoalPercent] = useState("");
   const [formError, setFormError] = useState("");
@@ -92,22 +105,6 @@ export function CancellationsDashboard() {
     return `/dashboard/churn?${params}`;
   }, [preset, from, to]);
   const { data, error, loading, reload } = useResource<ChurnResponse>(query);
-  useEffect(() => {
-    if (!apiUrl && data?.source.apiHost) setApiUrl(`https://${data.source.apiHost}`);
-  }, [apiUrl, data?.source.apiHost]);
-
-  async function saveCredentials(event: FormEvent) {
-    event.preventDefault();
-    if (!token) return;
-    setFormError("");
-    try {
-      await api.patch("/dashboard/churn/credentials", { apiUrl, app, token: sgpToken }, token);
-      setSgpToken("");
-      await reload();
-    } catch (err) {
-      setFormError(err instanceof Error ? err.message : "Falha ao salvar a conexão.");
-    }
-  }
 
   async function saveGoal(event: FormEvent) {
     event.preventDefault();
@@ -161,7 +158,7 @@ export function CancellationsDashboard() {
                 <input className="vx-input" type="date" value={to} onChange={(event) => setTo(event.target.value)} aria-label="Data final" />
               </>
             ) : null}
-            <Button variant="secondary" onClick={() => void sync()} disabled={syncing || !canManage}>
+            <Button variant="secondary" onClick={() => void sync()} disabled={syncing}>
               {syncing ? "Atualizando..." : "Atualizar"}
             </Button>
           </div>
@@ -171,38 +168,18 @@ export function CancellationsDashboard() {
       {loading && !data ? <p className="vx-empty">Carregando gestão de cancelamentos...</p> : null}
       {data ? (
         <>
+          <p className="text-sm">{lifecycleCopy(data.source.lifecycle)}</p>
           <p className="text-xs vx-muted">
-            Origem {data.source.name} · {data.source.method} {data.source.endpoint}
-            {data.source.apiHost ? ` · host ${data.source.apiHost}` : " · conexão não configurada"}
-            {" · "}
-            última sincronização {data.source.lastSyncAt ? new Date(data.source.lastSyncAt).toLocaleString("pt-BR", { timeZone: data.timeZone }) : "nunca"}
-            {" · "}
             {data.period.fromYmd} a {data.period.toYmdInclusive} ({data.timeZone})
+            {" · "}
+            {data.source.lastSyncAt
+              ? `última sincronização ${new Date(data.source.lastSyncAt).toLocaleString("pt-BR", { timeZone: data.timeZone })}`
+              : "ainda sem fotografia completa"}
+            {data.source.stale ? " · desatualizado" : ""}
             {" · "}
             {data.period.comparisonLabel}
           </p>
           <p className="text-xs vx-muted">{data.source.coverage}</p>
-          {canManage ? (
-            <form className="vx-card grid gap-3 p-4 md:grid-cols-4" onSubmit={saveCredentials}>
-              <Field label="URL da API SGP">
-                <input className="vx-input" value={apiUrl} onChange={(event) => setApiUrl(event.target.value)} required placeholder="https://webmais.sgp.net.br" />
-              </Field>
-              <Field label="App">
-                <input className="vx-input" value={app} onChange={(event) => setApp(event.target.value)} required autoComplete="off" />
-              </Field>
-              <Field label="Token">
-                <input className="vx-input" type="password" value={sgpToken} onChange={(event) => setSgpToken(event.target.value)} required autoComplete="off" />
-              </Field>
-              <div className="flex items-end">
-                <Button type="submit">{data.source.configured ? "Regravar e testar" : "Salvar conexão"}</Button>
-              </div>
-              <p className="md:col-span-4 text-xs vx-muted">
-                No SGP: Administração → Integrações → Tokens. App é o nome da aplicação; Token é o valor gerado (não usuário/senha Basic e não senha da Central). O token precisa estar Ativo. Se houver restrição de Hosts/Rotas, libere /api/ura/clientes/.
-              </p>
-            </form>
-          ) : (
-            <p className="text-sm vx-muted">Peça a um administrador para gravar App e Token desta leitura. A autenticação recusada não zera cancelamentos.</p>
-          )}
 
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {data.cards.map((card) => (
@@ -221,7 +198,7 @@ export function CancellationsDashboard() {
                 <p className="text-2xl font-bold">{formatChurnPercent(card.realized)}</p>
                 <p className="text-sm">{statusLabel(card.status)}</p>
                 <hr className="my-2" style={{ borderColor: "var(--vx-border)" }} />
-                <p className="text-sm">Cancelamentos: {card.cancellations.toLocaleString("pt-BR")}</p>
+                <p className="text-sm">Cancelamentos: {formatCount(card.cancellations)}</p>
               </article>
             ))}
           </div>
@@ -247,7 +224,7 @@ export function CancellationsDashboard() {
             <section className="vx-card p-4">
               <h2 className="font-bold">Motivos de Cancelamento</h2>
               <p className="text-xs vx-muted">
-                Total {data.reasons.total} · {data.reasons.unit}
+                Total {formatCount(data.reasons.total)} · {data.reasons.unit}
               </p>
               {data.reasons.total ? (
                 <>
@@ -306,7 +283,7 @@ export function CancellationsDashboard() {
                     </td>
                     <td>{card.targetLabel}</td>
                     <td>{formatChurnPercent(card.realized)}</td>
-                    <td>{card.cancellations.toLocaleString("pt-BR")}</td>
+                    <td>{formatCount(card.cancellations)}</td>
                     <td>{statusLabel(card.status)}</td>
                   </tr>
                 ))}
@@ -318,10 +295,10 @@ export function CancellationsDashboard() {
             <section className="vx-card p-4">
               <h2 className="font-bold">Principais Indicadores</h2>
               <p className="mt-2 text-sm">
-                Clientes ativos ({data.indicators.activeCustomers.label}): <strong>{data.indicators.activeCustomers.value.toLocaleString("pt-BR")}</strong>
+                Clientes ativos ({data.indicators.activeCustomers.label}): <strong>{formatCount(data.indicators.activeCustomers.value)}</strong>
               </p>
               <p className="text-sm">
-                Total de cancelamentos do período: <strong>{data.indicators.cancellations.value.toLocaleString("pt-BR")}</strong>{" "}
+                Total de cancelamentos do período: <strong>{formatCount(data.indicators.cancellations.value)}</strong>{" "}
                 <span className="vx-muted">{formatChangeLabel(data.indicators.cancellations.change)}</span>
               </p>
               <p className="text-sm">
