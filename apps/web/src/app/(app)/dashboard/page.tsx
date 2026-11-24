@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
+import { CommercialDashboard } from "@/components/dashboard/commercial-dashboard";
 import { PageHeader, ErrorAlert, formatCents, statusLabels, useResource } from "@/components/vx";
 
 type Overview = {
@@ -45,12 +47,20 @@ function Block({ title, hasData, emptyText, href, children }: { title: string; h
 
 const sumValues = (record: Record<string, number>) => Object.values(record).reduce((a, b) => a + b, 0);
 
-export default function DashboardPage() {
-  const { data, error, loading } = useResource<Overview>("/dashboard");
+function OperationalDashboard() {
+  const { data, error, loading, reload } = useResource<Overview>("/dashboard");
 
   return (
     <div>
-      <PageHeader title="Dashboard" subtitle="Indicadores calculados dos dados locais da sua organização" />
+      <PageHeader
+        title="Dashboard operacional"
+        subtitle="Indicadores calculados dos dados locais da sua organização"
+        actions={
+          <button className="vx-btn" type="button" onClick={() => void reload()}>
+            Atualizar
+          </button>
+        }
+      />
       <ErrorAlert message={error ? `Falha ao carregar os indicadores: ${error}` : null} />
       {loading ? <p className="vx-empty">Carregando...</p> : null}
       {data ? (
@@ -90,7 +100,7 @@ export default function DashboardPage() {
               <ul className="text-sm vx-muted">{Object.entries(data.deals.byStatus).map(([k, v]) => <li key={k}>{k}: {v}</li>)}</ul>
             </Block>
             <Block title="Agentes" hasData={data.aiAgents.hasData} emptyText="Sem dados: nenhum agente configurado." href="/ai-agents">
-              <ul className="text-sm vx-muted">{Object.entries(data.aiAgents.byStatus).map(([k, v]) => <li key={k}>{k}: {v}</li>)}</ul>
+              <ul className="mt-2 text-sm vx-muted">{Object.entries(data.aiAgents.byStatus).map(([k, v]) => <li key={k}>{k}: {v}</li>)}</ul>
             </Block>
             <Block title="Equipe" hasData={data.team.hasData} emptyText="Sem dados: nenhum atendente com permissão de responder." href="/team">
               <p className="text-sm">Online: <strong>{data.team.online}</strong> · Ausentes: <strong>{data.team.away}</strong> · Offline: <strong>{data.team.offline}</strong></p>
@@ -99,6 +109,37 @@ export default function DashboardPage() {
           <p className="text-xs vx-muted">Atualizado em {new Date(data.generatedAt).toLocaleString("pt-BR")} · fonte: banco local</p>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+export default function DashboardPage() {
+  const [tab, setTab] = useState<"commercial" | "operational">("commercial");
+  return (
+    <div>
+      <div className="mb-4 flex flex-wrap gap-2" role="tablist" aria-label="Áreas do Dashboard">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "commercial"}
+          className="vx-btn"
+          style={tab === "commercial" ? { background: "var(--vx-selected)", color: "var(--vx-secondary)" } : undefined}
+          onClick={() => setTab("commercial")}
+        >
+          Comercial
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "operational"}
+          className="vx-btn"
+          style={tab === "operational" ? { background: "var(--vx-selected)", color: "var(--vx-secondary)" } : undefined}
+          onClick={() => setTab("operational")}
+        >
+          Operacional
+        </button>
+      </div>
+      {tab === "commercial" ? <CommercialDashboard /> : <OperationalDashboard />}
     </div>
   );
 }

@@ -375,6 +375,8 @@ model Tenant {
   scheduleEvents      ScheduleEvent[]
   tasks               Task[]
   dashboardMetrics    DashboardMetric[]
+  commercialGoals     CommercialGoal[]
+  funnelCommercialEvents FunnelCommercialEvent[]
   notifications       Notification[]
   auditLogs           AuditLog[]
 
@@ -1159,6 +1161,7 @@ model Customer {
   invoices           Invoice[]
   leads              Lead[]
   deals              Deal[]
+  funnelCommercialEvents FunnelCommercialEvent[]
   campaignRecipients CampaignRecipient[]
   scheduleEvents     ScheduleEvent[]
   tasks              Task[]
@@ -1394,6 +1397,7 @@ model Deal {
   paymentConfirmations DealPaymentConfirmation[]
   campaign         Campaign?     @relation(fields: [campaignId], references: [id], onDelete: Restrict)
   saleOrigin       SaleOrigin?   @relation(fields: [saleOriginId], references: [id], onDelete: SetNull)
+  commercialEvents FunnelCommercialEvent[]
 
   @@index([tenantId, status])
   @@index([tenantId, stageId])
@@ -1597,6 +1601,43 @@ model Task {
 
   @@index([tenantId, status, dueAt])
   @@index([tenantId, assignedMemberId])
+}
+
+model CommercialGoal {
+  id               String   @id @default(uuid()) @db.Uuid
+  tenantId         String   @db.Uuid
+  metric           String
+  unit             String
+  kind             String
+  targetValue      Int
+  createdByMemberId String? @db.Uuid
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, metric, kind])
+  @@index([tenantId, kind])
+}
+
+/// Eventos comerciais canônicos do funil. CONVERSION = primeira chegada válida a Sucesso (pagamento confirmado); CANCELLATION = cancelamento explícito de cliente convertido.
+model FunnelCommercialEvent {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @db.Uuid
+  type        String
+  dealId      String?  @db.Uuid
+  customerId  String?  @db.Uuid
+  occurredAt  DateTime
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  tenant   Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  deal     Deal?     @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, type, occurredAt])
+  @@index([tenantId, dealId, type])
+  @@index([tenantId, customerId, type])
 }
 
 model DashboardMetric {

@@ -6,6 +6,7 @@
     "apps/*"
   ],
   "scripts": {
+    "postinstall": "prisma generate --schema prisma/schema.prisma",
     "preflight": "node scripts/preflight.mjs",
     "dev": "node scripts/dev-site.mjs",
     "dev:web": "node scripts/dev-site.mjs",
