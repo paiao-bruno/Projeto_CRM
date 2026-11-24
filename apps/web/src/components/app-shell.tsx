@@ -136,7 +136,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           className="sticky top-0 z-20 flex items-center justify-between gap-3 border-b px-4 py-3"
           style={{ borderColor: "var(--vx-border)", background: "var(--vx-header)" }}
         >
-          <p className="text-sm font-semibold">{user.tenantName}</p>
+          <div>
+            <p className="text-sm font-semibold">{user.tenantName}</p>
+            {current ? (
+              <p className="text-xs vx-muted" aria-label="Navegação">
+                {user.tenantName} / {current.label}
+              </p>
+            ) : null}
+          </div>
           <div className="flex items-center gap-3">
             {canChat ? (
               <label className="flex items-center gap-2 text-sm">

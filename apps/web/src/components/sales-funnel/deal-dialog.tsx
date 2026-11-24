@@ -15,6 +15,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { DealDetail, DealPriority, DealSummary, TenantMemberSummary } from "@/lib/types";
 import { SALES_FUNNEL_STAGE_CODES, SALES_FUNNEL_STAGES } from "@/lib/sales-funnel.constants";
 import { ownerLabel, priorityLabels } from "@/lib/sales-funnel-utils";
+import { CampaignSelect } from "@/components/campaigns/campaign-select";
+import { SaleOriginSelect } from "@/components/campaigns/sale-origin-select";
+import { useAuth } from "@/components/auth-provider";
+import { CAMPAIGN_STATUS_LABELS } from "@/lib/campaigns";
 
 export type DealFormValues = {
   title: string;
@@ -32,6 +36,8 @@ export type DealFormValues = {
   nextActionAt: string;
   notes: string;
   stageCode: string;
+  campaignId: string;
+  saleOriginId: string;
 };
 
 export const emptyDealForm = (stageCode?: string): DealFormValues => ({
@@ -50,6 +56,8 @@ export const emptyDealForm = (stageCode?: string): DealFormValues => ({
   nextActionAt: "",
   notes: "",
   stageCode: stageCode ?? SALES_FUNNEL_STAGES[0].code,
+  campaignId: "",
+  saleOriginId: "",
 });
 
 function toFormValues(deal: DealSummary): DealFormValues {
@@ -69,6 +77,8 @@ function toFormValues(deal: DealSummary): DealFormValues {
     nextActionAt: deal.nextActionAt ? deal.nextActionAt.slice(0, 16) : "",
     notes: deal.notes ?? "",
     stageCode: deal.stage.code ?? SALES_FUNNEL_STAGES[0].code,
+    campaignId: deal.campaignId ?? deal.campaign?.id ?? "",
+    saleOriginId: deal.saleOriginId ?? deal.saleOrigin?.id ?? "",
   };
 }
 
@@ -91,6 +101,8 @@ function toPayload(form: DealFormValues) {
     nextActionAt: form.nextActionAt ? new Date(form.nextActionAt).toISOString() : undefined,
     notes: form.notes || undefined,
     stageCode: form.stageCode,
+    campaignId: form.campaignId || null,
+    saleOriginId: form.saleOriginId || null,
   };
 }
 
@@ -117,6 +129,7 @@ export function DealFormDialog({
   onClose,
   onSubmit,
 }: DealFormDialogProps) {
+  const { token } = useAuth();
   const [form, setForm] = useState<DealFormValues>(
     emptyDealForm(defaultStageCode ?? initialDeal?.stage.code ?? undefined),
   );
@@ -187,6 +200,32 @@ export function DealFormDialog({
                 id="entrySource"
                 value={form.entrySource}
                 onChange={(event) => setForm({ ...form, entrySource: event.target.value })}
+              />
+            </div>
+            <div>
+              <Label htmlFor="campaignId">Campanha</Label>
+              <CampaignSelect
+                token={token}
+                id="campaignId"
+                value={form.campaignId}
+                selected={initialDeal?.campaign ?? null}
+                onChange={(campaignId) => setForm({ ...form, campaignId })}
+              />
+            </div>
+            <div>
+              <Label htmlFor="saleOriginId">Origem de venda</Label>
+              <SaleOriginSelect
+                token={token}
+                id="saleOriginId"
+                value={form.saleOriginId}
+                selected={initialDeal?.saleOrigin ?? null}
+                onChange={(saleOriginId, origin) =>
+                  setForm({
+                    ...form,
+                    saleOriginId,
+                    entrySource: origin ? origin.name : form.entrySource,
+                  })
+                }
               />
             </div>
             <div>
@@ -382,6 +421,12 @@ export function DealDetailDialog({
               <p><span className="text-slate-500">Telefone:</span> {deal.phone ?? "—"}</p>
               <p><span className="text-slate-500">E-mail:</span> {deal.email ?? "—"}</p>
               <p><span className="text-slate-500">Origem:</span> {deal.entrySource ?? "—"}</p>
+              <p>
+                <span className="text-slate-500">Campanha:</span>{" "}
+                {deal.campaign
+                  ? `${deal.campaign.name} (${CAMPAIGN_STATUS_LABELS[deal.campaign.status as keyof typeof CAMPAIGN_STATUS_LABELS] ?? deal.campaign.status})`
+                  : "Sem campanha"}
+              </p>
               <p><span className="text-slate-500">Tipo de cliente:</span> {deal.clientType ?? "—"}</p>
               <p><span className="text-slate-500">Cidade:</span> {deal.city ?? "—"}</p>
               <p><span className="text-slate-500">Bairro:</span> {deal.neighborhood ?? "—"}</p>

@@ -358,6 +358,7 @@ model Tenant {
   customers           Customer[]
   contracts           Contract[]
   invoices            Invoice[]
+  saleOrigins         SaleOrigin[]
   integrationSyncRuns IntegrationSyncRun[]
   integrationSyncLogs IntegrationSyncLog[]
   contacts            CustomerContact[]
@@ -1368,6 +1369,8 @@ model Deal {
   nextActionAt       DateTime?
   notes              String?      @db.Text
   lossReason         String?
+  campaignId         String?      @db.Uuid
+  saleOriginId       String?      @db.Uuid
   expectedCloseAt    DateTime?
   wonAt              DateTime?
   lostAt             DateTime?
@@ -1389,6 +1392,8 @@ model Deal {
   archivedByMember TenantMember? @relation("DealArchivedBy", fields: [archivedByMemberId], references: [id], onDelete: SetNull)
   history          DealHistory[]
   paymentConfirmations DealPaymentConfirmation[]
+  campaign         Campaign?     @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  saleOrigin       SaleOrigin?   @relation(fields: [saleOriginId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, status])
   @@index([tenantId, stageId])
@@ -1400,6 +1405,8 @@ model Deal {
   @@index([tenantId, city])
   @@index([tenantId, nextActionAt])
   @@index([tenantId, createdAt])
+  @@index([tenantId, campaignId])
+  @@index([tenantId, saleOriginId])
 }
 
 model DealHistory {
@@ -1454,12 +1461,14 @@ model Campaign {
   integrationId   String?        @db.Uuid
   name            String
   description     String?
+  channel         String         @default("LOCAL")
   status          CampaignStatus @default(DRAFT)
-  messageTemplate String
+  messageTemplate String         @default("")
   segmentRules    Json?
   scheduledAt     DateTime?
   startedAt       DateTime?
   completedAt     DateTime?
+  archivedAt      DateTime?
   metadata        Json?
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
@@ -1468,8 +1477,27 @@ model Campaign {
   integration Integration?        @relation(fields: [integrationId], references: [id], onDelete: SetNull)
   recipients  CampaignRecipient[]
   events      CampaignEvent[]
+  deals       Deal[]
 
   @@index([tenantId, status, scheduledAt])
+  @@index([tenantId, archivedAt])
+  @@index([tenantId, channel])
+}
+
+model SaleOrigin {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @db.Uuid
+  name      String
+  nameKey   String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  deals  Deal[]
+
+  @@unique([tenantId, nameKey])
+  @@index([tenantId, active])
 }
 
 model CampaignRecipient {

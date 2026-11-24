@@ -132,6 +132,20 @@ export type DealOwner = {
   user: { name: string };
 };
 
+export type DealCampaignSummary = {
+  id: string;
+  name: string;
+  channel: string;
+  status: string;
+  archivedAt?: string | null;
+};
+
+export type DealSaleOriginSummary = {
+  id: string;
+  name: string;
+  active: boolean;
+};
+
 export type DealSummary = {
   id: string;
   title: string;
@@ -139,6 +153,10 @@ export type DealSummary = {
   email?: string | null;
   clientType?: string | null;
   entrySource?: string | null;
+  campaignId?: string | null;
+  campaign?: DealCampaignSummary | null;
+  saleOriginId?: string | null;
+  saleOrigin?: DealSaleOriginSummary | null;
   contactType?: string | null;
   city?: string | null;
   neighborhood?: string | null;

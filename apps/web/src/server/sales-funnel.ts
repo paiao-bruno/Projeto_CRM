@@ -1,4 +1,5 @@
 import { DealPriority, DealStatus, Prisma } from "@prisma/client";
+import { optionalUuidOrNull } from "./validation";
 import {
   SALES_FUNNEL_METRICS_DOC,
   SALES_FUNNEL_PIPELINE_NAME,
@@ -113,6 +114,9 @@ class SalesFunnelService {
       pipeline.stages.find((item) => item.code === dto.stageCode) ?? pipeline.stages[0];
     if (!stage) throw new HttpError(400, "Etapa inicial do funil não encontrada.");
 
+    const campaignId = await this.resolveCampaignId(user.tenantId, dto);
+    const origin = await this.resolveSaleOrigin(user.tenantId, dto, null);
+
     const deal = await this.prisma.deal.create({
       data: {
         tenantId: user.tenantId,
@@ -122,7 +126,7 @@ class SalesFunnelService {
         phone: this.normalizeOptional(dto.phone),
         email: this.normalizeOptional(dto.email),
         clientType: this.normalizeOptional(dto.clientType),
-        entrySource: this.normalizeOptional(dto.entrySource),
+        entrySource: this.normalizeOptional(dto.entrySource) ?? origin?.name ?? null,
         contactType: this.normalizeOptional(dto.contactType),
         city: this.normalizeOptional(dto.city),
         neighborhood: this.normalizeOptional(dto.neighborhood),
@@ -136,6 +140,8 @@ class SalesFunnelService {
         updatedByMemberId: user.memberId,
         position: await this.nextPosition(user.tenantId, stage.id),
         status: DealStatus.OPEN,
+        campaignId,
+        saleOriginId: origin?.id ?? null,
       },
       include: this.dealInclude(),
     });
@@ -183,6 +189,23 @@ class SalesFunnelService {
       data.ownerMember = dto.ownerMemberId
         ? { connect: { id: dto.ownerMemberId } }
         : { disconnect: true };
+    }
+    const campaignId = optionalUuidOrNull(dto, "campaignId");
+    if (campaignId === null) data.campaign = { disconnect: true };
+    else if (campaignId) {
+      await this.requireCampaignInTenant(user.tenantId, campaignId);
+      data.campaign = { connect: { id: campaignId } };
+    }
+    const saleOriginId = optionalUuidOrNull(dto, "saleOriginId");
+    if (saleOriginId === null) data.saleOrigin = { disconnect: true };
+    else if (saleOriginId) {
+      const origin = await this.requireActiveOriginForAssignment(
+        user.tenantId,
+        saleOriginId,
+        existing.saleOriginId,
+      );
+      data.saleOrigin = { connect: { id: origin.id } };
+      if (dto.entrySource === undefined) data.entrySource = origin.name;
     }
 
     const updated = await this.prisma.deal.update({
@@ -713,12 +736,61 @@ class SalesFunnelService {
       ownerMember: {
         select: { id: true, displayName: true, user: { select: { name: true } } },
       },
+      campaign: {
+        select: { id: true, name: true, channel: true, status: true, archivedAt: true },
+      },
+      saleOrigin: {
+        select: { id: true, name: true, active: true },
+      },
       paymentConfirmations: {
         where: { reversedAt: null },
         orderBy: { createdAt: "desc" },
         take: 1,
       },
     } satisfies Prisma.DealInclude;
+  }
+
+  private async resolveCampaignId(tenantId: string, dto: Record<string, any>) {
+    const campaignId = optionalUuidOrNull(dto, "campaignId");
+    if (!campaignId) return null;
+    await this.requireCampaignInTenant(tenantId, campaignId);
+    return campaignId;
+  }
+
+  private async resolveSaleOrigin(
+    tenantId: string,
+    dto: Record<string, any>,
+    currentOriginId: string | null,
+  ) {
+    const saleOriginId = optionalUuidOrNull(dto, "saleOriginId");
+    if (!saleOriginId) return null;
+    return this.requireActiveOriginForAssignment(tenantId, saleOriginId, currentOriginId);
+  }
+
+  private async requireCampaignInTenant(tenantId: string, campaignId: string) {
+    const campaign = await this.prisma.campaign.findFirst({
+      where: { id: campaignId, tenantId },
+      select: { id: true },
+    });
+    if (!campaign) {
+      throw new HttpError(422, "Campanha não encontrada nesta organização.");
+    }
+    return campaign;
+  }
+
+  private async requireActiveOriginForAssignment(
+    tenantId: string,
+    saleOriginId: string,
+    currentOriginId: string | null,
+  ) {
+    const origin = await this.prisma.saleOrigin.findFirst({
+      where: { id: saleOriginId, tenantId },
+    });
+    if (!origin) throw new HttpError(422, "Origem de venda não encontrada nesta organização.");
+    if (!origin.active && origin.id !== currentOriginId) {
+      throw new HttpError(422, "Esta origem está inativa e não pode ser atribuída a novas oportunidades.");
+    }
+    return origin;
   }
 
   private async requireDeal(tenantId: string, dealId: string) {
