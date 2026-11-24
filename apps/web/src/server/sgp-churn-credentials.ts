@@ -1,5 +1,5 @@
 import { IntegrationProvider, IntegrationStatus } from "@prisma/client";
-import { isSecretMask, rankSgpChurnCandidates } from "@/lib/sgp-churn-lifecycle";
+import { isSecretMask, rankSgpChurnCandidates } from "../lib/sgp-churn-lifecycle";
 import type { ServerAuthUser } from "./auth";
 import { HttpError } from "./http";
 import { getPrisma } from "./prisma";

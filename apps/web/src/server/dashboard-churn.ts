@@ -5,7 +5,7 @@ import {
   lostCustomers,
   reasonSlices,
   type ChurnHorizonKind,
-} from "@/lib/churn-metrics";
+} from "../lib/churn-metrics";
 import {
   DASHBOARD_TIMEZONE,
   horizonRange,
@@ -15,7 +15,7 @@ import {
   parseDashboardPeriod,
   previousRange,
   relativeChange,
-} from "@/lib/dashboard-periods";
+} from "../lib/dashboard-periods";
 import {
   allSgpCandidatesDenied,
   canPublishSnapshot,
@@ -25,8 +25,8 @@ import {
   lifecycleFromState,
   snapshotMatchesOrigin,
   SGP_CHURN_REFRESH_MS,
-} from "@/lib/sgp-churn-lifecycle";
-import { SGP_CONTRACT_STATUS } from "@/lib/sgp-cancellation-parse";
+} from "../lib/sgp-churn-lifecycle";
+import { SGP_CONTRACT_STATUS } from "../lib/sgp-cancellation-parse";
 import type { ServerAuthUser } from "./auth";
 import { HttpError } from "./http";
 import { getPrisma } from "./prisma";
