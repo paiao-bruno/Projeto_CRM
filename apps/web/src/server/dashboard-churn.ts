@@ -17,6 +17,7 @@ import {
   relativeChange,
 } from "@/lib/dashboard-periods";
 import {
+  allSgpCandidatesDenied,
   canPublishSnapshot,
   displayCancellations,
   isFreshSnapshot,
@@ -185,12 +186,7 @@ export class DashboardChurnService {
     if (!options.force && complete && isFreshSnapshot(complete.finishedAt, now, SGP_CHURN_REFRESH_MS)) {
       return { status: "fresh" as const, snapshotId: complete.id };
     }
-    const denied = await this.latestFailed(tenantId);
-    if (
-      !options.force &&
-      denied?.status === "AUTH_DENIED" &&
-      Number((denied.metadata as { credentialVersion?: number } | null)?.credentialVersion) === runtime.credentialVersion
-    ) {
+    if (!options.force && allSgpCandidatesDenied(candidates)) {
       return { status: "auth_denied" as const };
     }
     const running = await this.claimRunning(tenantId, runtime, now);

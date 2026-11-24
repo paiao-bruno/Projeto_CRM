@@ -76,7 +76,9 @@ function lifecycleCopy(lifecycle: string) {
   if (lifecycle === "ready") return "Dados atualizados.";
   if (lifecycle === "stale") return "Dados desatualizados. A sincronização automática já foi solicitada.";
   if (lifecycle === "syncing" || lifecycle === "validating") return "Sincronizando dados da leitura SGP.";
-  if (lifecycle === "auth_denied") return "Integração indisponível: o SGP recusou a autenticação. Quantidades não são zero.";
+  if (lifecycle === "auth_denied") {
+    return "Integração indisponível: o SGP recusou a autenticação. Quantidades não são zero. Um administrador deve gravar App e Token reais em Integrações (não o e-mail do CRM).";
+  }
   if (lifecycle === "needs_config") return "Configuração necessária: um administrador provisiona App e Token uma vez em Integrações.";
   if (lifecycle === "unavailable") return "Integração indisponível no momento. A última fotografia válida, se existir, permanece visível.";
   return "Validando conexão.";

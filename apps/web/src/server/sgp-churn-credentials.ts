@@ -1,5 +1,5 @@
 import { IntegrationProvider, IntegrationStatus } from "@prisma/client";
-import { isSecretMask } from "@/lib/sgp-churn-lifecycle";
+import { isSecretMask, rankSgpChurnCandidates } from "@/lib/sgp-churn-lifecycle";
 import type { ServerAuthUser } from "./auth";
 import { HttpError } from "./http";
 import { getPrisma } from "./prisma";
@@ -50,6 +50,9 @@ function decryptRow(row: IntegrationRow) {
     integrationId: row.id,
     credentialVersion: credentialVersion(row),
     authState: String(configOf(row).sgpChurnAuth ?? ""),
+    dedicated: row.name === CHURN_INTEGRATION_NAME,
+    name: row.name,
+    updatedAt: row.updatedAt,
   };
 }
 
@@ -57,12 +60,19 @@ export class SgpChurnCredentialsService {
   constructor(private readonly prisma = getPrisma()) {}
 
   async getPublic(user: ServerAuthUser) {
+    const rows = await this.prisma.integration.findMany({
+      where: { tenantId: user.tenantId, provider: IntegrationProvider.SGP },
+    });
+    const decryptableRows = rows.filter((row) => decryptRow(row as IntegrationRow)).length;
     const runtime = await this.runtime(user.tenantId);
     return {
       configured: Boolean(runtime),
       tokenConfigured: Boolean(runtime),
       apiHost: runtime?.apiHost ?? null,
       source: runtime ? "server" : "none",
+      storedRows: rows.length,
+      decryptableRows,
+      encryptionReady: Boolean(process.env.APP_ENCRYPTION_KEY?.trim() || process.env.ENCRYPTION_KEY?.trim()),
     };
   }
 
@@ -147,14 +157,11 @@ export class SgpChurnCredentialsService {
       where: { tenantId, provider: IntegrationProvider.SGP },
       orderBy: { updatedAt: "desc" },
     });
-    const decrypted = rows
-      .map((row) => decryptRow(row as IntegrationRow))
-      .filter((row): row is NonNullable<typeof row> => Boolean(row));
-    decrypted.sort((a, b) => {
-      if (a.authState === "ok" && b.authState !== "ok") return -1;
-      if (b.authState === "ok" && a.authState !== "ok") return 1;
-      return 0;
-    });
+    const decrypted = rankSgpChurnCandidates(
+      rows
+        .map((row) => decryptRow(row as IntegrationRow))
+        .filter((row): row is NonNullable<typeof row> => Boolean(row)),
+    );
     const usable = decrypted.filter((row) => row.authState !== "denied");
     return usable.length ? usable : decrypted;
   }

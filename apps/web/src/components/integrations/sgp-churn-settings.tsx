@@ -10,6 +10,9 @@ type PublicCreds = {
   configured: boolean;
   tokenConfigured: boolean;
   apiHost: string | null;
+  storedRows?: number;
+  decryptableRows?: number;
+  encryptionReady?: boolean;
 };
 
 export function SgpChurnSettings() {
@@ -20,6 +23,9 @@ export function SgpChurnSettings() {
   const [sgpToken, setSgpToken] = useState("");
   const [formError, setFormError] = useState("");
   const [saved, setSaved] = useState("");
+  const stored = data?.storedRows ?? 0;
+  const decryptable = data?.decryptableRows ?? 0;
+  const cannotDecrypt = stored > 0 && decryptable === 0;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -47,10 +53,28 @@ export function SgpChurnSettings() {
         Provisionamento único no servidor. O Dashboard reutiliza esta configuração; não preencha a aba a cada acesso.
         Token já gravado permanece se o campo ficar vazio. A máscara nunca é o segredo.
       </p>
+      <ol className="list-decimal space-y-1 pl-5 text-sm vx-muted">
+        <li>No SGP: Administração → Integrações → Tokens. Crie ou ative um token com permissão de leitura de clientes.</li>
+        <li>
+          Copie o campo <strong>App</strong> e o <strong>Token</strong> gerados pelo SGP. Não use e-mail nem senha do CRM.
+        </li>
+        <li>
+          URL da API: origem HTTPS do SGP (exemplo <code>https://webmais.sgp.net.br</code>), sem caminho extra.
+        </li>
+        <li>
+          No servidor do Next, o <code>.env</code> precisa de <code>APP_ENCRYPTION_KEY</code> (cifra nova) e, se o token
+          já existia no Nest, o mesmo <code>ENCRYPTION_KEY</code> de 32+ caracteres.
+        </li>
+        <li>Grave aqui uma vez. A autenticação usa POST <code>/api/ura/clientes/</code> com App e Token no corpo.</li>
+      </ol>
       <p className="text-xs vx-muted">
         {data?.tokenConfigured
           ? `Token configurado${data.apiHost ? ` · host ${data.apiHost}` : ""}.`
-          : "Ainda não há App/Token recuperáveis neste tenant."}
+          : cannotDecrypt
+            ? data?.encryptionReady
+              ? "Há integração SGP salva, mas o App/Token não puderam ser lidos com as chaves atuais. Regrave App e Token neste formulário."
+              : "Há integração SGP salva, mas o processo Next não tem APP_ENCRYPTION_KEY nem ENCRYPTION_KEY. Sem a chave o token não é lido."
+            : "Ainda não há App/Token recuperáveis neste tenant."}
       </p>
       <ErrorAlert message={error || formError || null} />
       {saved ? <p className="text-sm">{saved}</p> : null}

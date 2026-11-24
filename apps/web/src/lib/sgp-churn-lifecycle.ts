@@ -63,3 +63,18 @@ export function lifecycleFromState(input: {
 export function displayCancellations(ready: boolean, count: number) {
   return ready ? count : null;
 }
+
+/** Ordem de tentativa: credencial já validada, depois a integração SGP original, depois a dedicada. */
+export function rankSgpChurnCandidates<T extends { authState: string; dedicated: boolean; updatedAt: Date }>(rows: T[]): T[] {
+  return [...rows].sort((a, b) => {
+    const score = (row: T) =>
+      (row.authState === "ok" ? 8 : 0) + (row.authState !== "denied" ? 4 : 0) + (row.dedicated ? 0 : 2);
+    const diff = score(b) - score(a);
+    if (diff) return diff;
+    return b.updatedAt.getTime() - a.updatedAt.getTime();
+  });
+}
+
+export function allSgpCandidatesDenied(rows: { authState: string }[]) {
+  return rows.length > 0 && rows.every((row) => row.authState === "denied");
+}

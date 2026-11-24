@@ -1,4 +1,3 @@
-import { tickSgpChurn } from "../dashboard-churn";
 import { OutboxService, newWorkerId } from "./service";
 
 export type WorkerHandle = { stop: () => Promise<void>; id: string };
@@ -6,16 +5,22 @@ export type WorkerHandle = { stop: () => Promise<void>; id: string };
 /** Laço do worker dedicado: reaper de leases expirados, reivindicação e processamento. */
 export function startOutboxWorker(
   service: OutboxService = new OutboxService(),
-  options: { intervalMs?: number; batch?: number; log?: (line: string) => void } = {},
+  options: {
+    intervalMs?: number;
+    batch?: number;
+    log?: (line: string) => void;
+    extraTick?: () => Promise<void>;
+  } = {},
 ): WorkerHandle {
   const intervalMs = options.intervalMs ?? 1000;
   const batch = options.batch ?? 10;
   const log = options.log ?? ((line: string) => console.log(line));
+  const extraTick = options.extraTick;
   const id = newWorkerId();
   let stopping = false;
   let lastBeat = 0;
-  let lastChurn = 0;
-  let churnBusy = false;
+  let lastExtra = Date.now();
+  let extraBusy = false;
   let wake: (() => void) | null = null;
 
   const loop = (async () => {
@@ -27,13 +32,13 @@ export function startOutboxWorker(
           lastBeat = Date.now();
         }
         const { claimed } = await service.runOnce(batch);
-        if (!churnBusy && Date.now() - lastChurn > 60_000) {
-          lastChurn = Date.now();
-          churnBusy = true;
-          void tickSgpChurn()
+        if (extraTick && !extraBusy && Date.now() - lastExtra > 60_000) {
+          lastExtra = Date.now();
+          extraBusy = true;
+          void extraTick()
             .catch((error) => log(`[sgp-churn] ${error instanceof Error ? error.message : "falha"}`))
             .finally(() => {
-              churnBusy = false;
+              extraBusy = false;
             });
         }
         if (claimed >= batch) continue;
