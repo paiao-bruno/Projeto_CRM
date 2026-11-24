@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   Area,
   CartesianGrid,
@@ -92,6 +92,9 @@ export function CancellationsDashboard() {
     return `/dashboard/churn?${params}`;
   }, [preset, from, to]);
   const { data, error, loading, reload } = useResource<ChurnResponse>(query);
+  useEffect(() => {
+    if (!apiUrl && data?.source.apiHost) setApiUrl(`https://${data.source.apiHost}`);
+  }, [apiUrl, data?.source.apiHost]);
 
   async function saveCredentials(event: FormEvent) {
     event.preventDefault();
@@ -179,22 +182,27 @@ export function CancellationsDashboard() {
             {data.period.comparisonLabel}
           </p>
           <p className="text-xs vx-muted">{data.source.coverage}</p>
-          {!data.source.configured && canManage ? (
+          {canManage ? (
             <form className="vx-card grid gap-3 p-4 md:grid-cols-4" onSubmit={saveCredentials}>
               <Field label="URL da API SGP">
-                <input className="vx-input" value={apiUrl} onChange={(event) => setApiUrl(event.target.value)} required placeholder="https://seu-sgp.exemplo" />
+                <input className="vx-input" value={apiUrl} onChange={(event) => setApiUrl(event.target.value)} required placeholder="https://webmais.sgp.net.br" />
               </Field>
               <Field label="App">
-                <input className="vx-input" value={app} onChange={(event) => setApp(event.target.value)} required />
+                <input className="vx-input" value={app} onChange={(event) => setApp(event.target.value)} required autoComplete="off" />
               </Field>
               <Field label="Token">
                 <input className="vx-input" type="password" value={sgpToken} onChange={(event) => setSgpToken(event.target.value)} required autoComplete="off" />
               </Field>
               <div className="flex items-end">
-                <Button type="submit">Salvar conexão</Button>
+                <Button type="submit">{data.source.configured ? "Regravar e testar" : "Salvar conexão"}</Button>
               </div>
+              <p className="md:col-span-4 text-xs vx-muted">
+                No SGP: Administração → Integrações → Tokens. App é o nome da aplicação; Token é o valor gerado (não usuário/senha Basic e não senha da Central). O token precisa estar Ativo. Se houver restrição de Hosts/Rotas, libere /api/ura/clientes/.
+              </p>
             </form>
-          ) : null}
+          ) : (
+            <p className="text-sm vx-muted">Peça a um administrador para gravar App e Token desta leitura. A autenticação recusada não zera cancelamentos.</p>
+          )}
 
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {data.cards.map((card) => (

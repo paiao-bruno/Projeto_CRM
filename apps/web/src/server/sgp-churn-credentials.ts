@@ -3,7 +3,7 @@ import type { ServerAuthUser } from "./auth";
 import { HttpError } from "./http";
 import { getPrisma } from "./prisma";
 import { decryptSecret, encryptSecret } from "./secret-box";
-import { assertAllowedSgpUrl, type SgpChurnCredentials } from "./sgp-churn-client";
+import { assertAllowedSgpUrl, probeSgpAuth, SgpReadError, type SgpChurnCredentials } from "./sgp-churn-client";
 
 const INTEGRATION_NAME = "SGP leitura de cancelamentos";
 
@@ -47,11 +47,22 @@ export class SgpChurnCredentialsService {
     };
     if (existing) {
       await this.prisma.integration.update({ where: { id: existing.id }, data });
-      return this.getPublic(user);
+    } else {
+      await this.prisma.integration.create({
+        data: { ...data, tenantId: user.tenantId },
+      });
     }
-    await this.prisma.integration.create({
-      data: { ...data, tenantId: user.tenantId },
-    });
+    try {
+      await probeSgpAuth({ apiUrl, app, token });
+    } catch (error) {
+      const message =
+        error instanceof SgpReadError && error.code === "auth"
+          ? "Autenticação recusada pelo SGP. Confira App e Token em Administração → Integrações → Tokens (não use usuário/senha Basic nem senha da central). O token precisa estar Ativo e, se houver restrição de rotas, incluir /api/ura/clientes/."
+          : error instanceof SgpReadError
+            ? error.message
+            : "Não foi possível validar a conexão com o SGP.";
+      throw new HttpError(error instanceof SgpReadError && error.code === "auth" ? 401 : 502, message);
+    }
     return this.getPublic(user);
   }
 

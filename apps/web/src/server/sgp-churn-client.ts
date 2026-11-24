@@ -44,6 +44,10 @@ export function assertAllowedSgpUrl(apiUrl: string) {
   return url.origin;
 }
 
+function authBody(credentials: SgpChurnCredentials, payload: Record<string, unknown>) {
+  return { app: credentials.app, token: credentials.token, ...payload };
+}
+
 async function postPage(
   credentials: SgpChurnCredentials,
   payload: Record<string, unknown>,
@@ -51,13 +55,24 @@ async function postPage(
 ) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15_000);
+  const fields = authBody(credentials, payload);
   try {
-    const response = await fetchImpl(joinUrl(credentials.apiUrl), {
+    let response = await fetchImpl(joinUrl(credentials.apiUrl), {
       method: SGP_CLIENTES_METHOD,
       headers: { Accept: "application/json", "Content-Type": "application/json" },
-      body: JSON.stringify({ app: credentials.app, token: credentials.token, ...payload }),
+      body: JSON.stringify(fields),
       signal: controller.signal,
     });
+    if (response.status === 401 || response.status === 403) {
+      const form = new URLSearchParams();
+      for (const [key, value] of Object.entries(fields)) form.set(key, String(value));
+      response = await fetchImpl(joinUrl(credentials.apiUrl), {
+        method: SGP_CLIENTES_METHOD,
+        headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
+        body: form.toString(),
+        signal: controller.signal,
+      });
+    }
     if (response.status === 401 || response.status === 403) {
       throw new SgpReadError("Autenticação recusada pelo SGP (app/token).", "auth");
     }
@@ -136,4 +151,8 @@ export async function listSgpContractsByStatus(
   }
 
   return { contracts: collected, pageCount: pages, logSafe: redactSgpLog({ pages, count: collected.length }) };
+}
+
+export async function probeSgpAuth(credentials: SgpChurnCredentials, fetchImpl: typeof fetch = fetch) {
+  await postPage(credentials, { offset: 0, limit: 1, contrato_status: 3 }, fetchImpl);
 }
