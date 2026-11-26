@@ -58,6 +58,23 @@ describe("períodos do dashboard comercial", () => {
     assert.equal(quarterly.toYmdInclusive, "2026-11-19");
   });
 
+  it("último mês completo não é o mês corrente parcial", () => {
+    const range = parseDashboardPeriod(
+      { preset: "last_closed_month" },
+      new Date("2026-11-26T15:00:00.000Z"),
+      "America/Sao_Paulo",
+    );
+    assert.equal(range.fromYmd, "2026-10-01");
+    assert.equal(range.toYmdInclusive, "2026-10-31");
+    const current = parseDashboardPeriod(
+      { preset: "monthly" },
+      new Date("2026-11-26T15:00:00.000Z"),
+      "America/Sao_Paulo",
+    );
+    assert.equal(current.fromYmd, "2026-11-01");
+    assert.equal(current.toYmdInclusive, "2026-11-26");
+  });
+
   it("últimos 12 meses completos vão até o último mês fechado, não um intervalo fixo", () => {
     const range = parseDashboardPeriod(
       { preset: "last_12_closed_months" },

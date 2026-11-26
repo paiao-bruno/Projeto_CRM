@@ -9,7 +9,14 @@ export const SGP_CONTRACT_STATUS = {
   ACTIVE_REDUCED_SPEED: 7,
 } as const;
 
+/** Serviço efetivamente em operação. Novo (6) não entra como ativo. */
 export const ACTIVE_SERVICE_CODES = new Set<number>([
+  SGP_CONTRACT_STATUS.ACTIVE,
+  SGP_CONTRACT_STATUS.ACTIVE_REDUCED_SPEED,
+]);
+
+/** Cliente ainda vinculado: ativo, novo ou velocidade reduzida. Impede “cliente perdido”. */
+export const RELATIONSHIP_CODES = new Set<number>([
   SGP_CONTRACT_STATUS.ACTIVE,
   SGP_CONTRACT_STATUS.NEW,
   SGP_CONTRACT_STATUS.ACTIVE_REDUCED_SPEED,
@@ -27,8 +34,32 @@ const STATUS_LABELS: Record<number, string> = {
   7: "Ativo com velocidade reduzida",
 };
 
-/** Datas de status opcionais. Nunca dataCadastro, vencimento ou pagamento. O sample mascarado não traz data de cancelamento. */
-const CANCEL_DATE_KEYS = ["data_status", "dataStatus", "data_contrato_status", "dataContratoStatus"];
+/** Datas opcionais no objeto contrato. Nunca cadastro, vencimento, pagamento nem data de título. */
+export const CANCEL_DATE_KEYS = [
+  "data_status",
+  "dataStatus",
+  "data_contrato_status",
+  "dataContratoStatus",
+  "data_cancelamento",
+  "dataCancelamento",
+  "dataCancelamentoContrato",
+  "data_alteracao_status",
+  "dataAlteracaoStatus",
+  "dt_status",
+  "data_status_contrato",
+];
+
+const FORBIDDEN_DATE_KEYS = [
+  "dataCadastro",
+  "data_cadastro",
+  "vencimento",
+  "dataVencimento",
+  "data_vencimento",
+  "dataPagamento",
+  "data_pagamento",
+  "dataEmissao",
+  "data_emissao",
+];
 
 export type NormalizedSgpContract = {
   sgpCustomerId: string;
@@ -108,6 +139,13 @@ function statusDateFromContract(contract: Record<string, unknown>) {
   return null;
 }
 
+export function contractDateInventory(contract: Record<string, unknown>) {
+  const present = Object.keys(contract).filter((key) => /data|dt_|venc/i.test(key));
+  const used = CANCEL_DATE_KEYS.find((key) => parseDate(contract[key]));
+  const ignored = present.filter((key) => FORBIDDEN_DATE_KEYS.includes(key) || (!CANCEL_DATE_KEYS.includes(key) && parseDate(contract[key])));
+  return { present, used: used ?? null, ignored };
+}
+
 export function normalizeContract(customerId: string, contract: Record<string, unknown>): NormalizedSgpContract | null {
   const sgpContractId = asText(contract.id) ?? asText(contract.contrato) ?? asText(contract.contrato_id);
   if (!sgpContractId) return null;
@@ -125,6 +163,29 @@ export function normalizeContract(customerId: string, contract: Record<string, u
     isCancelled,
     isActiveService,
   };
+}
+
+export function collectDateInventoryFromPayload(body: unknown) {
+  const root = asRecord(body);
+  const list = Array.isArray(body)
+    ? body
+    : Array.isArray(root?.clientes)
+      ? root!.clientes
+      : Array.isArray(root?.data)
+        ? root!.data
+        : [];
+  for (const item of list) {
+    const customer = asRecord(item);
+    const contracts = Array.isArray(customer?.contratos) ? customer!.contratos : [];
+    for (const contract of contracts) {
+      const row = asRecord(contract);
+      if (!row) continue;
+      const mapped = mapContractStatus(row.contrato_status ?? row.status);
+      if (mapped.code !== CANCELLED_CODE) continue;
+      return contractDateInventory(row);
+    }
+  }
+  return { present: [] as string[], used: null as string | null, ignored: [] as string[] };
 }
 
 export function extractContractsFromClientesPayload(body: unknown): NormalizedSgpContract[] {

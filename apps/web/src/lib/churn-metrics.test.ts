@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { cancelledContracts, churnRate, compareChurnStatus, lostCustomers, reasonSlices } from "./churn-metrics";
+import {
+  cancelledContracts,
+  churnRate,
+  cohortChurn,
+  compareChurnStatus,
+  formatChurnPercent,
+  lostCustomers,
+  reasonSlices,
+  temporalCancellations,
+} from "./churn-metrics";
 import { inclusiveRange } from "./dashboard-periods";
 import type { NormalizedSgpContract } from "./sgp-cancellation-parse";
 
@@ -77,6 +86,73 @@ describe("métricas de churn", () => {
     assert.equal(compareChurnStatus(0.01504, 150), "within");
     assert.equal(compareChurnStatus(0.016, 150), "above");
     assert.equal(compareChurnStatus(0.016, 180), "within");
+  });
+
+  it("Novo (6) não é serviço ativo, mas ainda vincula o cliente e evita perda", () => {
+    const rows = [
+      row({ sgpCustomerId: "n", sgpContractId: "old", isCancelled: true, isActiveService: false, statusCode: 3 }),
+      row({
+        sgpCustomerId: "n",
+        sgpContractId: "new",
+        isCancelled: false,
+        isActiveService: false,
+        statusCode: 6,
+        statusLabel: "Novo",
+      }),
+    ];
+    assert.equal(lostCustomers(rows).length, 0);
+  });
+
+  it("cartões temporais não repetem o estoque quando falta data", () => {
+    const range = inclusiveRange("2026-11-20", "2026-11-26", "America/Sao_Paulo", "7d");
+    const rows = [
+      row({ sgpCustomerId: "1", sgpContractId: "a", statusDate: null }),
+      row({ sgpCustomerId: "2", sgpContractId: "b", statusDate: null }),
+    ];
+    const temporal = temporalCancellations({ ready: true, rows, range });
+    assert.equal(temporal.value, null);
+    assert.equal(cancelledContracts(rows).length, 2);
+  });
+
+  it("evento com data no período não mistura cancelamento anterior nem contrato sem data", () => {
+    const range = inclusiveRange("2026-11-01", "2026-11-26", "America/Sao_Paulo", "month");
+    const rows = [
+      row({ sgpCustomerId: "1", sgpContractId: "in", statusDate: new Date("2026-11-10T15:00:00.000Z") }),
+      row({ sgpCustomerId: "2", sgpContractId: "before", statusDate: new Date("2026-10-10T15:00:00.000Z") }),
+      row({ sgpCustomerId: "3", sgpContractId: "undated", statusDate: null }),
+    ];
+    const temporal = temporalCancellations({ ready: true, rows, range });
+    assert.equal(temporal.value, 1);
+    assert.equal(temporal.coverage, "partial");
+  });
+
+  it("denominador zero ou ausente não vira 0%; churn da coorte ignora aquisição do período", () => {
+    assert.equal(churnRate(1, 0), null);
+    assert.equal(cohortChurn({ startActiveContractIds: ["old"], cancelledContractIds: ["new", "old"] }), 1);
+    assert.equal(cohortChurn({ startActiveContractIds: null, cancelledContractIds: ["old"] }), null);
+    assert.equal(formatChurnPercent(null), "Taxa indisponível");
+  });
+
+  it("transição INTERVAL só conta se o intervalo inteiro cabe no recorte", () => {
+    const range = inclusiveRange("2026-11-01", "2026-11-30", "America/Sao_Paulo", "month");
+    const temporal = temporalCancellations({
+      ready: true,
+      rows: [row({ sgpCustomerId: "1", sgpContractId: "x", statusDate: null })],
+      range,
+      observations: [
+        {
+          sgpCustomerId: "1",
+          sgpContractId: "x",
+          fromStatusCode: 1,
+          toStatusCode: 3,
+          quality: "INTERVAL",
+          observedFrom: new Date("2026-10-31T03:00:00.000Z"),
+          observedTo: new Date("2026-11-02T03:00:00.000Z"),
+          statusDate: null,
+        },
+      ],
+    });
+    assert.equal(temporal.value, null);
   });
 
   it("reativação na fotografia atual deixa de contar como cliente perdido", () => {

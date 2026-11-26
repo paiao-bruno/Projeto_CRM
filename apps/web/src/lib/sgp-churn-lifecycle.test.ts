@@ -3,11 +3,14 @@ import { describe, it } from "node:test";
 import {
   allSgpCandidatesDenied,
   canPublishSnapshot,
+  churnJobDecision,
   churnPollIntervalMs,
   displayCancellations,
+  extraTickDue,
   isChurnRealtimeEvent,
   isFreshSnapshot,
   isSecretMask,
+  latestDate,
   lifecycleFromState,
   nextChurnAttemptAt,
   preferFresherPayload,
@@ -72,7 +75,7 @@ describe("ciclo automático de cancelamentos", () => {
     assert.equal(churnPollIntervalMs("syncing"), 5_000);
     assert.equal(churnPollIntervalMs("ready"), 60_000);
     const now = new Date("2026-11-25T13:00:00.000Z");
-    assert.equal(
+    assert.deepEqual(
       nextChurnAttemptAt({
         lifecycle: "ready",
         lastSuccessAt: new Date("2026-11-25T12:55:00.000Z"),
@@ -80,9 +83,10 @@ describe("ciclo automático de cancelamentos", () => {
         now,
         refreshMs: 5 * 60 * 1000,
       }),
-      "2026-11-25T13:00:00.000Z",
+      { at: "2026-11-25T13:00:00.000Z", delayed: false, blocked: false },
     );
-    assert.equal(nextChurnAttemptAt({ lifecycle: "auth_denied", lastSuccessAt: null, lastAttemptAt: now, now }), null);
+    assert.equal(nextChurnAttemptAt({ lifecycle: "auth_denied", lastSuccessAt: null, lastAttemptAt: now, now }).at, null);
+    assert.equal(nextChurnAttemptAt({ lifecycle: "auth_denied", lastSuccessAt: null, lastAttemptAt: now, now }).blocked, true);
     const deniedAt = new Date("2026-11-25T12:50:00.000Z");
     assert.equal(
       shouldSkipDeniedAuth({
@@ -120,6 +124,22 @@ describe("ciclo automático de cancelamentos", () => {
     assert.equal(preferFresherPayload({ generatedAt: "2026-11-25T13:00:01.000Z" }, { generatedAt: "2026-11-25T13:00:00.000Z" }).generatedAt, "2026-11-25T13:00:01.000Z");
     assert.equal(isChurnRealtimeEvent("sgp.churn.updated"), true);
     assert.equal(isChurnRealtimeEvent("message.created"), false);
+    const failed = new Date("2026-11-26T13:09:10.000Z");
+    const success = new Date("2026-11-26T13:32:03.000Z");
+    assert.equal(latestDate(failed, success)?.toISOString(), success.toISOString());
+    assert.equal(extraTickDue(0, Date.parse("2026-11-26T13:00:00.000Z"), 60_000), true);
+    assert.equal(churnJobDecision({ force: false, hasFreshComplete: true, skipDeniedAuth: false, coolingFailed: false }), "fresh");
+    assert.equal(churnJobDecision({ force: false, hasFreshComplete: false, skipDeniedAuth: false, coolingFailed: false }), "start");
+    assert.equal(
+      nextChurnAttemptAt({
+        lifecycle: "stale",
+        lastSuccessAt: new Date("2026-11-25T12:00:00.000Z"),
+        lastAttemptAt: failed,
+        now,
+        refreshMs: 5 * 60 * 1000,
+      }).delayed,
+      true,
+    );
   });
 
   it("HTTP 200 com erro de negócio não é sucesso", () => {

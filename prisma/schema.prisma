@@ -377,8 +377,9 @@ model Tenant {
   dashboardMetrics    DashboardMetric[]
   commercialGoals     CommercialGoal[]
   funnelCommercialEvents FunnelCommercialEvent[]
-  sgpChurnSnapshots   SgpChurnSnapshot[]
-  sgpChurnContracts   SgpChurnContract[]
+  sgpChurnSnapshots    SgpChurnSnapshot[]
+  sgpChurnContracts    SgpChurnContract[]
+  sgpChurnObservations SgpChurnObservation[]
   notifications       Notification[]
   auditLogs           AuditLog[]
 
@@ -1657,8 +1658,9 @@ model SgpChurnSnapshot {
   metadata       Json?
   createdAt      DateTime @default(now())
 
-  tenant    Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  contracts SgpChurnContract[]
+  tenant       Tenant                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  contracts    SgpChurnContract[]
+  observations SgpChurnObservation[]
 
   @@index([tenantId, status, finishedAt])
 }
@@ -1685,6 +1687,30 @@ model SgpChurnContract {
   @@unique([snapshotId, sgpContractId])
   @@index([tenantId, snapshotId, isCancelled])
   @@index([tenantId, sgpCustomerId])
+}
+
+/// Transição observada entre fotografias ou data efetiva enviada pelo SGP no objeto contrato.
+model SgpChurnObservation {
+  id              String    @id @default(uuid()) @db.Uuid
+  tenantId        String    @db.Uuid
+  integrationId   String?   @db.Uuid
+  snapshotId      String    @db.Uuid
+  sgpCustomerId   String
+  sgpContractId   String
+  fromStatusCode  Int?
+  toStatusCode    Int?
+  quality         String
+  observedFrom    DateTime
+  observedTo      DateTime
+  statusDate      DateTime?
+  sourceEndpoint  String
+  createdAt       DateTime  @default(now())
+
+  tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  snapshot SgpChurnSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, sgpContractId, snapshotId, toStatusCode], map: "SgpChurnObservation_tenant_contract_snap_status_key")
+  @@index([tenantId, quality, observedTo])
 }
 
 model DashboardMetric {

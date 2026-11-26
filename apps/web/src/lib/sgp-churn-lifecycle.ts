@@ -113,6 +113,28 @@ export function churnPollIntervalMs(lifecycle: SgpChurnLifecycle) {
   return 30_000;
 }
 
+export function latestDate(...dates: Array<Date | null | undefined>) {
+  const ok = dates.filter((value): value is Date => value instanceof Date && !Number.isNaN(value.getTime()));
+  if (!ok.length) return null;
+  return ok.reduce((a, b) => (a.getTime() >= b.getTime() ? a : b));
+}
+
+export function extraTickDue(lastExtraMs: number, nowMs: number, extraEveryMs: number) {
+  return nowMs - lastExtraMs > extraEveryMs;
+}
+
+export function churnJobDecision(input: {
+  force: boolean;
+  hasFreshComplete: boolean;
+  skipDeniedAuth: boolean;
+  coolingFailed: boolean;
+}) {
+  if (input.skipDeniedAuth) return "auth_denied" as const;
+  if (!input.force && input.hasFreshComplete) return "fresh" as const;
+  if (!input.force && input.coolingFailed) return "cooling" as const;
+  return "start" as const;
+}
+
 export function nextChurnAttemptAt(input: {
   lifecycle: SgpChurnLifecycle;
   lastSuccessAt: Date | null;
@@ -123,13 +145,29 @@ export function nextChurnAttemptAt(input: {
 }) {
   const refreshMs = input.refreshMs ?? SGP_CHURN_REFRESH_MS;
   const retryMs = input.retryMs ?? SGP_CHURN_RETRY_MS;
-  if (input.lifecycle === "needs_config" || input.lifecycle === "auth_denied" || input.lifecycle === "decrypt_failed") return null;
-  if (input.lifecycle === "syncing" || input.lifecycle === "validating") return input.now.toISOString();
-  if (input.lifecycle === "ready" && input.lastSuccessAt) {
-    return new Date(input.lastSuccessAt.getTime() + refreshMs).toISOString();
+  if (input.lifecycle === "needs_config" || input.lifecycle === "auth_denied" || input.lifecycle === "decrypt_failed") {
+    return { at: null as string | null, delayed: false, blocked: true };
   }
-  if (input.lastAttemptAt) return new Date(input.lastAttemptAt.getTime() + retryMs).toISOString();
-  return input.now.toISOString();
+  if (input.lifecycle === "syncing" || input.lifecycle === "validating") {
+    return { at: input.now.toISOString(), delayed: false, blocked: false };
+  }
+  if (input.lastSuccessAt) {
+    const scheduled = new Date(input.lastSuccessAt.getTime() + refreshMs);
+    return {
+      at: scheduled.toISOString(),
+      delayed: scheduled.getTime() < input.now.getTime(),
+      blocked: false,
+    };
+  }
+  if (input.lastAttemptAt) {
+    const scheduled = new Date(input.lastAttemptAt.getTime() + retryMs);
+    return {
+      at: scheduled.toISOString(),
+      delayed: scheduled.getTime() < input.now.getTime(),
+      blocked: false,
+    };
+  }
+  return { at: input.now.toISOString(), delayed: false, blocked: false };
 }
 
 export function preferFresherPayload<T extends { generatedAt?: string }>(current: T | null, incoming: T) {

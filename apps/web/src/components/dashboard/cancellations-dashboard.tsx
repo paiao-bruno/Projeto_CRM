@@ -48,8 +48,23 @@ type ChurnResponse = {
     lastError?: string | null;
     lastSuccessAt?: string | null;
     lastAttemptAt?: string | null;
+    lastAttemptStartedAt?: string | null;
+    lastAttemptKind?: string | null;
     nextAttemptAt?: string | null;
+    nextAttemptDelayed?: boolean;
+    nextAttemptBlocked?: boolean;
     refreshMs?: number;
+    coverageStartedAt?: string | null;
+  };
+  position?: {
+    label: string;
+    at: string | null;
+    cancelledContracts: number | null;
+    lostCustomers: number | null;
+    activeServiceContracts: number | null;
+    relationshipCustomers: number | null;
+    undatedCancelledContracts: number | null;
+    unit: string;
   };
   cards: Array<{
     kind: string;
@@ -60,12 +75,26 @@ type ChurnResponse = {
     realized: number | null;
     status: string;
     cancellations: number | null;
+    knownCancellations?: number;
+    temporalCoverage?: string;
     partialMonth?: boolean;
     coverage: string;
     formula: string;
   }>;
-  evolution: Array<{ label: string; churn: number | null; meta: number | null; lost: number | null }>;
-  reasons: { total: number | null; unit: string; slices: Array<{ name: string; count: number; share: number }> };
+  evolution: Array<{
+    label: string;
+    churn: number | null;
+    meta: number | null;
+    lost: number | null;
+    cancellations?: number | null;
+    coverage?: string;
+  }>;
+  reasons: {
+    total: number | null;
+    unit: string;
+    scope?: string;
+    slices: Array<{ name: string; count: number; share: number }>;
+  };
   indicators: {
     activeCustomers: { value: number | null; label: string; at: string | null };
     cancellations: { value: number | null; change: { kind: "pct" | "none"; value: number | null } };
@@ -194,10 +223,11 @@ export function CancellationsDashboard() {
               <option value="last_12_closed_months">Últimos 12 meses completos</option>
               <option value="7d">Últimos 7 dias</option>
               <option value="15d">Últimos 15 dias</option>
-              <option value="monthly">Último mês</option>
-              <option value="quarterly">Últimos 3 meses</option>
-              <option value="semiannual">Últimos 6 meses</option>
-              <option value="annual">Últimos 12 meses (até hoje)</option>
+              <option value="monthly">Mês atual</option>
+              <option value="last_closed_month">Último mês completo</option>
+              <option value="quarterly">Trimestre até hoje</option>
+              <option value="semiannual">Semestre até hoje</option>
+              <option value="annual">12 meses até hoje</option>
               <option value="custom">Personalizado</option>
             </select>
             {preset === "custom" ? (
@@ -221,19 +251,44 @@ export function CancellationsDashboard() {
             {data.period.fromYmd} a {data.period.toYmdInclusive} ({data.timeZone})
             {" · "}
             {data.source.lastSyncAt
-              ? `última sincronização ${new Date(data.source.lastSyncAt).toLocaleString("pt-BR", { timeZone: data.timeZone })}`
+              ? `fim da última sincronização completa ${new Date(data.source.lastSyncAt).toLocaleString("pt-BR", { timeZone: data.timeZone })}`
               : "ainda sem fotografia completa"}
             {data.source.stale ? " · desatualizado" : ""}
-            {data.source.lastAttemptAt
-              ? ` · última tentativa ${new Date(data.source.lastAttemptAt).toLocaleString("pt-BR", { timeZone: data.timeZone })}`
+            {data.source.lastAttemptStartedAt
+              ? ` · início da última tentativa do job ${new Date(data.source.lastAttemptStartedAt).toLocaleString("pt-BR", { timeZone: data.timeZone })}`
               : ""}
-            {data.source.nextAttemptAt
-              ? ` · próxima atualização automática ${new Date(data.source.nextAttemptAt).toLocaleString("pt-BR", { timeZone: data.timeZone })}`
-              : ""}
+            {data.source.nextAttemptBlocked
+              ? " · próxima execução automática bloqueada"
+              : data.source.nextAttemptAt
+                ? ` · próxima execução automática ${new Date(data.source.nextAttemptAt).toLocaleString("pt-BR", { timeZone: data.timeZone })}${data.source.nextAttemptDelayed ? " (atrasada)" : ""}`
+                : ""}
             {" · "}
             {data.period.comparisonLabel}
           </p>
           <p className="text-xs vx-muted">{data.source.coverage}</p>
+
+          {data.position ? (
+            <article className="vx-card p-4" style={{ borderColor: "var(--vx-primary)" }}>
+              <p className="text-xs font-semibold uppercase vx-muted">{data.position.label}</p>
+              <p className="text-xs vx-muted">
+                {data.position.at
+                  ? `coleta ${new Date(data.position.at).toLocaleString("pt-BR", { timeZone: data.timeZone })}`
+                  : "sem coleta"}
+                {" · não pertence ao filtro temporal"}
+              </p>
+              <p className="mt-2 text-2xl font-bold">{formatCount(data.position.cancelledContracts)}</p>
+              <p className="text-sm">contratos atualmente cancelados</p>
+              <p className="mt-2 text-sm">
+                Contratos em serviço (1 e 7): {formatCount(data.position.activeServiceContracts)}
+              </p>
+              <p className="text-sm">
+                Clientes sem vínculo ativo: {formatCount(data.position.lostCustomers)}
+              </p>
+              <p className="text-xs vx-muted">
+                Sem data efetiva: {formatCount(data.position.undatedCancelledContracts)} · unidade {data.position.unit}
+              </p>
+            </article>
+          ) : null}
 
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {data.cards.map((card) => (
@@ -252,31 +307,36 @@ export function CancellationsDashboard() {
                 <p className="text-2xl font-bold">{formatChurnPercent(card.realized)}</p>
                 <p className="text-sm">{statusLabel(card.status)}</p>
                 <hr className="my-2" style={{ borderColor: "var(--vx-border)" }} />
-                <p className="text-sm">Cancelamentos: {formatCount(card.cancellations)}</p>
+                <p className="text-sm">Contratos cancelados no intervalo: {formatCount(card.cancellations)}</p>
               </article>
             ))}
           </div>
 
           <div className="grid gap-4 lg:grid-cols-2">
             <section className="vx-card p-4">
-              <h2 className="font-bold">Evolução do Churn</h2>
+              <h2 className="font-bold">Evolução de cancelamentos (contratos)</h2>
               <div className="mt-3 h-56">
+                {data.evolution.some((row) => row.cancellations != null || row.lost != null) ? (
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={data.evolution}>
+                  <LineChart data={data.evolution.map((row) => ({ ...row, cancellations: row.cancellations ?? row.lost }))}>
                     <CartesianGrid stroke="var(--vx-border)" />
                     <XAxis dataKey="label" stroke="var(--vx-muted)" />
-                    <YAxis stroke="var(--vx-muted)" tickFormatter={(value) => `${(Number(value) * 100).toFixed(1)}%`} />
+                    <YAxis stroke="var(--vx-muted)" allowDecimals={false} />
                     <Tooltip />
                     <Legend />
-                    <Line type="monotone" dataKey="churn" name="Churn (%)" stroke="#D4AF37" strokeWidth={2} dot connectNulls={false} />
-                    <Line type="monotone" dataKey="meta" name="Meta (%)" stroke="#8FA4B8" strokeDasharray="6 4" dot connectNulls={false} />
-                    <Area type="monotone" dataKey="churn" stroke="none" fill="#D4AF37" fillOpacity={0.08} connectNulls={false} />
+                    <Line type="monotone" dataKey="cancellations" name="Contratos cancelados" stroke="#D4AF37" strokeWidth={2} dot connectNulls={false} />
+                    <Area type="monotone" dataKey="cancellations" stroke="none" fill="#D4AF37" fillOpacity={0.08} connectNulls={false} />
                   </LineChart>
                 </ResponsiveContainer>
+                ) : (
+                  <p className="text-sm vx-muted">Sem cobertura temporal mensal para desenhar pontos. Lacunas não são preenchidas com zero.</p>
+                )}
               </div>
             </section>
             <section className="vx-card p-4">
-              <h2 className="font-bold">Motivos de Cancelamento</h2>
+              <h2 className="font-bold">
+                {data.reasons.scope === "current_position" ? "Motivos da posição atual" : "Motivos do período"}
+              </h2>
               <p className="text-xs vx-muted">
                 Total {formatCount(data.reasons.total)} · {data.reasons.unit}
               </p>
@@ -311,7 +371,9 @@ export function CancellationsDashboard() {
               ) : (
                 <p className="mt-3 text-sm vx-muted">
                   {data.source.lifecycle === "ready" || data.source.lifecycle === "stale"
-                    ? "Sem contratos cancelados na fotografia publicada."
+                    ? data.reasons.total === 0
+                      ? "Nenhum contrato cancelado na cobertura desta unidade."
+                      : "Motivos indisponíveis para a unidade selecionada."
                     : "Ainda não foi possível avaliar motivos: não há fotografia completa publicada."}
                 </p>
               )}
@@ -326,7 +388,7 @@ export function CancellationsDashboard() {
                   <th className="py-1">Período</th>
                   <th>Meta</th>
                   <th>Realizado</th>
-                  <th>Cancelamentos</th>
+                  <th>Contratos no intervalo</th>
                   <th>Churn</th>
                 </tr>
               </thead>
@@ -353,10 +415,10 @@ export function CancellationsDashboard() {
             <section className="vx-card p-4">
               <h2 className="font-bold">Principais Indicadores</h2>
               <p className="mt-2 text-sm">
-                Clientes ativos ({data.indicators.activeCustomers.label}): <strong>{formatCount(data.indicators.activeCustomers.value)}</strong>
+                {data.indicators.activeCustomers.label}: <strong>{formatCount(data.indicators.activeCustomers.value)}</strong>
               </p>
               <p className="text-sm">
-                Total de cancelamentos do período: <strong>{formatCount(data.indicators.cancellations.value)}</strong>{" "}
+                Contratos cancelados no período do filtro: <strong>{formatCount(data.indicators.cancellations.value)}</strong>{" "}
                 <span className="vx-muted">{formatChangeLabel(data.indicators.cancellations.change)}</span>
               </p>
               <p className="text-sm">
@@ -398,7 +460,10 @@ export function CancellationsDashboard() {
             </div>
           </form>
           ) : null}
-          <p className="text-xs vx-muted">{data.dictionary.rate} 0% é uma meta válida. Sem taxa calculável o cartão fica Indisponível, não Dentro.</p>
+          <p className="text-xs vx-muted">
+            {data.dictionary.cancelledContracts} {data.dictionary.periodCancellations} {data.dictionary.rate} 0% é uma
+            meta válida. Sem taxa calculável o cartão fica Indisponível, não Dentro.
+          </p>
         </>
       ) : null}
     </div>

@@ -32,5 +32,8 @@ describe("abas do Dashboard", () => {
     assert.match(churnRoute, /overview/);
     assert.match(workerMain, /tickSgpChurn/);
     assert.match(workerMain, /extraEveryMs/);
+    assert.match(cancellations, /início da última tentativa do job/);
+    assert.match(cancellations, /contratos atualmente cancelados/);
+    assert.match(cancellations, /connectNulls=\{false\}/);
   });
 });

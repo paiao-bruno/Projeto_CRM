@@ -160,6 +160,10 @@ export function parseDashboardPeriod(
   if (preset === "30d") return inclusiveRange(addDaysYmd(today, -29), today, timeZone, "30d");
   if (preset === "90d") return inclusiveRange(addDaysYmd(today, -89), today, timeZone, "90d");
   if (preset === "monthly") return horizonRange("monthly", today, timeZone);
+  if (preset === "last_closed_month") {
+    const end = lastClosedMonthEnd(today);
+    return inclusiveRange(startOfMonthYmd(end), end, timeZone, "last_closed_month");
+  }
   if (preset === "quarterly") return horizonRange("quarterly", today, timeZone);
   if (preset === "semiannual") return horizonRange("semiannual", today, timeZone);
   if (preset === "annual") return horizonRange("annual", today, timeZone);

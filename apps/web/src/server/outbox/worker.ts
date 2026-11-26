@@ -1,3 +1,4 @@
+import { extraTickDue } from "../../lib/sgp-churn-lifecycle";
 import { OutboxService, newWorkerId } from "./service";
 
 export type WorkerHandle = { stop: () => Promise<void>; id: string };
@@ -34,7 +35,7 @@ export function startOutboxWorker(
           lastBeat = Date.now();
         }
         const { claimed } = await service.runOnce(batch);
-        if (extraTick && !extraBusy && Date.now() - lastExtra > extraEveryMs) {
+        if (extraTick && !extraBusy && extraTickDue(lastExtra, Date.now(), extraEveryMs)) {
           lastExtra = Date.now();
           extraBusy = true;
           void extraTick()

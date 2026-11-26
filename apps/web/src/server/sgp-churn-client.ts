@@ -1,5 +1,6 @@
 import {
   assertSgpClientesPayload,
+  collectDateInventoryFromPayload,
   extractContractsFromClientesPayload,
   paginationFromPayload,
   redactSgpLog,
@@ -150,6 +151,7 @@ export async function listSgpContractsByStatus(
   const limit = 100;
   let pages = 0;
   const maxPages = 200;
+  let dateInventory: ReturnType<typeof collectDateInventoryFromPayload> | null = null;
 
   while (pages < maxPages) {
     const body = await withRetry(() =>
@@ -160,6 +162,7 @@ export async function listSgpContractsByStatus(
       ),
     );
     const page = extractContractsFromClientesPayload(body);
+    if (!dateInventory) dateInventory = collectDateInventoryFromPayload(body);
     const fingerprint = page.map((row) => row.sgpContractId).sort().join(",");
     if (seenPages.has(fingerprint) && fingerprint) {
       throw new SgpReadError("Paginação do SGP repetiu a mesma página; coleta interrompida.", "loop");
@@ -175,7 +178,12 @@ export async function listSgpContractsByStatus(
     if (page.length < step) break;
   }
 
-  return { contracts: collected, pageCount: pages, logSafe: redactSgpLog({ pages, count: collected.length }) };
+  return {
+    contracts: collected,
+    pageCount: pages,
+    dateInventory,
+    logSafe: redactSgpLog({ pages, count: collected.length }),
+  };
 }
 
 export async function probeSgpAuth(credentials: SgpChurnCredentials, fetchImpl: typeof fetch = fetch) {
