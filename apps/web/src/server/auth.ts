@@ -152,6 +152,13 @@ export function requirePermission(user: ServerAuthUser, permission: string) {
   }
 }
 
+export function requireAnyPermission(user: ServerAuthUser, permissions: string[]) {
+  const granted = new Set(user.permissions ?? []);
+  if (!permissions.some((permission) => granted.has(permission))) {
+    throw new HttpError(403, "Permissao insuficiente.");
+  }
+}
+
 export async function requireAuth(request: Request) {
   const header = request.headers.get("authorization");
   if (!header?.startsWith("Bearer ")) {

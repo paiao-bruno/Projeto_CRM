@@ -1,8 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import dynamic from "next/dynamic";
+import { useEffect, useState, type KeyboardEvent } from "react";
 import { CommercialDashboard } from "@/components/dashboard/commercial-dashboard";
+
+const CancellationsDashboard = dynamic(
+  () => import("@/components/dashboard/cancellations-dashboard").then((mod) => mod.CancellationsDashboard),
+  { loading: () => <p className="vx-empty">Carregando gestão de cancelamentos...</p> },
+);
 import { PageHeader, ErrorAlert, formatCents, statusLabels, useResource } from "@/components/vx";
 
 type Overview = {
@@ -113,33 +119,67 @@ function OperationalDashboard() {
   );
 }
 
+const TAB_KEY = "vx-dashboard-tab";
+type DashboardTab = "commercial" | "operational" | "cancellations";
+
 export default function DashboardPage() {
-  const [tab, setTab] = useState<"commercial" | "operational">("commercial");
+  const [tab, setTab] = useState<DashboardTab>("commercial");
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(TAB_KEY);
+      if (stored === "commercial" || stored === "operational" || stored === "cancellations") setTab(stored);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  function selectTab(next: DashboardTab) {
+    setTab(next);
+    try {
+      window.localStorage.setItem(TAB_KEY, next);
+    } catch {
+      /* ignore */
+    }
+  }
+  const tabs: Array<{ id: DashboardTab; label: string }> = [
+    { id: "commercial", label: "Comercial" },
+    { id: "operational", label: "Operacional" },
+    { id: "cancellations", label: "Gestão de Cancelamentos" },
+  ];
+  function onTabKey(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "ArrowRight" && event.key !== "ArrowLeft" && event.key !== "Home" && event.key !== "End") return;
+    event.preventDefault();
+    const index = tabs.findIndex((item) => item.id === tab);
+    const nextIndex =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? tabs.length - 1
+          : event.key === "ArrowRight"
+            ? (index + 1) % tabs.length
+            : (index - 1 + tabs.length) % tabs.length;
+    selectTab(tabs[nextIndex].id);
+  }
   return (
     <div>
-      <div className="mb-4 flex flex-wrap gap-2" role="tablist" aria-label="Áreas do Dashboard">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "commercial"}
-          className="vx-btn"
-          style={tab === "commercial" ? { background: "var(--vx-selected)", color: "var(--vx-secondary)" } : undefined}
-          onClick={() => setTab("commercial")}
-        >
-          Comercial
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "operational"}
-          className="vx-btn"
-          style={tab === "operational" ? { background: "var(--vx-selected)", color: "var(--vx-secondary)" } : undefined}
-          onClick={() => setTab("operational")}
-        >
-          Operacional
-        </button>
+      <div className="mb-4 flex flex-wrap gap-2" role="tablist" aria-label="Áreas do Dashboard" onKeyDown={onTabKey}>
+        {tabs.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            role="tab"
+            tabIndex={tab === item.id ? 0 : -1}
+            aria-selected={tab === item.id}
+            className="vx-btn"
+            style={tab === item.id ? { background: "var(--vx-selected)", color: "var(--vx-primary)" } : undefined}
+            onClick={() => selectTab(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
       </div>
-      {tab === "commercial" ? <CommercialDashboard /> : <OperationalDashboard />}
+      {tab === "commercial" ? <CommercialDashboard /> : null}
+      {tab === "operational" ? <OperationalDashboard /> : null}
+      {tab === "cancellations" ? <CancellationsDashboard /> : null}
     </div>
   );
 }

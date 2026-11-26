@@ -3,6 +3,7 @@
 import { KeyRound, Plus, Power } from "lucide-react";
 import { FormEvent, useState } from "react";
 import { api } from "@/lib/api";
+import { SgpChurnSettings } from "@/components/integrations/sgp-churn-settings";
 import { ErrorAlert, Field, Modal, PageHeader, useResource } from "@/components/vx";
 
 type Channel = {
@@ -91,9 +92,10 @@ export default function IntegrationsPage() {
       <ErrorAlert message={channels.error} />
 
       <div className="vx-alert mb-4">
-        Somente o adaptador de <strong>teste</strong> está disponível: ele nunca contata a rede externa. Provedores reais exigem credenciais autorizadas e homologação própria.
-        A integração com o SGP foi descontinuada; registros e histórico já importados permanecem preservados.
+        Somente o adaptador de <strong>teste</strong> está disponível para canais de mensagem: ele nunca contata a rede externa.
+        A importação de inventário SGP permanece descontinuada; a leitura de cancelamentos reutiliza credenciais já gravadas no servidor.
       </div>
+      <SgpChurnSettings />
 
       {channels.loading ? (
         <p className="vx-empty">Carregando...</p>

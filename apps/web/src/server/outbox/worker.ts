@@ -1,3 +1,4 @@
+import { extraTickDue } from "../../lib/sgp-churn-lifecycle";
 import { OutboxService, newWorkerId } from "./service";
 
 export type WorkerHandle = { stop: () => Promise<void>; id: string };
@@ -5,14 +6,24 @@ export type WorkerHandle = { stop: () => Promise<void>; id: string };
 /** Laço do worker dedicado: reaper de leases expirados, reivindicação e processamento. */
 export function startOutboxWorker(
   service: OutboxService = new OutboxService(),
-  options: { intervalMs?: number; batch?: number; log?: (line: string) => void } = {},
+  options: {
+    intervalMs?: number;
+    batch?: number;
+    log?: (line: string) => void;
+    extraTick?: () => Promise<void>;
+    extraEveryMs?: number;
+  } = {},
 ): WorkerHandle {
   const intervalMs = options.intervalMs ?? 1000;
   const batch = options.batch ?? 10;
   const log = options.log ?? ((line: string) => console.log(line));
+  const extraTick = options.extraTick;
+  const extraEveryMs = options.extraEveryMs ?? 60_000;
   const id = newWorkerId();
   let stopping = false;
   let lastBeat = 0;
+  let lastExtra = extraTick ? 0 : Date.now();
+  let extraBusy = false;
   let wake: (() => void) | null = null;
 
   const loop = (async () => {
@@ -24,6 +35,15 @@ export function startOutboxWorker(
           lastBeat = Date.now();
         }
         const { claimed } = await service.runOnce(batch);
+        if (extraTick && !extraBusy && extraTickDue(lastExtra, Date.now(), extraEveryMs)) {
+          lastExtra = Date.now();
+          extraBusy = true;
+          void extraTick()
+            .catch((error) => log(`[sgp-churn] ${error instanceof Error ? error.message : "falha"}`))
+            .finally(() => {
+              extraBusy = false;
+            });
+        }
         if (claimed >= batch) continue;
       } catch (error) {
         log(`[outbox] erro no ciclo: ${error instanceof Error ? error.message : "desconhecido"}`);

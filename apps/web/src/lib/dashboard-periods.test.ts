@@ -57,4 +57,41 @@ describe("períodos do dashboard comercial", () => {
     assert.equal(quarterly.fromYmd, "2026-09-01");
     assert.equal(quarterly.toYmdInclusive, "2026-11-19");
   });
+
+  it("cartões ancorados em 31/10 não usam o dia 26/11", () => {
+    const monthly = horizonRange("monthly", "2026-10-31", "America/Sao_Paulo");
+    assert.equal(monthly.fromYmd, "2026-10-01");
+    assert.equal(monthly.toYmdInclusive, "2026-10-31");
+    const weekly = horizonRange("weekly", "2026-10-31", "America/Sao_Paulo");
+    assert.equal(weekly.toYmdInclusive, "2026-10-31");
+    assert.equal(weekly.fromYmd, "2026-10-25");
+  });
+
+  it("último mês completo não é o mês corrente parcial", () => {
+    const range = parseDashboardPeriod(
+      { preset: "last_closed_month" },
+      new Date("2026-11-26T15:00:00.000Z"),
+      "America/Sao_Paulo",
+    );
+    assert.equal(range.fromYmd, "2026-10-01");
+    assert.equal(range.toYmdInclusive, "2026-10-31");
+    const current = parseDashboardPeriod(
+      { preset: "monthly" },
+      new Date("2026-11-26T15:00:00.000Z"),
+      "America/Sao_Paulo",
+    );
+    assert.equal(current.fromYmd, "2026-11-01");
+    assert.equal(current.toYmdInclusive, "2026-11-26");
+  });
+
+  it("últimos 12 meses completos vão até o último mês fechado, não um intervalo fixo", () => {
+    const range = parseDashboardPeriod(
+      { preset: "last_12_closed_months" },
+      new Date("2026-11-24T12:00:00.000Z"),
+      "America/Sao_Paulo",
+    );
+    assert.equal(range.fromYmd, "2025-11-01");
+    assert.equal(range.toYmdInclusive, "2026-10-31");
+    assert.equal(range.preset, "last_12_closed_months");
+  });
 });

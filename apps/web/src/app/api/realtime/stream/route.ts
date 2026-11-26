@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { requireAuth, requirePermission } from "@/server/auth";
+import { requireAnyPermission, requireAuth } from "@/server/auth";
 import { jsonError } from "@/server/http";
 import { getRealtimeHub } from "@/server/realtime";
 
@@ -16,7 +16,7 @@ const KEEPALIVE_MS = 25_000;
 export async function GET(request: NextRequest) {
   try {
     const user = await requireAuth(request);
-    requirePermission(user, "chat.read");
+    requireAnyPermission(user, ["chat.read", "dashboard.read"]);
     const encoder = new TextEncoder();
     let seq = 0;
     let cleanup: (() => void) | null = null;
