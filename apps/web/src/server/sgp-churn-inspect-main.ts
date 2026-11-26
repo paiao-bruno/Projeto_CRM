@@ -30,6 +30,7 @@ async function main() {
       host = null;
     }
     return {
+      appLooksLikeEmail: Boolean(secrets?.app?.includes("@")),
       tenantId: row.tenantId,
       tenantSlug: row.tenant.slug,
       tenantName: row.tenant.name,

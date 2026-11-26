@@ -1,6 +1,7 @@
 import { IntegrationProvider, IntegrationStatus } from "@prisma/client";
 import { isSecretMask, rankSgpChurnCandidates } from "../lib/sgp-churn-lifecycle";
 import {
+  assertSgpChurnAppName,
   missingSgpChurnProvisionFields,
   parseSgpChurnProvisionEnv,
   publicSgpChurnProvision,
@@ -104,6 +105,11 @@ export class SgpChurnCredentialsService {
     const token = incomingToken.trim() || preservedDedicated?.token || "";
     const nextApp = app || preservedDedicated?.app || "";
     if (!nextApp || !token) throw new HttpError(422, "Informe o App e o Token cadastrados no SGP.");
+    try {
+      assertSgpChurnAppName(nextApp);
+    } catch (error) {
+      throw new HttpError(422, error instanceof Error ? error.message : "App SGP inválido.");
+    }
     const version = existing ? credentialVersion(existing) + 1 : 1;
     const data = {
       name: CHURN_INTEGRATION_NAME,

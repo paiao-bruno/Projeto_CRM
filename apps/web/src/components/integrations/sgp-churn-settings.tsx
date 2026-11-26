@@ -81,26 +81,40 @@ export function SgpChurnSettings() {
       </p>
       <ErrorAlert message={error || formError || null} />
       {saved ? <p className="text-sm">{saved}</p> : null}
-      <form className="grid gap-3 md:grid-cols-4" onSubmit={submit}>
+      <form className="grid gap-3 md:grid-cols-4" onSubmit={submit} autoComplete="off">
         <Field label="URL da API">
           <input
             className="vx-input"
+            name="sgp-api-url"
             value={apiUrl}
             onChange={(event) => setApiUrl(event.target.value)}
             placeholder={data?.apiHost ? `https://${data.apiHost}` : "https://webmais.sgp.net.br"}
+            autoComplete="off"
           />
         </Field>
         <Field label="App">
-          <input className="vx-input" value={app} onChange={(event) => setApp(event.target.value)} autoComplete="off" />
+          <input
+            className="vx-input"
+            name="sgp-application"
+            value={app}
+            onChange={(event) => setApp(event.target.value)}
+            placeholder="vertice_crm"
+            autoComplete="off"
+            data-lpignore="true"
+            data-1p-ignore="true"
+          />
         </Field>
         <Field label="Token">
           <input
             className="vx-input"
+            name="sgp-ura-token"
             type="password"
             value={sgpToken}
             onChange={(event) => setSgpToken(event.target.value)}
-            placeholder={data?.tokenConfigured ? "•••••• (já gravado)" : ""}
-            autoComplete="off"
+            placeholder={data?.tokenConfigured ? "já gravado — cole o token real para substituir" : ""}
+            autoComplete="new-password"
+            data-lpignore="true"
+            data-1p-ignore="true"
           />
         </Field>
         <div className="flex items-end">

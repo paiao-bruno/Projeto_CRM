@@ -229,7 +229,7 @@ export class DashboardChurnService {
     try {
       const accepted = await this.authenticate(tenantId, candidates, fetchImpl);
       if (!accepted) {
-        await this.fail(tenantId, runtime, now, running.id, "AUTH_DENIED", "Autenticação recusada pelo SGP (app/token).");
+        await this.fail(tenantId, runtime, now, running.id, "AUTH_DENIED", "Autenticação recusada pelo SGP.");
         return { status: "auth_denied" as const };
       }
       const current = await creds.runtime(tenantId);
@@ -250,8 +250,14 @@ export class DashboardChurnService {
   async sync(user: ServerAuthUser, fetchImpl: typeof fetch = fetch) {
     const result = await this.ensure(user.tenantId, { force: true }, fetchImpl);
     if (result.status === "needs_config") throw new HttpError(422, "A leitura SGP ainda não tem credenciais neste tenant.");
-    if (result.status === "auth_denied") throw new HttpError(401, "Autenticação recusada pelo SGP (app/token).");
-    if (result.status === "failed") throw new HttpError(502, "Falha ao sincronizar o SGP.");
+    if (result.status === "auth_denied") {
+      const last = await this.latestFailed(user.tenantId);
+      throw new HttpError(401, last?.errorMessage || "Autenticação recusada pelo SGP.");
+    }
+    if (result.status === "failed") {
+      const last = await this.latestFailed(user.tenantId);
+      throw new HttpError(502, last?.errorMessage || "Falha ao sincronizar o SGP.");
+    }
     return { ok: true, ...result };
   }
 
@@ -293,7 +299,7 @@ export class DashboardChurnService {
         }
       }
     }
-    if (lastError instanceof SgpReadError && lastError.code !== "auth") throw lastError;
+    if (lastError instanceof SgpReadError) throw lastError;
     return null;
   }
 

@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import {
+  assertSgpChurnAppName,
   missingSgpChurnProvisionFields,
   parseSgpChurnProvisionEnv,
   publicSgpChurnProvision,
@@ -46,5 +47,14 @@ describe("provisionamento SGP de cancelamentos", () => {
     assert.equal(existsSync(join(root, "apps/web/src/server/sgp-churn-inspect-main.ts")), true);
     assert.match(inspect, /nunca em argv/);
     assert.doesNotMatch(inspect, /process\.argv/);
+  });
+
+  it("rejeita e-mail do CRM como App SGP", () => {
+    assert.equal(assertSgpChurnAppName("vertice_crm"), "vertice_crm");
+    assert.throws(() => assertSgpChurnAppName("admin@ispcrm.local"), /não é o e-mail/);
+    assert.throws(
+      () => parseSgpChurnProvisionEnv({ SGP_APP: "admin@ispcrm.local", SGP_TOKEN: "x", SGP_CHURN_TENANT_SLUG: "fibra-plus" }),
+      /não é o e-mail/,
+    );
   });
 });
