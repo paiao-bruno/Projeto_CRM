@@ -68,6 +68,42 @@ async function main() {
     console.error("[sgp-churn-inspect] Sem App/Token/URL após decifrar.");
     process.exit(2);
   }
+  const jobs = await prisma.sgpChurnSnapshot.findMany({
+    where: { tenantId: chosen.tenantId },
+    orderBy: { startedAt: "desc" },
+    take: 8,
+    select: {
+      id: true,
+      status: true,
+      startedAt: true,
+      finishedAt: true,
+      pageCount: true,
+      metadata: true,
+    },
+  });
+  console.log(
+    JSON.stringify({
+      action: "jobs",
+      tenantSlug: slug,
+      jobs: jobs.map((job) => {
+        const meta =
+          job.metadata && typeof job.metadata === "object" && !Array.isArray(job.metadata)
+            ? (job.metadata as Record<string, unknown>)
+            : {};
+        return {
+          id: job.id,
+          status: job.status,
+          startedAt: job.startedAt.toISOString(),
+          finishedAt: job.finishedAt?.toISOString() ?? null,
+          pageCount: job.pageCount,
+          trigger: typeof meta.trigger === "string" ? meta.trigger : null,
+          contracts: typeof meta.contracts === "number" ? meta.contracts : null,
+          datedCancelled: typeof meta.datedCancelled === "number" ? meta.datedCancelled : null,
+          dateInventory: meta.dateInventory ?? null,
+        };
+      }),
+    }),
+  );
   try {
     await probeSgpAuth({ apiUrl, app: secrets.app, token: secrets.token });
     console.log(

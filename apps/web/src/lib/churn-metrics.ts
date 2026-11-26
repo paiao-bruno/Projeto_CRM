@@ -10,14 +10,43 @@ import type { SgpChurnObservationRow } from "./sgp-churn-observations";
 
 export type ChurnHorizonKind = "weekly" | "biweekly" | "monthly" | "quarterly" | "semiannual" | "annual";
 
+export const UNCLASSIFIED_REASON = "Sem classificação";
+
+/** Cartões ancorados no fim do filtro, não no relógio de hoje. */
 export const CHURN_HORIZONS: Array<{ kind: ChurnHorizonKind; label: string }> = [
-  { kind: "weekly", label: "Últimos 7 dias" },
-  { kind: "biweekly", label: "Últimos 15 dias" },
-  { kind: "monthly", label: "Mês atual" },
-  { kind: "quarterly", label: "Trimestre até hoje" },
-  { kind: "semiannual", label: "Semestre até hoje" },
-  { kind: "annual", label: "12 meses até hoje" },
+  { kind: "weekly", label: "Últimos 7 dias até a referência" },
+  { kind: "biweekly", label: "Últimos 15 dias até a referência" },
+  { kind: "monthly", label: "Mês da referência" },
+  { kind: "quarterly", label: "3 meses até a referência" },
+  { kind: "semiannual", label: "6 meses até a referência" },
+  { kind: "annual", label: "12 meses até a referência" },
 ];
+
+/** B(P) só com fotografia completa na fronteira. 24h cobre atraso do job, não reconstitui meses. */
+export const CHURN_BASE_MAX_SKEW_MS = 24 * 60 * 60 * 1000;
+
+export function churnHorizonLabel(kind: ChurnHorizonKind, toYmd: string, todayYmd: string, partialMonth: boolean) {
+  const untilToday = toYmd === todayYmd;
+  if (kind === "weekly") return untilToday ? "Últimos 7 dias" : "Últimos 7 dias até a referência";
+  if (kind === "biweekly") return untilToday ? "Últimos 15 dias" : "Últimos 15 dias até a referência";
+  if (kind === "monthly") {
+    if (untilToday) return partialMonth ? "Mês atual" : "Mês corrente";
+    return partialMonth ? "Mês da referência (parcial)" : "Mês da referência";
+  }
+  if (kind === "quarterly") return untilToday ? "Trimestre até hoje" : "3 meses até a referência";
+  if (kind === "semiannual") return untilToday ? "Semestre até hoje" : "6 meses até a referência";
+  return untilToday ? "12 meses até hoje" : "12 meses até a referência";
+}
+
+export function snapshotSupportsOpeningBase(
+  finishedAt: Date | null | undefined,
+  frontier: Date,
+  maxSkewMs = CHURN_BASE_MAX_SKEW_MS,
+) {
+  if (!finishedAt) return false;
+  const skew = frontier.getTime() - finishedAt.getTime();
+  return skew >= 0 && skew <= maxSkewMs;
+}
 
 export type ChurnRow = NormalizedSgpContract & { statusCode?: number | null };
 
@@ -97,7 +126,7 @@ export function formatChurnPercent(rate: number | null) {
 export function reasonSlices(rows: ChurnRow[]) {
   const counts = new Map<string, number>();
   for (const row of rows) {
-    const key = row.reason?.trim() ? row.reason.trim() : "Sem classificação";
+    const key = row.reason?.trim() ? row.reason.trim() : UNCLASSIFIED_REASON;
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   const total = rows.length;
@@ -166,6 +195,29 @@ export function cohortChurn(input: {
   const start = new Set(input.startActiveContractIds);
   const numerator = input.cancelledContractIds.filter((id) => start.has(id)).length;
   return churnRate(numerator, start.size);
+}
+
+export function reasonInsightText(
+  slices: Array<{ name: string; count: number; share: number }>,
+  scope: "current_position" | "period" | "unavailable",
+) {
+  const total = slices.reduce((sum, item) => sum + item.count, 0);
+  const unclassified = slices.find((item) => item.name === UNCLASSIFIED_REASON)?.count ?? 0;
+  const classified = slices.filter((item) => item.name !== UNCLASSIFIED_REASON);
+  const classifiedCount = classified.reduce((sum, item) => sum + item.count, 0);
+  const prefix =
+    scope === "current_position" ? "Na posição atual, " : scope === "period" ? "No período do filtro, " : "";
+  if (!total) {
+    return `${prefix}não há contratos na unidade da rosca para classificar motivos.`;
+  }
+  if (!classifiedCount) {
+    return `${prefix}todos os ${total} contratos estão sem classificação (motivo_status vazio).`;
+  }
+  const top = classified[0];
+  const sharePct = (value: number) => `${((value / total) * 100).toFixed(1)}%`;
+  const head = `${prefix}${classifiedCount} contrato(s) com motivo informado; predominante: ${top.name} (${sharePct(top.count)} da rosca)`;
+  if (!unclassified) return `${head}.`;
+  return `${head}. ${unclassified} (${sharePct(unclassified)}) sem classificação.`;
 }
 
 export function periodReasonRows(input: {

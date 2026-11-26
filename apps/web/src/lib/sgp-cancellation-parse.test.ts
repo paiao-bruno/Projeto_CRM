@@ -35,6 +35,28 @@ describe("parser SGP /api/ura/clientes/", () => {
     assert.equal(rows.find((row) => row.isCancelled)?.statusDate?.toISOString().slice(0, 10), "2026-10-02");
   });
 
+  it("lê data efetiva em historico_status do contrato, não do título", () => {
+    const rows = extractContractsFromClientesPayload({
+      clientes: [
+        {
+          id: 1,
+          titulos: [{ id: 9, status: "cancelado", dataCancelamento: "2024-01-01" }],
+          contratos: [
+            {
+              id: 2,
+              status: 3,
+              historico_status: [
+                { status: 1, data: "2024-02-01" },
+                { status: 3, data_status: "2026-04-12" },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    assert.equal(rows[0].statusDate?.toISOString().slice(0, 10), "2026-04-12");
+  });
+
   it("usa dataCancelamento do contrato e ignora a do título", () => {
     const rows = extractContractsFromClientesPayload({
       clientes: [

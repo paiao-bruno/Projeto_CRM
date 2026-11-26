@@ -131,17 +131,42 @@ function planFromContract(contract: Record<string, unknown>) {
   return asText(contract.plano) ?? asText(contract.plano_nome);
 }
 
+const CONTRACT_HISTORY_KEYS = ["historico_status", "historicoStatus", "status_historico"];
+
+function statusDateFromHistory(contract: Record<string, unknown>) {
+  for (const key of CONTRACT_HISTORY_KEYS) {
+    const list = contract[key];
+    if (!Array.isArray(list)) continue;
+    let latest: Date | null = null;
+    for (const item of list) {
+      const row = asRecord(item);
+      if (!row) continue;
+      const mapped = mapContractStatus(row.contrato_status ?? row.status ?? row.novo_status);
+      if (mapped.code !== CANCELLED_CODE) continue;
+      const date =
+        parseDate(row.data_status) ??
+        parseDate(row.dataStatus) ??
+        parseDate(row.data_alteracao) ??
+        parseDate(row.dataAlteracao) ??
+        parseDate(row.data);
+      if (date && (!latest || date > latest)) latest = date;
+    }
+    if (latest) return latest;
+  }
+  return null;
+}
+
 function statusDateFromContract(contract: Record<string, unknown>) {
   for (const key of CANCEL_DATE_KEYS) {
     const date = parseDate(contract[key]);
     if (date) return date;
   }
-  return null;
+  return statusDateFromHistory(contract);
 }
 
 export function contractDateInventory(contract: Record<string, unknown>) {
-  const present = Object.keys(contract).filter((key) => /data|dt_|venc/i.test(key));
-  const used = CANCEL_DATE_KEYS.find((key) => parseDate(contract[key]));
+  const present = Object.keys(contract).filter((key) => /data|dt_|venc|historico/i.test(key));
+  const used = CANCEL_DATE_KEYS.find((key) => parseDate(contract[key])) ?? (statusDateFromHistory(contract) ? "historico_status" : null);
   const ignored = present.filter((key) => FORBIDDEN_DATE_KEYS.includes(key) || (!CANCEL_DATE_KEYS.includes(key) && parseDate(contract[key])));
   return { present, used: used ?? null, ignored };
 }

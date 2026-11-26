@@ -35,5 +35,8 @@ describe("abas do Dashboard", () => {
     assert.match(cancellations, /início da última tentativa do job/);
     assert.match(cancellations, /contratos atualmente cancelados/);
     assert.match(cancellations, /connectNulls=\{false\}/);
+    assert.match(cancellations, /âncora dos cartões/);
+    const lock = readFileSync(join(root, "../../prisma/migrations/20261124140000_sgp_churn_running_lock/migration.sql"), "utf8");
+    assert.match(lock, /SgpChurnSnapshot_tenantId_running_key/);
   });
 });

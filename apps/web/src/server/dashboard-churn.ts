@@ -1,19 +1,23 @@
 import {
   CHURN_HORIZONS,
   activeServiceContracts,
+  churnHorizonLabel,
   cohortChurn,
   compareChurnStatus,
   datedCoverage,
   lostCustomers,
   periodReasonRows,
+  reasonInsightText,
   reasonSlices,
   relationshipCustomers,
+  snapshotSupportsOpeningBase,
   temporalCancellations,
   type ChurnHorizonKind,
 } from "../lib/churn-metrics";
 import { diffSnapshotTransitions } from "../lib/sgp-churn-observations";
 import {
   DASHBOARD_TIMEZONE,
+  formatYmd,
   horizonRange,
   inclusiveRange,
   lastYmdOfMonth,
@@ -111,9 +115,10 @@ export class DashboardChurnService {
       const goal = goals.find((row) => row.kind === item.kind);
       const targetBp = goal ? goal.targetValue : null;
       const partialMonth = horizon.toYmdInclusive !== lastYmdOfMonth(horizon.toYmdInclusive);
+      const todayYmd = formatYmd(now, timeZone);
       return {
         kind: item.kind,
-        label: item.kind === "monthly" && partialMonth ? "Mês atual" : item.label,
+        label: churnHorizonLabel(item.kind, horizon.toYmdInclusive, todayYmd, partialMonth),
         fromYmd: horizon.fromYmd,
         toYmdInclusive: horizon.toYmdInclusive,
         targetBp,
@@ -132,7 +137,7 @@ export class DashboardChurnService {
               ? `Contratos distintos com data efetiva ou transição observada contida no intervalo (${temporal.known} conhecidos; cobertura parcial).`
               : "Contratos distintos cancelados com data na fotografia atual neste intervalo. Não reconstitui reativações anteriores.",
         formula:
-          "Ocorrências(P)=contratos distintos com data efetiva em P ou transição INTERVAL totalmente contida em P. Churn bruto=contratos da coorte ativa no início de P que cancelaram em P ÷ B(P)×100. B(P) só existe se houver fotografia completa em ou antes do início de P. Não some os seis cartões.",
+          "Ocorrências(P)=contratos distintos com data efetiva em P ou transição INTERVAL totalmente contida em P. Churn bruto=contratos da coorte (status 1 ou 7) na fronteira de P que cancelaram em P ÷ B(P)×100. B(P) exige fotografia completa com finishedAt em [início de P − 24h, início de P]; snapshot mais antigo não reconstitui a base. Não some os seis cartões.",
       };
     }));
 
@@ -175,8 +180,16 @@ export class DashboardChurnService {
       now,
     });
 
+    const reasonsScope = periodTemporal.value == null ? "current_position" : "period";
     const insights = ready
-      ? this.insights(cards, reasons, periodTemporal.value, activeContracts.length, positionCancelled.length)
+      ? this.insights(
+          cards,
+          reasons,
+          reasonsScope,
+          periodTemporal.value,
+          activeContracts.length,
+          positionCancelled.length,
+        )
       : [{ id: "waiting", text: this.waitingMessage(lifecycle), kind: "fact" as const }];
 
     return {
@@ -218,7 +231,7 @@ export class DashboardChurnService {
         periodCancellations: "Ocorrências no período: contratos distintos com data efetiva comprovada no intervalo ou transição INTERVAL totalmente contida. FIRST_SEEN sem data não conta.",
         lostCustomers: "Clientes SGP sem vínculo 1/6/7 e com ao menos um cancelado (3). Não é a unidade dos cartões temporais.",
         activeCustomers: "Clientes com contrato em serviço (1 ou 7). Novo (6) não é serviço ativo.",
-        rate: "Churn bruto de contratos da coorte inicial. Indisponível sem B(P) de uma fotografia em ou antes do início do período. Denominador 0 não vira 0%.",
+        rate: "Churn bruto de contratos da coorte inicial. B(P) só com fotografia completa na fronteira (até 24h antes do início). Snapshot antigo não reconstitui a base. Denominador 0 não vira 0%.",
       },
       position: {
         label: "Posição atual",
@@ -607,7 +620,7 @@ export class DashboardChurnService {
     cache: Map<string, string[]>,
   ) {
     const snapshot = await this.snapshotAtOrBefore(tenantId, at, runtime);
-    if (!snapshot) return null;
+    if (!snapshot || !snapshotSupportsOpeningBase(snapshot.finishedAt, at)) return null;
     const cached = cache.get(snapshot.id);
     if (cached) return cached;
     const rows = await this.prisma.sgpChurnContract.findMany({
@@ -628,7 +641,8 @@ export class DashboardChurnService {
 
   private insights(
     cards: Array<{ kind: string; label: string; status: string; cancellations: number | null }>,
-    reasons: Array<{ name: string; share: number }>,
+    reasons: Array<{ name: string; count: number; share: number }>,
+    reasonsScope: "current_position" | "period",
     periodCount: number | null,
     activeContracts: number,
     positionCancelled: number,
@@ -656,19 +670,11 @@ export class DashboardChurnService {
         kind: "fact",
       });
     }
-    if (reasons[0] && reasons[0].name !== "Sem classificação") {
-      items.push({
-        id: "reason",
-        text: `Maior motivo informado pelo SGP: ${reasons[0].name} (${(reasons[0].share * 100).toFixed(1)}% da unidade da rosca).`,
-        kind: "fact",
-      });
-    } else {
-      items.push({
-        id: "no-reason",
-        text: "O SGP não enviou motivos classificáveis (campo motivo_status vazio). A rosca usa “Sem classificação”.",
-        kind: "fact",
-      });
-    }
+    items.push({
+      id: "reason",
+      text: reasonInsightText(reasons, reasonsScope),
+      kind: "fact",
+    });
     items.push({
       id: "retain",
       text: activeContracts

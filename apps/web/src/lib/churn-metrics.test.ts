@@ -2,12 +2,15 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   cancelledContracts,
+  churnHorizonLabel,
   churnRate,
   cohortChurn,
   compareChurnStatus,
   formatChurnPercent,
   lostCustomers,
+  reasonInsightText,
   reasonSlices,
+  snapshotSupportsOpeningBase,
   temporalCancellations,
 } from "./churn-metrics";
 import { inclusiveRange } from "./dashboard-periods";
@@ -60,6 +63,37 @@ describe("métricas de churn", () => {
     ]);
     assert.equal(slices.find((item) => item.name === "Sem classificação")?.count, 2);
     assert.equal(slices.find((item) => item.name === "Outros")?.count, 1);
+  });
+
+  it("insight e rosca usam a mesma população, inclusive com maioria sem classificação", () => {
+    const slices = reasonSlices([
+      row({ sgpCustomerId: "1", sgpContractId: "a", reason: null }),
+      row({ sgpCustomerId: "2", sgpContractId: "b", reason: null }),
+      row({ sgpCustomerId: "3", sgpContractId: "c", reason: "Concorrência" }),
+    ]);
+    const text = reasonInsightText(slices, "current_position");
+    assert.match(text, /posição atual/);
+    assert.match(text, /Concorrência/);
+    assert.doesNotMatch(text, /não enviou motivos classificáveis/);
+    assert.equal(reasonInsightText(slices, "period").startsWith("No período"), true);
+    const empty = reasonInsightText(
+      reasonSlices([row({ sgpCustomerId: "1", sgpContractId: "a", reason: null })]),
+      "current_position",
+    );
+    assert.match(empty, /todos os 1 contratos estão sem classificação/);
+  });
+
+  it("filtro encerrado antes de hoje não rotula cartões como hoje", () => {
+    assert.equal(churnHorizonLabel("monthly", "2026-10-31", "2026-11-26", false), "Mês da referência");
+    assert.equal(churnHorizonLabel("quarterly", "2026-10-31", "2026-11-26", true), "3 meses até a referência");
+    assert.equal(churnHorizonLabel("monthly", "2026-11-26", "2026-11-26", true), "Mês atual");
+  });
+
+  it("snapshot antigo não sustenta B(P) da fronteira", () => {
+    const frontier = new Date("2025-11-01T03:00:00.000Z");
+    assert.equal(snapshotSupportsOpeningBase(new Date("2024-01-01T00:00:00.000Z"), frontier), false);
+    assert.equal(snapshotSupportsOpeningBase(new Date("2025-10-31T12:00:00.000Z"), frontier), true);
+    assert.equal(snapshotSupportsOpeningBase(new Date("2025-11-01T04:00:00.000Z"), frontier), false);
   });
 
   it("data de cadastro/fora do intervalo não entra no recorte com data de status", () => {

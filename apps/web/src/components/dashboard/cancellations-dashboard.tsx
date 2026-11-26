@@ -248,7 +248,9 @@ export function CancellationsDashboard() {
         <>
           <p className="text-sm">{lifecycleCopy(data.source.lifecycle)}</p>
           <p className="text-xs vx-muted">
-            {data.period.fromYmd} a {data.period.toYmdInclusive} ({data.timeZone})
+            Filtro {data.period.fromYmd} a {data.period.toYmdInclusive} ({data.timeZone})
+            {" · âncora dos cartões: fim do filtro "}
+            {data.period.toYmdInclusive}
             {" · "}
             {data.source.lastSyncAt
               ? `fim da última sincronização completa ${new Date(data.source.lastSyncAt).toLocaleString("pt-BR", { timeZone: data.timeZone })}`
@@ -266,6 +268,13 @@ export function CancellationsDashboard() {
             {data.period.comparisonLabel}
           </p>
           <p className="text-xs vx-muted">{data.source.coverage}</p>
+          {data.source.coverageStartedAt ? (
+            <p className="text-xs vx-muted">
+              Cobertura local inicia em{" "}
+              {new Date(data.source.coverageStartedAt).toLocaleString("pt-BR", { timeZone: data.timeZone })}
+              . Meses anteriores à primeira fotografia completa não são preenchidos.
+            </p>
+          ) : null}
 
           {data.position ? (
             <article className="vx-card p-4" style={{ borderColor: "var(--vx-primary)" }}>
