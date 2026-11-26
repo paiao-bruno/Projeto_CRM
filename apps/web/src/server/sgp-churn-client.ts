@@ -19,6 +19,7 @@ export class SgpReadError extends Error {
   constructor(
     message: string,
     readonly code: "auth" | "unavailable" | "timeout" | "invalid" | "loop",
+    readonly httpStatus?: number,
   ) {
     super(message);
   }
@@ -83,20 +84,20 @@ async function postPage(
       });
     }
     if (response.status === 301 || response.status === 302 || response.status === 303 || response.status === 307 || response.status === 308) {
-      throw new SgpReadError("O SGP redirecionou a consulta; as credenciais não foram reenviadas.", "unavailable");
+      throw new SgpReadError("O SGP redirecionou a consulta; as credenciais não foram reenviadas.", "unavailable", response.status);
     }
     if (response.status === 401 || response.status === 403) {
-      throw new SgpReadError("Autenticação recusada pelo SGP (app/token).", "auth");
+      throw new SgpReadError(`Autenticação recusada pelo SGP (HTTP ${response.status}).`, "auth", response.status);
     }
     if (response.status === 429 || response.status === 503) {
-      throw new SgpReadError(`SGP indisponível (HTTP ${response.status}).`, "unavailable");
+      throw new SgpReadError(`SGP indisponível (HTTP ${response.status}).`, "unavailable", response.status);
     }
     const text = await response.text();
     if (!response.ok) {
       if (response.status === 400) {
-        throw new SgpReadError("O SGP recusou o formato da consulta (não é recusa de App/Token).", "invalid");
+        throw new SgpReadError("O SGP recusou o formato da consulta (não é recusa de App/Token).", "invalid", 400);
       }
-      throw new SgpReadError(`SGP retornou HTTP ${response.status}.`, "unavailable");
+      throw new SgpReadError(`SGP retornou HTTP ${response.status}.`, "unavailable", response.status);
     }
     if (text.trim().toLowerCase().startsWith("<!doctype") || text.trim().toLowerCase().startsWith("<html")) {
       throw new SgpReadError("O SGP devolveu HTML em vez de JSON.", "invalid");
@@ -106,7 +107,7 @@ async function postPage(
       assertSgpClientesPayload(parsed);
     } catch (error) {
       if (error instanceof Error && error.message === "auth_payload") {
-        throw new SgpReadError("Autenticação recusada pelo SGP (app/token).", "auth");
+        throw new SgpReadError("Autenticação recusada pelo SGP (HTTP 200 com erro de credencial).", "auth", 200);
       }
       throw new SgpReadError("O SGP devolveu um resultado de negócio inválido.", "invalid");
     }

@@ -66,7 +66,8 @@ describe("cliente SGP de cancelamentos", () => {
     const fetchImpl = (async () => new Response("{}", { status: 401 })) as typeof fetch;
     await assert.rejects(
       () => listSgpContractsByStatus({ apiUrl: "https://webmais.example.net", app: "a", token: "t" }, 3, fetchImpl),
-      (error: unknown) => error instanceof SgpReadError && error.code === "auth",
+      (error: unknown) =>
+        error instanceof SgpReadError && error.code === "auth" && error.httpStatus === 401 && /HTTP 401/.test(error.message),
     );
   });
 

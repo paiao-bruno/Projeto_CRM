@@ -1,5 +1,5 @@
 import { getPrisma } from "./prisma";
-import { getDashboardChurnService } from "./dashboard-churn";
+import { clearSgpChurnAuthRetry, getDashboardChurnService } from "./dashboard-churn";
 import { getSgpChurnCredentialsService } from "./sgp-churn-credentials";
 import { probeSgpAuth } from "./sgp-churn-client";
 
@@ -18,6 +18,7 @@ async function main() {
     console.error("[sgp-churn] tenant persistido não resolvido.");
     process.exit(1);
   }
+  clearSgpChurnAuthRetry(tenant.id);
   const live = await creds.runtime(tenant.id);
   let authentication: "accepted" | "denied" | "skipped" = "skipped";
   if (live) {

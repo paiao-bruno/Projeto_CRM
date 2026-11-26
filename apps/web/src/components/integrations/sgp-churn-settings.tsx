@@ -10,6 +10,9 @@ type PublicCreds = {
   configured: boolean;
   tokenConfigured: boolean;
   apiHost: string | null;
+  selectedApp?: string | null;
+  selectedIntegrationId?: string | null;
+  selectedDedicated?: boolean;
   storedRows?: number;
   decryptableRows?: number;
   encryptionReady?: boolean;
@@ -69,7 +72,7 @@ export function SgpChurnSettings() {
       </ol>
       <p className="text-xs vx-muted">
         {data?.tokenConfigured
-          ? `Token configurado${data.apiHost ? ` · host ${data.apiHost}` : ""}.`
+          ? `Em uso: App ${data.selectedApp ?? "(não exposto)"} · ${data.selectedDedicated ? "leitura de cancelamentos" : "integração SGP original"} · ${data.apiHost ?? "sem host"}${stored > 1 ? ` · ${stored} registros SGP neste tenant` : ""}.`
           : cannotDecrypt
             ? data?.encryptionReady
               ? "Há integração SGP salva, mas o App/Token não puderam ser lidos com as chaves atuais. Regrave App e Token neste formulário."

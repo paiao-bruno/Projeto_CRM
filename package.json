@@ -30,6 +30,7 @@
     "prisma:format": "prisma format --schema prisma/schema.prisma",
     "homologate:sgp": "node scripts/homologate-sgp-real.mjs",
     "provision:sgp-churn": "node scripts/provision-sgp-churn.mjs",
+    "inspect:sgp-churn": "node scripts/inspect-sgp-churn.mjs",
     "investigate:sgp": "node scripts/investigate-sgp-sync.mjs",
     "audit:sgp-regression": "node scripts/audit-sgp-regression.mjs",
     "bootstrap:web-only": "node scripts/bootstrap-web-only.mjs",

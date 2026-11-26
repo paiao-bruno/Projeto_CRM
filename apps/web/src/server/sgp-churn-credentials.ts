@@ -70,10 +70,18 @@ export class SgpChurnCredentialsService {
     });
     const decryptableRows = rows.filter((row) => decryptRow(row as IntegrationRow)).length;
     const runtime = await this.runtime(user.tenantId);
+    const selected = runtime
+      ? rows
+          .map((row) => decryptRow(row as IntegrationRow))
+          .find((row) => row?.integrationId === runtime.integrationId)
+      : null;
     return {
       configured: Boolean(runtime),
       tokenConfigured: Boolean(runtime),
       apiHost: runtime?.apiHost ?? null,
+      selectedApp: selected?.app ?? runtime?.app ?? null,
+      selectedIntegrationId: runtime?.integrationId ?? null,
+      selectedDedicated: Boolean(selected?.dedicated),
       source: runtime ? "server" : "none",
       storedRows: rows.length,
       decryptableRows,
@@ -91,9 +99,10 @@ export class SgpChurnCredentialsService {
     if (isSecretMask(incomingToken)) {
       throw new HttpError(422, "O campo Token vazio preserva o segredo já gravado. Não envie a máscara.");
     }
-    const preserved = existing ? decryptSgpSecrets(existing.encryptedSecrets) : fallback;
-    const token = incomingToken.trim() || preserved?.token || "";
-    const nextApp = app || preserved?.app || "";
+    const preservedDedicated =
+      existing && existing.name === CHURN_INTEGRATION_NAME ? decryptSgpSecrets(existing.encryptedSecrets) : null;
+    const token = incomingToken.trim() || preservedDedicated?.token || "";
+    const nextApp = app || preservedDedicated?.app || "";
     if (!nextApp || !token) throw new HttpError(422, "Informe o App e o Token cadastrados no SGP.");
     const version = existing ? credentialVersion(existing) + 1 : 1;
     const data = {

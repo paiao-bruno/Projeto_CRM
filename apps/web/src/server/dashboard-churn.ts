@@ -40,6 +40,10 @@ import { getSgpChurnCredentialsService, type SgpChurnRuntime } from "./sgp-churn
 const METRIC = "churn_rate";
 const deniedAuthRetried = new Set<string>();
 
+export function clearSgpChurnAuthRetry(tenantId: string) {
+  deniedAuthRetried.delete(tenantId);
+}
+
 export class DashboardChurnService {
   constructor(private readonly prisma = getPrisma()) {}
 
@@ -275,19 +279,21 @@ export class DashboardChurnService {
 
   private async authenticate(tenantId: string, candidates: SgpChurnRuntime[], fetchImpl: typeof fetch) {
     const creds = getSgpChurnCredentialsService();
+    let lastError: unknown;
     for (const candidate of candidates) {
       try {
         await probeSgpAuth(candidate, fetchImpl);
         await creds.markAuth(tenantId, candidate.integrationId, true);
         return candidate;
       } catch (error) {
+        lastError = error;
         if (error instanceof SgpReadError && error.code === "auth") {
           await creds.markAuth(tenantId, candidate.integrationId, false, error.message);
           continue;
         }
-        throw error;
       }
     }
+    if (lastError instanceof SgpReadError && lastError.code !== "auth") throw lastError;
     return null;
   }
 

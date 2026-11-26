@@ -309,7 +309,11 @@ export function CancellationsDashboard() {
                   </ul>
                 </>
               ) : (
-                <p className="mt-3 text-sm vx-muted">Sem contratos cancelados na fotografia publicada.</p>
+                <p className="mt-3 text-sm vx-muted">
+                  {data.source.lifecycle === "ready" || data.source.lifecycle === "stale"
+                    ? "Sem contratos cancelados na fotografia publicada."
+                    : "Ainda não foi possível avaliar motivos: não há fotografia completa publicada."}
+                </p>
               )}
             </section>
           </div>

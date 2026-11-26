@@ -49,6 +49,13 @@ describe("ciclo automático de cancelamentos", () => {
       { id: "original", authState: "", dedicated: false, updatedAt: older },
     ]);
     assert.equal(ranked[0].id, "original");
+    assert.equal(
+      rankSgpChurnCandidates([
+        { id: "dedicated", authState: "", dedicated: true, updatedAt: newer },
+        { id: "original", authState: "", dedicated: false, updatedAt: older },
+      ])[0].id,
+      "dedicated",
+    );
     assert.equal(allSgpCandidatesDenied(ranked), false);
     assert.equal(
       allSgpCandidatesDenied([

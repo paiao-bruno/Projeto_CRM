@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import {
   missingSgpChurnProvisionFields,
@@ -34,5 +36,15 @@ describe("provisionamento SGP de cancelamentos", () => {
     assert.equal(published.app, "vertice_crm");
     assert.equal(published.apiUrl, SGP_CHURN_DEFAULT_API_URL);
     assert.equal(JSON.stringify(published).includes("valor-que-nao"), false);
+  });
+
+  it("o comando inspect:sgp-churn existe e não recebe o token por argv", () => {
+    const root = join(process.cwd(), "..", "..");
+    const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { scripts?: Record<string, string> };
+    assert.equal(pkg.scripts?.["inspect:sgp-churn"], "node scripts/inspect-sgp-churn.mjs");
+    const inspect = readFileSync(join(root, "scripts/inspect-sgp-churn.mjs"), "utf8");
+    assert.equal(existsSync(join(root, "apps/web/src/server/sgp-churn-inspect-main.ts")), true);
+    assert.match(inspect, /nunca em argv/);
+    assert.doesNotMatch(inspect, /process\.argv/);
   });
 });
