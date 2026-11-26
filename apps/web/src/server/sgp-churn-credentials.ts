@@ -1,5 +1,10 @@
 import { IntegrationProvider, IntegrationStatus } from "@prisma/client";
 import { isSecretMask, rankSgpChurnCandidates } from "../lib/sgp-churn-lifecycle";
+import {
+  missingSgpChurnProvisionFields,
+  parseSgpChurnProvisionEnv,
+  publicSgpChurnProvision,
+} from "../lib/sgp-churn-provision";
 import type { ServerAuthUser } from "./auth";
 import { HttpError } from "./http";
 import { getPrisma } from "./prisma";
@@ -141,6 +146,54 @@ export class SgpChurnCredentialsService {
 
   async runtimesForAuthFallback(tenantId: string) {
     return this.candidates(tenantId);
+  }
+
+  async provisionFromServerEnv(env: NodeJS.ProcessEnv = process.env) {
+    const parsed = parseSgpChurnProvisionEnv(env as Record<string, string | undefined>);
+    const missing = missingSgpChurnProvisionFields(parsed);
+    if (missing.includes("SGP_CHURN_TENANT_SLUG")) {
+      const orgs = await this.prisma.tenant.findMany({ select: { slug: true }, orderBy: { slug: "asc" } });
+      const listed = orgs.length ? ` Organizações no banco: ${orgs.map((row) => row.slug).join(", ")}.` : " Nenhuma organização no banco.";
+      throw new HttpError(422, `Informe SGP_CHURN_TENANT_SLUG; a leitura SGP não usa o primeiro tenant.${listed}`);
+    }
+    if (missing.length) {
+      throw new HttpError(422, `Provisionamento incompleto: ${missing.join(", ")}.`);
+    }
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { slug: parsed.tenantSlug },
+      select: { id: true, slug: true, name: true },
+    });
+    if (!tenant) {
+      throw new HttpError(404, "Organização não encontrada para SGP_CHURN_TENANT_SLUG.");
+    }
+    const member = await this.prisma.tenantMember.findFirst({
+      where: {
+        tenantId: tenant.id,
+        status: "ACTIVE",
+        role: { permissions: { some: { permission: { code: "crm.manage" } } } },
+      },
+      include: { user: true, role: { include: { permissions: { include: { permission: true } } } } },
+    });
+    if (!member?.user) {
+      throw new HttpError(403, "Nenhum membro ativo com crm.manage neste tenant.");
+    }
+    const user: ServerAuthUser = {
+      sub: member.user.id,
+      email: member.user.email,
+      name: member.user.name,
+      tenantId: tenant.id,
+      tenantName: tenant.name,
+      memberId: member.id,
+      role: member.role?.name ?? "Administrador",
+      permissions: member.role?.permissions.map((item) => item.permission.code) ?? ["crm.manage"],
+    };
+    const saved = await this.save(user, { apiUrl: parsed.apiUrl, app: parsed.app, token: parsed.token });
+    return {
+      tenantSlug: tenant.slug,
+      tenantName: tenant.name,
+      ...saved,
+      provision: publicSgpChurnProvision(parsed),
+    };
   }
 
   async listConfiguredTenantIds() {

@@ -1,5 +1,8 @@
 export const SGP_CHURN_REFRESH_MS = Number(process.env.SGP_CHURN_REFRESH_MS ?? 5 * 60 * 1000);
+export const SGP_CHURN_RETRY_MS = Number(process.env.SGP_CHURN_RETRY_MS ?? 60 * 1000);
+export const SGP_CHURN_AUTH_RETRY_MS = Number(process.env.SGP_CHURN_AUTH_RETRY_MS ?? 15 * 60 * 1000);
 export const SGP_CHURN_STALE_RUNNING_MS = 20 * 60 * 1000;
+export const SGP_CHURN_WORKER_TICK_MS = Number(process.env.SGP_CHURN_WORKER_TICK_MS ?? 60 * 1000);
 
 export type SgpChurnLifecycle =
   | "needs_config"
@@ -8,7 +11,8 @@ export type SgpChurnLifecycle =
   | "ready"
   | "stale"
   | "unavailable"
-  | "auth_denied";
+  | "auth_denied"
+  | "decrypt_failed";
 
 export function isSecretMask(value: unknown) {
   if (typeof value !== "string") return false;
@@ -49,11 +53,13 @@ export function lifecycleFromState(input: {
   hasComplete: boolean;
   fresh: boolean;
   lastError?: string | null;
+  decryptFailed?: boolean;
 }): SgpChurnLifecycle {
+  if (input.decryptFailed) return "decrypt_failed";
   if (!input.configured) return "needs_config";
-  if (input.authDenied && !input.hasComplete) return "auth_denied";
   if (input.running && !input.hasComplete) return "syncing";
   if (input.running) return "validating";
+  if (input.authDenied && !input.hasComplete) return "auth_denied";
   if (input.hasComplete && input.fresh) return "ready";
   if (input.hasComplete) return "stale";
   if (input.lastError) return "unavailable";
@@ -77,4 +83,60 @@ export function rankSgpChurnCandidates<T extends { authState: string; dedicated:
 
 export function allSgpCandidatesDenied(rows: { authState: string }[]) {
   return rows.length > 0 && rows.every((row) => row.authState === "denied");
+}
+
+/** Evita martelar o SGP após recusa, mas permite uma nova validação após reinício do processo. */
+export function shouldSkipDeniedAuth(input: {
+  force: boolean;
+  allDenied: boolean;
+  retriedThisProcess: boolean;
+  lastAuthDeniedAt: Date | null;
+  now: Date;
+  cooldownMs?: number;
+}) {
+  if (input.force || !input.allDenied) return false;
+  if (!input.retriedThisProcess) return false;
+  const cooldown = input.cooldownMs ?? SGP_CHURN_AUTH_RETRY_MS;
+  if (!input.lastAuthDeniedAt) return false;
+  return isFreshSnapshot(input.lastAuthDeniedAt, input.now, cooldown);
+}
+
+export function shouldPollChurnLifecycle(_lifecycle: SgpChurnLifecycle) {
+  return true;
+}
+
+export function churnPollIntervalMs(lifecycle: SgpChurnLifecycle) {
+  if (lifecycle === "syncing" || lifecycle === "validating" || lifecycle === "stale") return 5_000;
+  if (lifecycle === "unavailable") return 15_000;
+  if (lifecycle === "ready") return 60_000;
+  if (lifecycle === "auth_denied") return 30_000;
+  return 30_000;
+}
+
+export function nextChurnAttemptAt(input: {
+  lifecycle: SgpChurnLifecycle;
+  lastSuccessAt: Date | null;
+  lastAttemptAt: Date | null;
+  now: Date;
+  refreshMs?: number;
+  retryMs?: number;
+}) {
+  const refreshMs = input.refreshMs ?? SGP_CHURN_REFRESH_MS;
+  const retryMs = input.retryMs ?? SGP_CHURN_RETRY_MS;
+  if (input.lifecycle === "needs_config" || input.lifecycle === "auth_denied" || input.lifecycle === "decrypt_failed") return null;
+  if (input.lifecycle === "syncing" || input.lifecycle === "validating") return input.now.toISOString();
+  if (input.lifecycle === "ready" && input.lastSuccessAt) {
+    return new Date(input.lastSuccessAt.getTime() + refreshMs).toISOString();
+  }
+  if (input.lastAttemptAt) return new Date(input.lastAttemptAt.getTime() + retryMs).toISOString();
+  return input.now.toISOString();
+}
+
+export function preferFresherPayload<T extends { generatedAt?: string }>(current: T | null, incoming: T) {
+  if (!current?.generatedAt || !incoming.generatedAt) return incoming;
+  return incoming.generatedAt >= current.generatedAt ? incoming : current;
+}
+
+export function isChurnRealtimeEvent(type: string) {
+  return type === "sgp.churn.updated" || type === "sgp.churn.failed";
 }

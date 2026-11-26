@@ -46,7 +46,15 @@ export function assertAllowedSgpUrl(apiUrl: string) {
 }
 
 function authBody(credentials: SgpChurnCredentials, payload: Record<string, unknown>) {
-  return { app: credentials.app, token: credentials.token, ...payload };
+  const fields: Record<string, unknown> = { app: credentials.app, token: credentials.token, ...payload };
+  if (fields.contrato_status != null) fields.contrato_status = String(fields.contrato_status);
+  return fields;
+}
+
+function asForm(fields: Record<string, unknown>) {
+  const form = new URLSearchParams();
+  for (const [key, value] of Object.entries(fields)) form.set(key, String(value));
+  return form.toString();
 }
 
 async function postPage(
@@ -63,16 +71,19 @@ async function postPage(
       headers: { Accept: "application/json", "Content-Type": "application/json" },
       body: JSON.stringify(fields),
       signal: controller.signal,
+      redirect: "manual",
     });
-    if (response.status === 401 || response.status === 403) {
-      const form = new URLSearchParams();
-      for (const [key, value] of Object.entries(fields)) form.set(key, String(value));
+    if (response.status === 401 || response.status === 403 || response.status === 400) {
       response = await fetchImpl(joinUrl(credentials.apiUrl), {
         method: SGP_CLIENTES_METHOD,
         headers: { Accept: "application/json", "Content-Type": "application/x-www-form-urlencoded" },
-        body: form.toString(),
+        body: asForm(fields),
         signal: controller.signal,
+        redirect: "manual",
       });
+    }
+    if (response.status === 301 || response.status === 302 || response.status === 303 || response.status === 307 || response.status === 308) {
+      throw new SgpReadError("O SGP redirecionou a consulta; as credenciais não foram reenviadas.", "unavailable");
     }
     if (response.status === 401 || response.status === 403) {
       throw new SgpReadError("Autenticação recusada pelo SGP (app/token).", "auth");
@@ -80,10 +91,13 @@ async function postPage(
     if (response.status === 429 || response.status === 503) {
       throw new SgpReadError(`SGP indisponível (HTTP ${response.status}).`, "unavailable");
     }
+    const text = await response.text();
     if (!response.ok) {
+      if (response.status === 400) {
+        throw new SgpReadError("O SGP recusou o formato da consulta (não é recusa de App/Token).", "invalid");
+      }
       throw new SgpReadError(`SGP retornou HTTP ${response.status}.`, "unavailable");
     }
-    const text = await response.text();
     if (text.trim().toLowerCase().startsWith("<!doctype") || text.trim().toLowerCase().startsWith("<html")) {
       throw new SgpReadError("O SGP devolveu HTML em vez de JSON.", "invalid");
     }

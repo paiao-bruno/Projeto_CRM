@@ -23,23 +23,27 @@ import {
   isFreshSnapshot,
   isStaleRunning,
   lifecycleFromState,
+  nextChurnAttemptAt,
+  shouldSkipDeniedAuth,
   snapshotMatchesOrigin,
   SGP_CHURN_REFRESH_MS,
+  SGP_CHURN_RETRY_MS,
 } from "../lib/sgp-churn-lifecycle";
 import { SGP_CONTRACT_STATUS } from "../lib/sgp-cancellation-parse";
 import type { ServerAuthUser } from "./auth";
 import { HttpError } from "./http";
 import { getPrisma } from "./prisma";
+import { publishEvent } from "./realtime";
 import { listSgpContractsByStatus, probeSgpAuth, SGP_CLIENTES_ENDPOINT, SgpReadError } from "./sgp-churn-client";
 import { getSgpChurnCredentialsService, type SgpChurnRuntime } from "./sgp-churn-credentials";
 
 const METRIC = "churn_rate";
+const deniedAuthRetried = new Set<string>();
 
 export class DashboardChurnService {
   constructor(private readonly prisma = getPrisma()) {}
 
   async overview(user: ServerAuthUser, query: URLSearchParams, now = new Date()) {
-    await this.ensure(user.tenantId).catch(() => undefined);
     const timeZone = DASHBOARD_TIMEZONE;
     const preset = query.get("preset") || "last_12_closed_months";
     const period = parseDashboardPeriod({ from: query.get("from"), to: query.get("to"), preset }, now, timeZone);
@@ -108,6 +112,7 @@ export class DashboardChurnService {
 
     const lifecycle = lifecycleFromState({
       configured: credentials.configured,
+      decryptFailed: (credentials.storedRows ?? 0) > 0 && (credentials.decryptableRows ?? 0) === 0,
       authDenied: lastFailed?.status === "AUTH_DENIED" && !ready,
       running: Boolean(running),
       hasComplete: ready,
@@ -141,6 +146,15 @@ export class DashboardChurnService {
         lastError: lastFailed && (!snapshot || (lastFailed.finishedAt && snapshot.finishedAt && lastFailed.finishedAt > snapshot.finishedAt))
           ? lastFailed.errorMessage
           : null,
+        lastSuccessAt: snapshot?.finishedAt?.toISOString() ?? null,
+        lastAttemptAt: (running?.startedAt ?? lastFailed?.finishedAt ?? snapshot?.finishedAt)?.toISOString() ?? null,
+        nextAttemptAt: nextChurnAttemptAt({
+          lifecycle,
+          lastSuccessAt: snapshot?.finishedAt ?? null,
+          lastAttemptAt: running?.startedAt ?? lastFailed?.finishedAt ?? snapshot?.finishedAt ?? null,
+          now,
+        }),
+        refreshMs: SGP_CHURN_REFRESH_MS,
       },
       unit,
       dictionary: {
@@ -186,8 +200,25 @@ export class DashboardChurnService {
     if (!options.force && complete && isFreshSnapshot(complete.finishedAt, now, SGP_CHURN_REFRESH_MS)) {
       return { status: "fresh" as const, snapshotId: complete.id };
     }
-    if (!options.force && allSgpCandidatesDenied(candidates)) {
+    const lastFailed = await this.latestFailed(tenantId);
+    if (
+      shouldSkipDeniedAuth({
+        force: Boolean(options.force),
+        allDenied: allSgpCandidatesDenied(candidates),
+        retriedThisProcess: deniedAuthRetried.has(tenantId),
+        lastAuthDeniedAt: lastFailed?.status === "AUTH_DENIED" ? lastFailed.finishedAt : null,
+        now,
+      })
+    ) {
       return { status: "auth_denied" as const };
+    }
+    if (allSgpCandidatesDenied(candidates)) deniedAuthRetried.add(tenantId);
+    if (
+      !options.force &&
+      lastFailed?.status === "FAILED" &&
+      isFreshSnapshot(lastFailed.finishedAt, now, SGP_CHURN_RETRY_MS)
+    ) {
+      return { status: "cooling" as const };
     }
     const running = await this.claimRunning(tenantId, runtime, now);
     if (!running) return { status: "syncing" as const };
@@ -323,6 +354,7 @@ export class DashboardChurnService {
           })),
         });
       }
+      await publishEvent(tx, { type: "sgp.churn.updated", tenantId });
     });
   }
 
@@ -356,32 +388,36 @@ export class DashboardChurnService {
     status: "FAILED" | "AUTH_DENIED",
     message: string,
   ) {
-    await this.prisma.sgpChurnSnapshot.update({
-      where: { id: runningId },
-      data: {
-        status,
-        coverage: "Falha; a última fotografia completa permanece em uso.",
-        finishedAt: new Date(),
-        errorMessage: message,
-        metadata: {
-          credentialVersion: runtime.credentialVersion,
-          apiHost: runtime.apiHost,
-          integrationId: runtime.integrationId,
-        },
-      },
-    }).catch(async () => {
-      await this.prisma.sgpChurnSnapshot.create({
+    await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.sgpChurnSnapshot.update({
+        where: { id: runningId },
         data: {
-          tenantId,
-          integrationId: runtime.integrationId,
           status,
           coverage: "Falha; a última fotografia completa permanece em uso.",
-          sourceEndpoint: SGP_CLIENTES_ENDPOINT,
-          startedAt,
           finishedAt: new Date(),
           errorMessage: message,
+          metadata: {
+            credentialVersion: runtime.credentialVersion,
+            apiHost: runtime.apiHost,
+            integrationId: runtime.integrationId,
+          },
         },
+      }).catch(async () => {
+        await tx.sgpChurnSnapshot.create({
+          data: {
+            tenantId,
+            integrationId: runtime.integrationId,
+            status,
+            coverage: "Falha; a última fotografia completa permanece em uso.",
+            sourceEndpoint: SGP_CLIENTES_ENDPOINT,
+            startedAt,
+            finishedAt: new Date(),
+            errorMessage: message,
+          },
+        });
       });
+      void updated;
+      await publishEvent(tx, { type: "sgp.churn.failed", tenantId });
     });
   }
 
@@ -430,6 +466,7 @@ export class DashboardChurnService {
 
   private waitingMessage(lifecycle: string) {
     if (lifecycle === "needs_config") return "A leitura SGP deste tenant ainda não tem credenciais no servidor. Um administrador provisiona uma vez em Integrações.";
+    if (lifecycle === "decrypt_failed") return "Há integração SGP gravada, mas o App/Token não puderam ser decifrados neste processo. Ainda não foi possível avaliar o histórico. Regrave as credenciais ou alinhe APP_ENCRYPTION_KEY.";
     if (lifecycle === "auth_denied") return "O SGP recusou App/Token. A quantidade não é zero; a fotografia não foi publicada.";
     if (lifecycle === "syncing" || lifecycle === "validating") return "Validando a conexão e sincronizando a fotografia de cancelamentos.";
     return "Ainda não há fotografia completa publicada para este recorte.";

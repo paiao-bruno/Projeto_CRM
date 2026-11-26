@@ -19,7 +19,12 @@ export function assertSgpClientesPayload(body: unknown) {
   const hasPagination = Boolean(asRecord(root.paginacao));
   if (!hasList && !hasPagination) {
     const folded = (businessError ?? "erro").toLowerCase();
-    if (failedFlag || /auth|token|app|unauthor|negad|inválid|inval/.test(folded)) throw new Error("auth_payload");
+    if (
+      failedFlag ||
+      /unauthor|não autoriz|nao autoriz|\btoken\b|\bapp\b.{0,40}\btoken\b|app\/token|credencial|negad/.test(folded)
+    ) {
+      throw new Error("auth_payload");
+    }
     throw new Error("invalid_payload");
   }
 }

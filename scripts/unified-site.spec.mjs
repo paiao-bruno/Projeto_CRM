@@ -50,10 +50,12 @@ describe("site único (verificação estática)", () => {
           !file.includes("apps/web/src/lib/churn-metrics") &&
           !file.includes("apps/web/src/lib/sgp-") &&
           !file.includes("apps/web/src/server/sgp-") &&
+          !file.includes("apps/web/src/lib/sgp-churn-provision") &&
           !file.includes("apps/web/src/server/dashboard-churn") &&
           !file.includes("apps/web/src/server/outbox/worker.ts") &&
           !file.includes("apps/web/src/server/outbox/worker-main.ts") &&
           !file.includes("apps/web/src/app/api/dashboard/churn") &&
+          !file.includes("apps/web/src/server/outbox/worker-main.ts") &&
           !file.includes("apps/web/src/components/dashboard/cancellations-dashboard") &&
           !file.includes("apps/web/src/components/integrations/sgp-churn-settings"),
       );

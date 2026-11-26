@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   Area,
   CartesianGrid,
@@ -21,6 +21,14 @@ import { ErrorAlert, Field, PageHeader, useResource } from "@/components/vx";
 import { api } from "@/lib/api";
 import { formatChangeLabel } from "@/lib/dashboard-commercial-metrics";
 import { formatChurnPercent } from "@/lib/churn-metrics";
+import {
+  churnPollIntervalMs,
+  isChurnRealtimeEvent,
+  preferFresherPayload,
+  shouldPollChurnLifecycle,
+  type SgpChurnLifecycle,
+} from "@/lib/sgp-churn-lifecycle";
+import { connectRealtime } from "@/lib/realtime-client";
 import { useAuth } from "@/components/auth-provider";
 
 type ChurnResponse = {
@@ -38,6 +46,10 @@ type ChurnResponse = {
     lifecycle: string;
     stale?: boolean;
     lastError?: string | null;
+    lastSuccessAt?: string | null;
+    lastAttemptAt?: string | null;
+    nextAttemptAt?: string | null;
+    refreshMs?: number;
   };
   cards: Array<{
     kind: string;
@@ -74,10 +86,14 @@ function statusLabel(status: string) {
 
 function lifecycleCopy(lifecycle: string) {
   if (lifecycle === "ready") return "Dados atualizados.";
-  if (lifecycle === "stale") return "Dados desatualizados. A sincronização automática já foi solicitada.";
-  if (lifecycle === "syncing" || lifecycle === "validating") return "Sincronizando dados da leitura SGP.";
+  if (lifecycle === "stale") return "Dados anteriores disponíveis, porém desatualizados. A sincronização automática já foi solicitada.";
+  if (lifecycle === "syncing") return "Sincronizando a fotografia de cancelamentos.";
+  if (lifecycle === "validating") return "Conectando e validando a leitura SGP.";
   if (lifecycle === "auth_denied") {
     return "Integração indisponível: o SGP recusou a autenticação. Quantidades não são zero. Um administrador deve gravar App e Token reais em Integrações (não o e-mail do CRM).";
+  }
+  if (lifecycle === "decrypt_failed") {
+    return "Falha ao decifrar as credenciais SGP neste processo. Ainda não foi possível avaliar o histórico. Isso não prova recusa do SGP.";
   }
   if (lifecycle === "needs_config") return "Configuração necessária: um administrador provisiona App e Token uma vez em Integrações.";
   if (lifecycle === "unavailable") return "Integração indisponível no momento. A última fotografia válida, se existir, permanece visível.";
@@ -106,7 +122,37 @@ export function CancellationsDashboard() {
     } else params.set("preset", preset);
     return `/dashboard/churn?${params}`;
   }, [preset, from, to]);
-  const { data, error, loading, reload } = useResource<ChurnResponse>(query);
+  const resource = useResource<ChurnResponse>(query);
+  const { error, loading } = resource;
+  const [data, setData] = useState<ChurnResponse | null>(null);
+
+  useEffect(() => {
+    if (resource.data) setData((current) => preferFresherPayload(current, resource.data as ChurnResponse));
+  }, [resource.data]);
+
+  useEffect(() => {
+    if (!token) return;
+    const stop = connectRealtime({
+      token,
+      onChange: (change) => {
+        if (isChurnRealtimeEvent(change.type)) void resource.reload();
+      },
+      onResync: () => {
+        void resource.reload();
+      },
+      onState: () => undefined,
+    });
+    return stop;
+  }, [token, resource.reload]);
+
+  useEffect(() => {
+    const lifecycle = data?.source.lifecycle as SgpChurnLifecycle | undefined;
+    if (!lifecycle || !shouldPollChurnLifecycle(lifecycle)) return;
+    const timer = setInterval(() => {
+      void resource.reload();
+    }, churnPollIntervalMs(lifecycle));
+    return () => clearInterval(timer);
+  }, [data?.source.lifecycle, resource.reload]);
 
   async function saveGoal(event: FormEvent) {
     event.preventDefault();
@@ -115,7 +161,7 @@ export function CancellationsDashboard() {
     try {
       await api.patch("/dashboard/churn/goals", { kind: goalKind, targetPercent: Number(goalPercent.replace(",", ".")) }, token);
       setGoalPercent("");
-      await reload();
+      await resource.reload();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Falha ao salvar a meta.");
     }
@@ -127,10 +173,10 @@ export function CancellationsDashboard() {
     setFormError("");
     try {
       await api.post("/dashboard/churn/sync", {}, token);
-      await reload();
+      await resource.reload();
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Falha ao atualizar o SGP.");
-      await reload();
+      await resource.reload();
     } finally {
       setSyncing(false);
     }
@@ -178,6 +224,12 @@ export function CancellationsDashboard() {
               ? `última sincronização ${new Date(data.source.lastSyncAt).toLocaleString("pt-BR", { timeZone: data.timeZone })}`
               : "ainda sem fotografia completa"}
             {data.source.stale ? " · desatualizado" : ""}
+            {data.source.lastAttemptAt
+              ? ` · última tentativa ${new Date(data.source.lastAttemptAt).toLocaleString("pt-BR", { timeZone: data.timeZone })}`
+              : ""}
+            {data.source.nextAttemptAt
+              ? ` · próxima atualização automática ${new Date(data.source.nextAttemptAt).toLocaleString("pt-BR", { timeZone: data.timeZone })}`
+              : ""}
             {" · "}
             {data.period.comparisonLabel}
           </p>

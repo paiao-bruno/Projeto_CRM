@@ -14,7 +14,7 @@ describe("cliente SGP de cancelamentos", () => {
     assert.equal(calls[0].method, "POST");
     assert.equal(calls[0].body.app, "appx");
     assert.equal(calls[0].body.token, "secret");
-    assert.equal(calls[0].body.contrato_status, 3);
+    assert.equal(calls[0].body.contrato_status, "3");
     assert.equal("Authorization" in calls[0], false);
   });
 
@@ -74,7 +74,11 @@ describe("cliente SGP de cancelamentos", () => {
     const types: string[] = [];
     const fetchImpl = (async (_url: string | URL, init?: RequestInit) => {
       types.push(String((init?.headers as Record<string, string>)["Content-Type"]));
-      if (types.length === 1) return new Response("{}", { status: 401 });
+      if (types.length === 1) {
+        const body = JSON.parse(String(init?.body));
+        assert.equal(body.contrato_status, "3");
+        return new Response(JSON.stringify({ erro: "[contrato_status]: deve ser uma string" }), { status: 400 });
+      }
       const body = String(init?.body);
       assert.equal(body.includes("app=a"), true);
       assert.equal(body.includes("token=t"), true);
@@ -118,6 +122,15 @@ describe("cliente SGP de cancelamentos", () => {
     await assert.rejects(
       () => listSgpContractsByStatus({ apiUrl: "https://webmais.example.net", app: "a", token: "t" }, 3, fetchImpl),
       (error: unknown) => error instanceof SgpReadError && error.code === "unavailable",
+    );
+  });
+
+  it("HTTP 400 de formato não é recusa de autenticação", async () => {
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify({ erro: "[contrato_status]: deve ser uma string de inteiros" }), { status: 400 })) as typeof fetch;
+    await assert.rejects(
+      () => listSgpContractsByStatus({ apiUrl: "https://webmais.example.net", app: "a", token: "t" }, 3, fetchImpl),
+      (error: unknown) => error instanceof SgpReadError && error.code === "invalid",
     );
   });
 

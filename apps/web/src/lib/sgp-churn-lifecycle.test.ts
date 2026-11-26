@@ -3,11 +3,17 @@ import { describe, it } from "node:test";
 import {
   allSgpCandidatesDenied,
   canPublishSnapshot,
+  churnPollIntervalMs,
   displayCancellations,
+  isChurnRealtimeEvent,
   isFreshSnapshot,
   isSecretMask,
   lifecycleFromState,
+  nextChurnAttemptAt,
+  preferFresherPayload,
   rankSgpChurnCandidates,
+  shouldPollChurnLifecycle,
+  shouldSkipDeniedAuth,
 } from "./sgp-churn-lifecycle";
 import { assertSgpClientesPayload } from "./sgp-list-payload";
 
@@ -31,6 +37,8 @@ describe("ciclo automático de cancelamentos", () => {
     assert.equal(displayCancellations(false, 0), null);
     assert.equal(displayCancellations(true, 0), 0);
     assert.equal(lifecycleFromState({ configured: true, authDenied: true, running: false, hasComplete: false, fresh: false }), "auth_denied");
+    assert.equal(lifecycleFromState({ configured: true, authDenied: true, running: true, hasComplete: false, fresh: false }), "syncing");
+    assert.equal(lifecycleFromState({ configured: false, decryptFailed: true, authDenied: false, running: false, hasComplete: false, fresh: false }), "decrypt_failed");
   });
 
   it("não pula a integração original só porque a dedicada foi recusada", () => {
@@ -51,8 +59,65 @@ describe("ciclo automático de cancelamentos", () => {
     );
   });
 
+  it("a aba recarrega sozinha e ignora payload mais antigo", () => {
+    assert.equal(shouldPollChurnLifecycle("syncing"), true);
+    assert.equal(shouldPollChurnLifecycle("needs_config"), true);
+    assert.equal(churnPollIntervalMs("syncing"), 5_000);
+    assert.equal(churnPollIntervalMs("ready"), 60_000);
+    const now = new Date("2026-11-25T13:00:00.000Z");
+    assert.equal(
+      nextChurnAttemptAt({
+        lifecycle: "ready",
+        lastSuccessAt: new Date("2026-11-25T12:55:00.000Z"),
+        lastAttemptAt: new Date("2026-11-25T12:55:00.000Z"),
+        now,
+        refreshMs: 5 * 60 * 1000,
+      }),
+      "2026-11-25T13:00:00.000Z",
+    );
+    assert.equal(nextChurnAttemptAt({ lifecycle: "auth_denied", lastSuccessAt: null, lastAttemptAt: now, now }), null);
+    const deniedAt = new Date("2026-11-25T12:50:00.000Z");
+    assert.equal(
+      shouldSkipDeniedAuth({
+        force: false,
+        allDenied: true,
+        retriedThisProcess: false,
+        lastAuthDeniedAt: deniedAt,
+        now,
+        cooldownMs: 15 * 60 * 1000,
+      }),
+      false,
+    );
+    assert.equal(
+      shouldSkipDeniedAuth({
+        force: false,
+        allDenied: true,
+        retriedThisProcess: true,
+        lastAuthDeniedAt: deniedAt,
+        now,
+        cooldownMs: 15 * 60 * 1000,
+      }),
+      true,
+    );
+    assert.equal(
+      shouldSkipDeniedAuth({
+        force: true,
+        allDenied: true,
+        retriedThisProcess: true,
+        lastAuthDeniedAt: deniedAt,
+        now,
+        cooldownMs: 15 * 60 * 1000,
+      }),
+      false,
+    );
+    assert.equal(preferFresherPayload({ generatedAt: "2026-11-25T13:00:01.000Z" }, { generatedAt: "2026-11-25T13:00:00.000Z" }).generatedAt, "2026-11-25T13:00:01.000Z");
+    assert.equal(isChurnRealtimeEvent("sgp.churn.updated"), true);
+    assert.equal(isChurnRealtimeEvent("message.created"), false);
+  });
+
   it("HTTP 200 com erro de negócio não é sucesso", () => {
     assert.throws(() => assertSgpClientesPayload({ erro: "Token inválido" }), /auth_payload/);
+    assert.throws(() => assertSgpClientesPayload({ erro: "[contrato_status]: deve ser uma string de inteiros" }), /invalid_payload/);
     assert.throws(() => assertSgpClientesPayload({}), /invalid_payload/);
     assert.doesNotThrow(() => assertSgpClientesPayload({ paginacao: { total: 0 }, clientes: [] }));
   });

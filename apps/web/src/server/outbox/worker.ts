@@ -10,16 +10,18 @@ export function startOutboxWorker(
     batch?: number;
     log?: (line: string) => void;
     extraTick?: () => Promise<void>;
+    extraEveryMs?: number;
   } = {},
 ): WorkerHandle {
   const intervalMs = options.intervalMs ?? 1000;
   const batch = options.batch ?? 10;
   const log = options.log ?? ((line: string) => console.log(line));
   const extraTick = options.extraTick;
+  const extraEveryMs = options.extraEveryMs ?? 60_000;
   const id = newWorkerId();
   let stopping = false;
   let lastBeat = 0;
-  let lastExtra = Date.now();
+  let lastExtra = extraTick ? 0 : Date.now();
   let extraBusy = false;
   let wake: (() => void) | null = null;
 
@@ -32,7 +34,7 @@ export function startOutboxWorker(
           lastBeat = Date.now();
         }
         const { claimed } = await service.runOnce(batch);
-        if (extraTick && !extraBusy && Date.now() - lastExtra > 60_000) {
+        if (extraTick && !extraBusy && Date.now() - lastExtra > extraEveryMs) {
           lastExtra = Date.now();
           extraBusy = true;
           void extraTick()
